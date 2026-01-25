@@ -1,48 +1,39 @@
-import Link from "next/link";
-import { ArrowLeft, Shield } from "lucide-react";
 import { CreateLinkForm } from "@/components/create/create-link-form";
-import { WalletButton } from "@/components/wallet-button";
+import { NavHeader } from "@/components/nav-header";
 
 export default function CreatePage() {
   return (
-    <div className="min-h-screen py-12 px-4">
-      {/* Header */}
-      <header className="max-w-md mx-auto mb-8">
-        <div className="flex items-center justify-between mb-6">
-          <Link
-            href="/"
-            className="inline-flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground transition-colors"
-          >
-            <ArrowLeft className="w-4 h-4" />
-            Back to Home
-          </Link>
-          <WalletButton />
-        </div>
+    <div className="min-h-screen flex flex-col">
+      <NavHeader />
 
-        <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-xl gradient-moss flex items-center justify-center">
-            <Shield className="w-5 h-5 text-white" />
+      <main className="flex-1 py-12 px-4">
+        <div className="max-w-5xl mx-auto space-y-8">
+          {/* Header */}
+          <div className="text-center space-y-4">
+            <h1 className="text-3xl md:text-4xl font-bold tracking-tight">
+              Send Private Payments
+            </h1>
+            <p className="text-muted-foreground text-lg max-w-xl mx-auto">
+              Deposit to a shielded pool and share a claim link. The recipient withdraws with no
+              on-chain trace back to you.
+            </p>
           </div>
-          <div>
-            <h1 className="text-xl font-bold">mosskey</h1>
-            <p className="text-sm text-muted-foreground">Create Payment Link</p>
+
+          {/* Main Content */}
+          <CreateLinkForm />
+
+          {/* Info Section */}
+          <div className="max-w-md mx-auto mt-8 p-6 rounded-2xl glass">
+            <h3 className="font-semibold mb-3">How it works</h3>
+            <ol className="text-sm text-muted-foreground space-y-2 list-decimal list-inside">
+              <li>Connect your wallet and enter the amount</li>
+              <li>Deposit directly into the shielded pool</li>
+              <li>Receive a private claim link with your secret note</li>
+              <li>Share the link - only the holder can claim the funds</li>
+            </ol>
           </div>
         </div>
-      </header>
-
-      {/* Main Content */}
-      <CreateLinkForm />
-
-      {/* Info Section */}
-      <div className="max-w-md mx-auto mt-8 p-4 rounded-xl glass">
-        <h3 className="font-semibold mb-2">How it works</h3>
-        <ol className="text-sm text-muted-foreground space-y-2 list-decimal list-inside">
-          <li>Connect your wallet and enter the amount</li>
-          <li>Deposit directly into the shielded pool</li>
-          <li>Receive a private claim link with your secret note</li>
-          <li>Share the link - only the holder can claim the funds</li>
-        </ol>
-      </div>
+      </main>
     </div>
   );
 }

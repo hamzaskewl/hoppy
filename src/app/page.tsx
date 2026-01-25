@@ -1,14 +1,11 @@
 import Link from "next/link";
-import { Shield, ArrowRight, Lock, Zap } from "lucide-react";
-import { WalletButton } from "@/components/wallet-button";
+import { Shield, ArrowRight, Lock, Zap, CreditCard } from "lucide-react";
+import { NavHeader } from "@/components/nav-header";
 
 export default function Home() {
   return (
     <div className="min-h-screen flex flex-col">
-      {/* Wallet Button - Top Right */}
-      <div className="absolute top-4 right-4">
-        <WalletButton />
-      </div>
+      <NavHeader />
 
       {/* Hero Section */}
       <div className="flex-1 flex flex-col items-center justify-center px-4 py-20">
@@ -37,14 +34,15 @@ export default function Home() {
               href="/create"
               className="inline-flex items-center justify-center gap-2 px-8 py-4 rounded-xl gradient-moss text-white font-semibold text-lg transition-all hover:scale-105 glow"
             >
-              Create Payment Link
+              Send Payments
               <ArrowRight className="w-5 h-5" />
             </Link>
             <Link
-              href="/claim"
+              href="/card"
               className="inline-flex items-center justify-center gap-2 px-8 py-4 rounded-xl glass text-white font-semibold text-lg transition-all hover:bg-white/10"
             >
-              Claim Funds
+              <CreditCard className="w-5 h-5" />
+              Virtual Cards
             </Link>
           </div>
         </div>
@@ -69,6 +67,67 @@ export default function Home() {
               title="Unlinkable Transfers"
               description="On-chain observers cannot connect sender to recipient."
             />
+          </div>
+        </div>
+      </div>
+
+      {/* Virtual Cards Section */}
+      <div className="border-t border-border py-20 px-4">
+        <div className="max-w-5xl mx-auto">
+          <div className="grid lg:grid-cols-2 gap-10 items-center">
+            <div className="space-y-6">
+              <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full glass text-sm text-moss-200">
+                Powered by Starpay
+              </div>
+              <h2 className="text-3xl md:text-4xl font-semibold">
+                Private Virtual Cards
+              </h2>
+              <p className="text-muted-foreground text-lg">
+                Get instant virtual Visa or Mastercard cards. Pay with SOL, use anywhere online.
+                No KYC required for virtual cards.
+              </p>
+              <div className="flex flex-col sm:flex-row gap-3">
+                <Link
+                  href="/card"
+                  className="inline-flex items-center justify-center gap-2 px-6 py-3 rounded-xl gradient-moss text-white font-semibold transition-all hover:scale-105 glow-sm"
+                >
+                  Get a Virtual Card
+                  <ArrowRight className="w-4 h-4" />
+                </Link>
+              </div>
+            </div>
+
+            <div className="p-8 rounded-2xl glass">
+              <div className="space-y-4">
+                <div className="flex items-center gap-4">
+                  <div className="w-12 h-12 rounded-xl bg-moss-500/20 flex items-center justify-center">
+                    <CreditCard className="w-6 h-6 text-moss-400" />
+                  </div>
+                  <div>
+                    <p className="font-semibold">Instant Issuance</p>
+                    <p className="text-sm text-muted-foreground">Card ready in seconds</p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-4">
+                  <div className="w-12 h-12 rounded-xl bg-moss-500/20 flex items-center justify-center">
+                    <Shield className="w-6 h-6 text-moss-400" />
+                  </div>
+                  <div>
+                    <p className="font-semibold">Privacy First</p>
+                    <p className="text-sm text-muted-foreground">No identity linked to card</p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-4">
+                  <div className="w-12 h-12 rounded-xl bg-moss-500/20 flex items-center justify-center">
+                    <Zap className="w-6 h-6 text-moss-400" />
+                  </div>
+                  <div>
+                    <p className="font-semibold">Pay with SOL</p>
+                    <p className="text-sm text-muted-foreground">From any Solana wallet</p>
+                  </div>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
       </div>
