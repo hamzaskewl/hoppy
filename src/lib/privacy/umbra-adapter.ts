@@ -1,4 +1,4 @@
-import { Keypair, PublicKey } from "@solana/web3.js";
+import type { Keypair, PublicKey } from "@solana/web3.js";
 import { ClaimNote, createClaimNote, isValidNote } from "./claim-note";
 
 /**

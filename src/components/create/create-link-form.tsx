@@ -1,19 +1,20 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { QRCodeSVG } from "qrcode.react";
-import { Copy, Check, Shield, Wallet, ArrowRight, Lock } from "lucide-react";
+import { Copy, Check, Shield, Wallet, ArrowRight, Lock, Info, AlertTriangle } from "lucide-react";
 import { usePrivy } from "@privy-io/react-auth";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { 
-  createShieldedPoolAdapter, 
-  type ClaimNote,
-  createClaimUrl,
+  calculateTotalDeposit,
+  createDoubleHopClaimUrl,
+  generateCompositeSecret,
+  type DoubleHopNote,
 } from "@/lib/privacy";
 import { shortenAddress, solToLamports, lamportsToSol } from "@/lib/utils";
-import { Keypair } from "@solana/web3.js";
+import { Connection, Transaction, SystemProgram, PublicKey, LAMPORTS_PER_SOL } from "@solana/web3.js";
 
 type Step = "connect" | "amount" | "depositing" | "complete";
 
@@ -22,11 +23,22 @@ export function CreateLinkForm() {
   const [step, setStep] = useState<Step>("connect");
   const [amount, setAmount] = useState<string>("0.1");
   const [isDepositing, setIsDepositing] = useState(false);
-  const [claimNote, setClaimNote] = useState<ClaimNote | null>(null);
+  const [doubleHopNote, setDoubleHopNote] = useState<DoubleHopNote | null>(null);
   const [claimUrl, setClaimUrl] = useState<string>("");
-  const [txHash, setTxHash] = useState<string | null>(null);
+  const [fundingTxHash, setFundingTxHash] = useState<string | null>(null);
+  const [depositTxHash, setDepositTxHash] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [depositProgress, setDepositProgress] = useState<string>("");
+
+  // Calculate fees whenever amount changes
+  const feeBreakdown = useMemo(() => {
+    const amountNum = parseFloat(amount) || 0;
+    if (amountNum <= 0) return null;
+    
+    const lamports = solToLamports(amountNum);
+    return calculateTotalDeposit(lamports);
+  }, [amount]);
 
   // Get Solana wallet address - look for chainType: 'solana'
   const getSolanaAddress = (): string | null => {
@@ -58,46 +70,160 @@ export function CreateLinkForm() {
     }
   };
 
-  // Handle shielded deposit
+  // Handle double hop deposit
   const handleDeposit = async () => {
-    const lamports = solToLamports(parseFloat(amount));
-    if (isNaN(lamports) || lamports <= 0) {
+    const amountNum = parseFloat(amount);
+    if (isNaN(amountNum) || amountNum <= 0) {
       setError("Please enter a valid amount");
+      return;
+    }
+
+    if (!feeBreakdown) {
+      setError("Unable to calculate fees");
       return;
     }
 
     setError(null);
     setIsDepositing(true);
     setStep("depositing");
+    setDepositProgress("Initializing...");
 
     try {
-      // In production, this would use the user's actual wallet via Privy
-      // For the mock, we create a temporary keypair to simulate the deposit
-      const mockSigner = Keypair.generate();
-      
-      console.log("[Create] Starting shielded deposit...");
-      console.log("[Create] Amount:", amount, "SOL");
-
-      const adapter = createShieldedPoolAdapter();
-      const result = await adapter.shieldedDeposit({
-        signer: mockSigner,
-        amount: lamports,
-        network: "devnet",
-      });
-
-      if (!result.success || !result.note) {
-        throw new Error(result.error || "Deposit failed");
+      // Get user's Solana wallet for signing
+      const solanaAddress = getSolanaAddress();
+      if (!solanaAddress) {
+        throw new Error("No Solana wallet connected");
       }
 
-      // Generate claim URL
-      const url = createClaimUrl(result.note);
+      // Get Solana wallet provider (Phantom, Solflare, etc.)
+      // These wallets inject their provider into window
+      let solanaProvider: any = null;
       
-      setClaimNote(result.note);
+      if (typeof window !== "undefined") {
+        // Check for Phantom
+        if ((window as any).phantom?.solana?.isPhantom) {
+          solanaProvider = (window as any).phantom.solana;
+          console.log("[Create] Found Phantom wallet");
+        }
+        // Check for Solflare
+        else if ((window as any).solflare?.isSolflare) {
+          solanaProvider = (window as any).solflare;
+          console.log("[Create] Found Solflare wallet");
+        }
+        // Check for generic Solana provider
+        else if ((window as any).solana) {
+          solanaProvider = (window as any).solana;
+          console.log("[Create] Found generic Solana wallet");
+        }
+      }
+      
+      if (!solanaProvider) {
+        throw new Error("No Solana wallet found. Please install Phantom or another Solana wallet.");
+      }
+      
+      // Verify the connected address matches
+      if (solanaProvider.publicKey?.toBase58() !== solanaAddress) {
+        // Try to connect if not connected
+        if (!solanaProvider.isConnected) {
+          console.log("[Create] Wallet not connected, requesting connection...");
+          await solanaProvider.connect();
+        }
+      }
+      
+      console.log("[Create] Using wallet:", solanaProvider.publicKey?.toBase58());
+
+      console.log("[Create] Starting double hop deposit...");
+      console.log("[Create] Amount:", amount, "SOL");
+      console.log("[Create] Total with fees:", lamportsToSol(feeBreakdown.total), "SOL");
+
+      setDepositProgress("Generating ephemeral wallet...");
+      
+      // 1. Generate composite secret (client-side)
+      const compositeSecret = generateCompositeSecret();
+      const ephemeralAddress = compositeSecret.ephemeralKeypair.publicKey.toBase58();
+      
+      console.log("[Create] Ephemeral wallet:", ephemeralAddress.slice(0, 8) + "...");
+
+      setDepositProgress("Preparing transaction...");
+      
+      // 2. Create funding transaction (sender → ephemeral)
+      const rpcUrl = process.env.NEXT_PUBLIC_SOLANA_RPC_URL || "https://api.devnet.solana.com";
+      const connection = new Connection(rpcUrl, "confirmed");
+      
+      const fundingTx = new Transaction().add(
+        SystemProgram.transfer({
+          fromPubkey: new PublicKey(solanaAddress),
+          toPubkey: compositeSecret.ephemeralKeypair.publicKey,
+          lamports: feeBreakdown.total,
+        })
+      );
+
+      const { blockhash } = await connection.getLatestBlockhash();
+      fundingTx.recentBlockhash = blockhash;
+      fundingTx.feePayer = new PublicKey(solanaAddress);
+
+      setDepositProgress("Please sign the transaction in your wallet...");
+      
+      // 3. Sign and send transaction via Solana wallet (Phantom, etc.)
+      let fundingTxHash: string;
+      
+      if (typeof solanaProvider.signAndSendTransaction === "function") {
+        // Phantom and most wallets support this
+        const result = await solanaProvider.signAndSendTransaction(fundingTx);
+        fundingTxHash = result.signature;
+      } else if (typeof solanaProvider.signTransaction === "function") {
+        // Fallback: sign then send separately
+        const signedTx = await solanaProvider.signTransaction(fundingTx);
+        fundingTxHash = await connection.sendRawTransaction(signedTx.serialize());
+      } else {
+        throw new Error("Wallet does not support transaction signing");
+      }
+      
+      console.log("[Create] Funding transaction sent:", fundingTxHash);
+      
+      setDepositProgress("Waiting for transaction confirmation...");
+      
+      // Wait for confirmation (use "finalized" for more reliable confirmation)
+      const confirmation = await connection.confirmTransaction(fundingTxHash, "finalized");
+      
+      if (confirmation.value.err) {
+        throw new Error(`Transaction failed: ${JSON.stringify(confirmation.value.err)}`);
+      }
+      
+      console.log("[Create] Transaction confirmed!");
+      
+      setDepositProgress("Depositing to Privacy Cash...");
+      
+      // 4. Send to API to handle Privacy Cash deposit
+      const response = await fetch("/api/privacy-cash/create-link", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          amount: feeBreakdown.recipientAmount,
+          compositeSecret: compositeSecret.full,
+          ephemeralAddress,
+          fundingTxHash,
+        }),
+      });
+
+      const result = await response.json();
+
+      if (!result.success || !result.note) {
+        throw new Error(result.error || "Failed to create payment link");
+      }
+      
+      // Generate claim URL
+      const url = createDoubleHopClaimUrl(result.note);
+      
+      setDoubleHopNote(result.note);
       setClaimUrl(url);
-      setTxHash(result.txHash || null);
+      setFundingTxHash(result.fundingTxHash || null);
+      setDepositTxHash(result.depositTxHash || null);
       setStep("complete");
 
-      console.log("[Create] Deposit complete!");
+      console.log("[Create] Double hop complete!");
       console.log("[Create] Claim URL:", url);
     } catch (err) {
       console.error("[Create] Deposit error:", err);
@@ -105,6 +231,7 @@ export function CreateLinkForm() {
       setStep("amount");
     } finally {
       setIsDepositing(false);
+      setDepositProgress("");
     }
   };
 
@@ -116,9 +243,10 @@ export function CreateLinkForm() {
 
   const handleReset = () => {
     setStep("amount");
-    setClaimNote(null);
+    setDoubleHopNote(null);
     setClaimUrl("");
-    setTxHash(null);
+    setFundingTxHash(null);
+    setDepositTxHash(null);
     setAmount("0.1");
     setError(null);
   };
@@ -140,13 +268,13 @@ export function CreateLinkForm() {
         <CardTitle className="flex items-center gap-2">
           {step === "connect" && "Create Private Payment"}
           {step === "amount" && "Enter Amount"}
-          {step === "depositing" && "Shielding Funds..."}
+          {step === "depositing" && "Creating Payment Link..."}
           {step === "complete" && "Payment Link Ready!"}
         </CardTitle>
         <CardDescription>
           {step === "connect" && "Connect your wallet to create a shielded payment link"}
           {step === "amount" && "Choose how much SOL to send privately"}
-          {step === "depositing" && "Depositing funds into the shielded pool"}
+          {step === "depositing" && "Processing double hop for maximum privacy"}
           {step === "complete" && "Share this link with the recipient"}
         </CardDescription>
       </CardHeader>
@@ -159,9 +287,10 @@ export function CreateLinkForm() {
               <div className="flex items-start gap-3">
                 <Shield className="w-5 h-5 text-moss-400 mt-0.5" />
                 <div>
-                  <p className="text-sm font-medium text-moss-300">Full Privacy</p>
+                  <p className="text-sm font-medium text-moss-300">Double Hop Privacy</p>
                   <p className="text-xs text-muted-foreground mt-1">
-                    Your deposit goes through a shielded pool. No one can link your wallet to the recipient.
+                    Your payment goes through an ephemeral wallet and Privacy Cash. 
+                    No one can link your wallet to the recipient.
                   </p>
                 </div>
               </div>
@@ -207,11 +336,11 @@ export function CreateLinkForm() {
         {step === "amount" && (
           <div className="space-y-4">
             <div className="space-y-2">
-              <label className="text-sm text-muted-foreground">Amount (SOL)</label>
+              <label className="text-sm text-muted-foreground">Amount to Send (SOL)</label>
               <Input
                 type="number"
                 step="0.01"
-                min="0.001"
+                min="0.01"
                 value={amount}
                 onChange={(e) => setAmount(e.target.value)}
                 placeholder="0.1"
@@ -225,14 +354,54 @@ export function CreateLinkForm() {
               </div>
             )}
 
-            <div className="p-4 rounded-xl bg-background border border-border">
-              <div className="flex items-center justify-between text-sm">
-                <span className="text-muted-foreground">You send</span>
-                <span className="font-semibold">{amount || "0"} SOL</span>
+            {/* Fee Breakdown */}
+            {feeBreakdown && (
+              <div className="p-4 rounded-xl bg-background border border-border space-y-3">
+                <div className="flex items-center gap-2 text-sm font-medium">
+                  <Info className="w-4 h-4 text-muted-foreground" />
+                  <span>Cost Breakdown</span>
+                </div>
+                
+                <div className="space-y-2 text-sm">
+                  <div className="flex items-center justify-between">
+                    <span className="text-muted-foreground">Recipient receives</span>
+                    <span className="font-semibold text-moss-400">{amount || "0"} SOL</span>
+                  </div>
+                  
+                  <div className="border-t border-border my-2" />
+                  
+                  <div className="flex items-center justify-between text-xs">
+                    <span className="text-muted-foreground">Privacy Cash fee (0.35%)</span>
+                    <span className="text-muted-foreground">
+                      {lamportsToSol(feeBreakdown.fees.percentageFee).toFixed(6)} SOL
+                    </span>
+                  </div>
+                  
+                  <div className="flex items-center justify-between text-xs">
+                    <span className="text-muted-foreground">Withdrawal base fee</span>
+                    <span className="text-muted-foreground">
+                      {lamportsToSol(feeBreakdown.fees.baseFee).toFixed(4)} SOL
+                    </span>
+                  </div>
+                  
+                  <div className="border-t border-border my-2" />
+                  
+                  <div className="flex items-center justify-between font-medium">
+                    <span>You pay</span>
+                    <span className="text-lg">{lamportsToSol(feeBreakdown.total).toFixed(4)} SOL</span>
+                  </div>
+                </div>
               </div>
-              <div className="flex items-center justify-between text-sm mt-2">
-                <span className="text-muted-foreground">Recipient gets</span>
-                <span className="font-semibold text-moss-400">{amount || "0"} SOL</span>
+            )}
+
+            {/* Privacy Info */}
+            <div className="p-3 rounded-lg bg-moss-500/10 border border-moss-500/20">
+              <div className="flex items-start gap-2">
+                <Lock className="w-4 h-4 text-moss-400 mt-0.5 flex-shrink-0" />
+                <p className="text-xs text-muted-foreground">
+                  <span className="text-moss-300 font-medium">Double hop enabled:</span> Funds route through 
+                  an ephemeral wallet → Privacy Cash → recipient. No on-chain link between you and recipient.
+                </p>
               </div>
             </div>
 
@@ -241,9 +410,10 @@ export function CreateLinkForm() {
               loading={isDepositing}
               className="w-full"
               size="lg"
+              disabled={!feeBreakdown || feeBreakdown.recipientAmount <= 0}
             >
-              <Lock className="w-4 h-4 mr-2" />
-              Shield & Create Link
+              <Shield className="w-4 h-4 mr-2" />
+              Create Private Link
             </Button>
           </div>
         )}
@@ -258,15 +428,24 @@ export function CreateLinkForm() {
                 <Shield className="w-8 h-8 text-moss-400 animate-pulse" />
               </div>
             </div>
-            <h3 className="mt-6 text-lg font-semibold">Shielding {amount} SOL</h3>
+            <h3 className="mt-6 text-lg font-semibold">Creating Payment Link</h3>
             <p className="mt-2 text-sm text-muted-foreground">
-              Depositing into the privacy pool...
+              {depositProgress || "Processing..."}
             </p>
+            
+            <div className="mt-4 p-3 rounded-lg bg-amber-500/10 border border-amber-500/20">
+              <div className="flex items-start gap-2 justify-center">
+                <AlertTriangle className="w-4 h-4 text-amber-500 mt-0.5 flex-shrink-0" />
+                <p className="text-xs text-amber-200/80">
+                  Do not close this page. This may take a minute.
+                </p>
+              </div>
+            </div>
           </div>
         )}
 
         {/* Step 4: Complete */}
-        {step === "complete" && claimNote && (
+        {step === "complete" && doubleHopNote && (
           <div className="space-y-4">
             {/* QR Code */}
             <div className="flex justify-center">
@@ -282,9 +461,9 @@ export function CreateLinkForm() {
 
             {/* Amount */}
             <div className="p-4 rounded-xl bg-moss-500/10 border border-moss-500/20 text-center">
-              <p className="text-sm text-muted-foreground">Shielded Amount</p>
+              <p className="text-sm text-muted-foreground">Recipient Will Receive</p>
               <p className="text-2xl font-bold text-moss-400">
-                {lamportsToSol(claimNote.amount).toFixed(4)} SOL
+                {lamportsToSol(doubleHopNote.amount).toFixed(4)} SOL
               </p>
             </div>
 
@@ -310,27 +489,44 @@ export function CreateLinkForm() {
               </div>
             </div>
 
-            {/* Transaction Hash */}
-            {txHash && (
-              <div className="p-3 rounded-xl bg-background border border-border">
-                <div className="flex items-center justify-between">
-                  <span className="text-sm text-muted-foreground">Deposit Tx</span>
-                  <button
-                    onClick={() => handleCopy(txHash)}
-                    className="flex items-center gap-1 text-xs font-mono text-moss-400 hover:text-moss-300"
-                  >
-                    {shortenAddress(txHash, 6)}
-                    {copied ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
-                  </button>
+            {/* Transaction Hashes */}
+            <div className="space-y-2">
+              {fundingTxHash && (
+                <div className="p-3 rounded-xl bg-background border border-border">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs text-muted-foreground">Ephemeral Funding</span>
+                    <button
+                      onClick={() => handleCopy(fundingTxHash)}
+                      className="flex items-center gap-1 text-xs font-mono text-moss-400 hover:text-moss-300"
+                    >
+                      {shortenAddress(fundingTxHash, 6)}
+                      {copied ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
+                    </button>
+                  </div>
                 </div>
-              </div>
-            )}
+              )}
+              
+              {depositTxHash && (
+                <div className="p-3 rounded-xl bg-background border border-border">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs text-muted-foreground">Privacy Cash Deposit</span>
+                    <button
+                      onClick={() => handleCopy(depositTxHash)}
+                      className="flex items-center gap-1 text-xs font-mono text-moss-400 hover:text-moss-300"
+                    >
+                      {shortenAddress(depositTxHash, 6)}
+                      {copied ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
 
-            {/* Note Status Info */}
-            <div className="p-3 rounded-lg bg-amber-500/10 border border-amber-500/20">
-              <p className="text-xs text-amber-200/80">
-                You can check if this note has been claimed by visiting the link yourself.
-                Per the privacy model, you'll be able to see the recipient's address once claimed.
+            {/* Privacy Notice */}
+            <div className="p-3 rounded-lg bg-moss-500/10 border border-moss-500/20">
+              <p className="text-xs text-moss-200/80">
+                <strong>Privacy enabled:</strong> This payment used the double hop method. 
+                There is no on-chain link between your wallet and the recipient.
               </p>
             </div>
 

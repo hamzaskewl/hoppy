@@ -1,29 +1,34 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+  serverExternalPackages: ['privacycash', '@solana/web3.js', '@lightprotocol/hasher.rs'],
   webpack: (config, { isServer }) => {
     config.resolve.fallback = {
       ...config.resolve.fallback,
       fs: false,
       net: false,
       tls: false,
+      path: false,
+      crypto: false,
     };
-    // Required for Privy v3 Solana support
-    // Note: Only needed for webpack. Next.js 15 uses Turbopack by default which doesn't need this.
-    // If you're using webpack explicitly, uncomment the following:
-    /*
+    
+    // Exclude Privacy Cash SDK from client bundle
     if (!isServer) {
-      const existingExternals = config.externals || [];
-      config.externals = [
-        ...(Array.isArray(existingExternals) ? existingExternals : [existingExternals]),
-        {
-          '@solana/kit': 'commonjs @solana/kit',
-          '@solana-program/memo': 'commonjs @solana-program/memo',
-          '@solana-program/system': 'commonjs @solana-program/system',
-          '@solana-program/token': 'commonjs @solana-program/token',
-        },
-      ];
+      config.externals = config.externals || [];
+      if (Array.isArray(config.externals)) {
+        config.externals.push('privacycash');
+      } else {
+        config.externals = [config.externals, 'privacycash'];
+      }
+      
+      // Fix for @solana/web3.js CURVE error - ensure it uses the correct build
+      // The issue is that Webpack tries to bundle Node.js-specific crypto code
+      config.resolve.alias = {
+        ...config.resolve.alias,
+        // Force use of browser-compatible build
+        '@solana/web3.js': require.resolve('@solana/web3.js'),
+      };
     }
-    */
+    
     return config;
   },
 };

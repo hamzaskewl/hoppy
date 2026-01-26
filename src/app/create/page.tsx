@@ -1,5 +1,13 @@
-import { CreateLinkForm } from "@/components/create/create-link-form";
+"use client";
+
+import dynamic from "next/dynamic";
 import { NavHeader } from "@/components/nav-header";
+
+// Disable SSR for CreateLinkForm to avoid @solana/web3.js CURVE bundling issues
+const CreateLinkForm = dynamic(
+  () => import("@/components/create/create-link-form").then((mod) => ({ default: mod.CreateLinkForm })),
+  { ssr: false }
+);
 
 export default function CreatePage() {
   return (

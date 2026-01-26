@@ -1,4 +1,4 @@
-// Shielded Pool Adapter
+// Shielded Pool Adapter (Legacy - will be replaced by Umbra)
 export {
   type ShieldedPoolAdapter,
   type ShieldedPoolResult,
@@ -14,7 +14,7 @@ export {
   createShieldedPoolAdapter,
 } from "./umbra-adapter";
 
-// Claim Note System
+// Claim Note System (Legacy - will be replaced by Double Hop)
 export {
   type ClaimNote,
   type SerializedNote,
@@ -26,3 +26,22 @@ export {
   extractNoteFromUrl,
   isValidNote,
 } from "./claim-note";
+
+// Privacy Cash Double Hop (Current Production Implementation)
+// Note: Privacy Cash SDK operations are in API routes (server-side only)
+export {
+  // Types
+  type CompositeSecret,
+  type DoubleHopNote,
+  type FeeEstimate,
+  // Functions
+  generateCompositeSecret,
+  decodeCompositeSecret,
+  calculateFees,
+  calculateDepositForRecipientAmount,
+  calculateTotalDeposit,
+  serializeDoubleHopNote,
+  deserializeDoubleHopNote,
+  createDoubleHopClaimUrl,
+  extractDoubleHopNoteFromUrl,
+} from "./privacy-cash-adapter";

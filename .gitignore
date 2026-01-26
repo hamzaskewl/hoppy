@@ -23,6 +23,12 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 
+# Privacy Cash SDK cache (contains wallet-specific UTXO data)
+/cache/
+encrypted_outputs*
+fetch_offset*
+tradeHistory*
+
 # Local env files
 .env*.local
 .env

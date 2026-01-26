@@ -3,15 +3,15 @@
 import { useEffect, useState, useCallback, useRef } from "react";
 import { usePrivy } from "@privy-io/react-auth";
 import { motion, AnimatePresence } from "framer-motion";
-import { Wallet, Check, Copy, ArrowRight, AlertTriangle, Shield, Lock } from "lucide-react";
+import { Wallet, Check, Copy, ArrowRight, AlertTriangle, Shield, Lock, Zap } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { ShieldingAnimation } from "./shielding-animation";
 import { 
-  createShieldedPoolAdapter, 
-  extractNoteFromUrl,
-  type ClaimNote,
-  isValidNote,
+  extractDoubleHopNoteFromUrl,
+  decodeCompositeSecret,
+  calculateFees,
+  type DoubleHopNote,
 } from "@/lib/privacy";
 import { formatSol, shortenAddress, lamportsToSol } from "@/lib/utils";
 import { PublicKey } from "@solana/web3.js";
@@ -19,44 +19,47 @@ import { PublicKey } from "@solana/web3.js";
 type ClaimStatus = 
   | "parsing"      // Extracting note from URL
   | "ready"        // Note valid, waiting for wallet connection
-  | "claiming"     // Processing claim transaction
+  | "claiming"     // Processing claim transaction (withdrawal from Privacy Cash)
   | "complete"     // Claim successful
   | "already-claimed" // Note was already used
   | "error";       // Something went wrong
 
 interface ClaimState {
   status: ClaimStatus;
-  note: ClaimNote | null;
-  claimTxHash: string | null;
+  note: DoubleHopNote | null;
+  withdrawTxHash: string | null;
+  amountReceived: number | null;
   error: string | null;
 }
 
 /**
- * ClaimFlow Component - Note-Based Claims
+ * ClaimFlow Component - Double Hop Claims via Privacy Cash
  * 
  * Flow:
- * 1. Parse claim note from URL hash
- * 2. Validate note structure
+ * 1. Parse double hop note from URL hash
+ * 2. Validate note structure and extract ephemeral keypair
  * 3. User connects wallet (destination address)
- * 4. Execute claim transaction
- * 5. Funds sent to user's wallet
+ * 4. Execute withdrawal from Privacy Cash using ephemeral wallet
+ * 5. Funds sent to user's actual wallet (privacy preserved!)
  * 
- * The funds are already in the shielded pool - we just need a destination address.
- * The note proves ownership - we just need a destination address.
+ * The ephemeral wallet holds the Privacy Cash balance.
+ * The recipient's address is only revealed in the final withdrawal.
  */
 export function ClaimFlow() {
   const { login, logout, authenticated, ready, user } = usePrivy();
   const [state, setState] = useState<ClaimState>({
     status: "parsing",
     note: null,
-    claimTxHash: null,
+    withdrawTxHash: null,
+    amountReceived: null,
     error: null,
   });
   const [copied, setCopied] = useState(false);
+  const [claimProgress, setClaimProgress] = useState<string>("");
   
   const hasStartedParsing = useRef(false);
 
-  // Get user's wallet address (Solana only) - look for chainType: 'solana'
+  // Get user's wallet address (Solana only)
   const getUserWalletAddress = useCallback((): PublicKey | null => {
     // 1. Check linkedAccounts for Solana wallet by chainType
     const solanaWallet = user?.linkedAccounts?.find((a: any) => 
@@ -83,15 +86,8 @@ export function ClaimFlow() {
       }
     }
     
-    // 3. No Solana wallet found - log debug info
-    console.warn("[Claim] No Solana wallet found. User wallets:", 
-      user?.linkedAccounts?.filter((a: any) => a.type === 'wallet').map((a: any) => ({
-        address: a.address,
-        chainType: a.chainType,
-        chainId: a.chainId,
-      }))
-    );
-    
+    // 3. No Solana wallet found
+    console.warn("[Claim] No Solana wallet found.");
     return null;
   }, [user]);
 
@@ -101,54 +97,59 @@ export function ClaimFlow() {
     hasStartedParsing.current = true;
 
     const parseNote = async () => {
-      console.log("[Claim] Parsing claim note from URL...");
+      console.log("[Claim] Parsing double hop note from URL...");
 
       try {
-        const note = await extractNoteFromUrl();
+        const note = extractDoubleHopNoteFromUrl();
         
         if (!note) {
           setState({
             status: "error",
             note: null,
-            claimTxHash: null,
+            withdrawTxHash: null,
+            amountReceived: null,
             error: "Invalid or missing claim note in URL",
           });
           return;
         }
 
-        if (!isValidNote(note)) {
+        // Validate the composite secret can be decoded
+        const compositeSecret = decodeCompositeSecret(note.secret);
+        if (!compositeSecret) {
           setState({
             status: "error",
             note: null,
-            claimTxHash: null,
+            withdrawTxHash: null,
+            amountReceived: null,
             error: "Claim note is malformed or corrupted",
           });
           return;
         }
 
-        console.log("[Claim] Valid note found!");
-        console.log("[Claim] Amount:", lamportsToSol(note.amount), "SOL");
-        console.log("[Claim] Commitment:", note.commitment.slice(0, 12) + "...");
-
-        // Check if already claimed
-        const adapter = createShieldedPoolAdapter();
-        const noteStatus = await adapter.getNoteStatus(note.commitment);
-        
-        if (noteStatus?.claimed) {
-          console.log("[Claim] Note already claimed by:", noteStatus.claimedBy);
+        // Verify ephemeral address matches
+        if (compositeSecret.ephemeralKeypair.publicKey.toBase58() !== note.ephemeralAddress) {
           setState({
-            status: "already-claimed",
-            note,
-            claimTxHash: null,
-            error: `Already claimed${noteStatus.claimedBy ? ` by ${shortenAddress(noteStatus.claimedBy)}` : ""}`,
+            status: "error",
+            note: null,
+            withdrawTxHash: null,
+            amountReceived: null,
+            error: "Ephemeral wallet mismatch - invalid note",
           });
           return;
         }
 
+        console.log("[Claim] Valid double hop note found!");
+        console.log("[Claim] Amount:", lamportsToSol(note.amount), "SOL");
+        console.log("[Claim] Ephemeral:", note.ephemeralAddress.slice(0, 8) + "...");
+
+        // TODO: Check if already claimed by querying Privacy Cash balance
+        // For now, we'll try to claim and handle errors
+
         setState({
           status: "ready",
           note,
-          claimTxHash: null,
+          withdrawTxHash: null,
+          amountReceived: null,
           error: null,
         });
       } catch (error) {
@@ -156,7 +157,8 @@ export function ClaimFlow() {
         setState({
           status: "error",
           note: null,
-          claimTxHash: null,
+          withdrawTxHash: null,
+          amountReceived: null,
           error: error instanceof Error ? error.message : "Failed to parse claim note",
         });
       }
@@ -170,7 +172,6 @@ export function ClaimFlow() {
     const walletAddress = getUserWalletAddress();
     
     if (!walletAddress || !state.note) {
-      // Only call login if not already authenticated
       if (!authenticated) {
         login();
       }
@@ -178,36 +179,62 @@ export function ClaimFlow() {
     }
 
     setState((prev) => ({ ...prev, status: "claiming" }));
+    setClaimProgress("Initializing withdrawal...");
 
     try {
-      console.log("[Claim] Processing claim...");
+      console.log("[Claim] Processing double hop claim...");
       console.log("[Claim] Recipient:", walletAddress.toBase58());
 
-      const adapter = createShieldedPoolAdapter();
+      setClaimProgress("Connecting to Privacy Cash...");
       
-      const result = await adapter.claimWithNote({
-        note: state.note,
-        recipient: walletAddress,
+      // Call API route to handle Privacy Cash withdrawal (server-side)
+      const response = await fetch("/api/privacy-cash/claim", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          note: state.note,
+          recipientAddress: walletAddress.toBase58(),
+        }),
       });
+
+      const result = await response.json();
 
       if (!result.success) {
         throw new Error(result.error || "Claim failed");
       }
 
-      console.log("[Claim] Success! TxHash:", result.txHash);
+      console.log("[Claim] Success! TxHash:", result.withdrawTxHash);
+      console.log("[Claim] Amount received:", result.amountReceived);
 
       setState((prev) => ({
         ...prev,
         status: "complete",
-        claimTxHash: result.txHash || null,
+        withdrawTxHash: result.withdrawTxHash || null,
+        amountReceived: result.amountReceived || null,
       }));
     } catch (error) {
       console.error("[Claim] Claim error:", error);
-      setState((prev) => ({
-        ...prev,
-        status: "error",
-        error: error instanceof Error ? error.message : "Claim failed",
-      }));
+      
+      // Check for specific errors
+      const errorMessage = error instanceof Error ? error.message : "Claim failed";
+      
+      if (errorMessage.includes("insufficient") || errorMessage.includes("balance")) {
+        setState((prev) => ({
+          ...prev,
+          status: "already-claimed",
+          error: "This payment has already been claimed or expired",
+        }));
+      } else {
+        setState((prev) => ({
+          ...prev,
+          status: "error",
+          error: errorMessage,
+        }));
+      }
+    } finally {
+      setClaimProgress("");
     }
   };
 
@@ -216,6 +243,9 @@ export function ClaimFlow() {
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
+
+  // Calculate fees for display
+  const feeInfo = state.note ? calculateFees(state.note.amount) : null;
 
   return (
     <Card className="w-full max-w-md mx-auto overflow-hidden">
@@ -230,9 +260,9 @@ export function ClaimFlow() {
           >
             <CardContent className="py-12 text-center">
               <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-moss-500 mx-auto" />
-              <h3 className="mt-6 text-lg font-semibold">Reading Claim Note...</h3>
+              <h3 className="mt-6 text-lg font-semibold">Reading Payment Link...</h3>
               <p className="mt-2 text-sm text-muted-foreground">
-                Validating your payment link
+                Validating your private payment
               </p>
             </CardContent>
           </motion.div>
@@ -263,19 +293,24 @@ export function ClaimFlow() {
 
               {/* Amount */}
               <div className="p-4 rounded-xl bg-moss-500/10 border border-moss-500/20 mb-4">
-                <p className="text-sm text-muted-foreground text-center">Amount</p>
+                <p className="text-sm text-muted-foreground text-center">You Will Receive</p>
                 <p className="text-3xl font-bold text-moss-400 text-center">
-                  {formatSol(state.note.amount)} SOL
+                  {feeInfo ? formatSol(feeInfo.recipientReceives) : formatSol(state.note.amount)} SOL
                 </p>
+                {feeInfo && feeInfo.totalFee > 0 && (
+                  <p className="text-xs text-muted-foreground text-center mt-1">
+                    (after {lamportsToSol(feeInfo.totalFee).toFixed(4)} SOL network fees)
+                  </p>
+                )}
               </div>
 
               {/* Privacy notice */}
               <div className="p-3 rounded-lg bg-background border border-border mb-6">
                 <div className="flex items-start gap-2">
-                  <Lock className="w-4 h-4 text-muted-foreground mt-0.5 flex-shrink-0" />
+                  <Lock className="w-4 h-4 text-moss-400 mt-0.5 flex-shrink-0" />
                   <p className="text-xs text-muted-foreground">
-                    These funds are in a shielded pool. Only you (with this link) 
-                    and the sender can see your destination address.
+                    <span className="text-moss-300 font-medium">Double hop privacy:</span> These funds 
+                    are in a shielded pool. No one can trace where they came from.
                   </p>
                 </div>
               </div>
@@ -285,7 +320,7 @@ export function ClaimFlow() {
                 getUserWalletAddress() ? (
                   <div className="space-y-3">
                     <div className="p-3 rounded-xl bg-background border border-border">
-                      <p className="text-xs text-muted-foreground mb-1">Claim to</p>
+                      <p className="text-xs text-muted-foreground mb-1">Claim to your wallet</p>
                       <p className="font-mono text-sm">
                         {shortenAddress(getUserWalletAddress()!.toBase58(), 6)}
                       </p>
@@ -295,8 +330,8 @@ export function ClaimFlow() {
                       className="w-full"
                       size="lg"
                     >
-                      <Wallet className="w-4 h-4 mr-2" />
-                      Claim {formatSol(state.note.amount)} SOL
+                      <Zap className="w-4 h-4 mr-2" />
+                      Claim {feeInfo ? formatSol(feeInfo.recipientReceives) : formatSol(state.note.amount)} SOL
                       <ArrowRight className="w-4 h-4 ml-2" />
                     </Button>
                   </div>
@@ -307,7 +342,7 @@ export function ClaimFlow() {
                         ⚠️ No Solana Wallet Detected
                       </p>
                       <p className="text-xs text-muted-foreground">
-                        Please connect a Solana wallet (Phantom, Solflare) or configure Solana in your Privy dashboard.
+                        Please connect a Solana wallet (Phantom, Solflare) to claim.
                       </p>
                     </div>
                     <Button
@@ -346,11 +381,15 @@ export function ClaimFlow() {
             <CardContent className="py-8">
               <ShieldingAnimation status="shielding" />
               
+              <p className="text-center text-sm text-muted-foreground mt-4">
+                {claimProgress || "Processing withdrawal from Privacy Cash..."}
+              </p>
+              
               <div className="mt-4 p-3 rounded-lg bg-amber-500/10 border border-amber-500/20">
                 <div className="flex items-start gap-2">
                   <AlertTriangle className="w-4 h-4 text-amber-500 mt-0.5 flex-shrink-0" />
                   <p className="text-xs text-amber-200/80">
-                    Processing your claim. Do not close this page.
+                    Processing your private claim. Do not close this page.
                   </p>
                 </div>
               </div>
@@ -378,17 +417,30 @@ export function ClaimFlow() {
               
               <h3 className="mt-6 text-2xl font-bold">Claim Complete!</h3>
               <p className="mt-2 text-muted-foreground">
-                {formatSol(state.note.amount)} SOL sent to your wallet
+                {state.amountReceived 
+                  ? `${formatSol(state.amountReceived)} SOL sent to your wallet`
+                  : `${formatSol(state.note.amount)} SOL sent to your wallet`
+                }
               </p>
 
+              {/* Privacy confirmation */}
+              <div className="mt-4 p-3 rounded-lg bg-moss-500/10 border border-moss-500/20 inline-block">
+                <div className="flex items-center gap-2">
+                  <Shield className="w-4 h-4 text-moss-400" />
+                  <p className="text-xs text-moss-300">
+                    Privacy preserved - no link to sender
+                  </p>
+                </div>
+              </div>
+
               {/* Transaction Hash */}
-              {state.claimTxHash && (
+              {state.withdrawTxHash && (
                 <div className="mt-6 p-3 rounded-xl bg-background border border-border inline-block">
                   <button
-                    onClick={() => handleCopyTxHash(state.claimTxHash!)}
+                    onClick={() => handleCopyTxHash(state.withdrawTxHash!)}
                     className="flex items-center gap-2 text-sm font-mono text-moss-400 hover:text-moss-300"
                   >
-                    Tx: {shortenAddress(state.claimTxHash, 8)}
+                    Tx: {shortenAddress(state.withdrawTxHash, 8)}
                     {copied ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
                   </button>
                 </div>
@@ -417,24 +469,16 @@ export function ClaimFlow() {
             <CardHeader>
               <CardTitle>Already Claimed</CardTitle>
               <CardDescription>
-                This payment has already been claimed
+                This payment has already been claimed or has expired
               </CardDescription>
             </CardHeader>
             <CardContent>
               {state.note && (
                 <div className="p-4 rounded-xl bg-background border border-border mb-4">
                   <div className="flex justify-between text-sm mb-2">
-                    <span className="text-muted-foreground">Amount</span>
+                    <span className="text-muted-foreground">Original Amount</span>
                     <span className="font-semibold">{formatSol(state.note.amount)} SOL</span>
                   </div>
-                  {state.error && state.error.includes("by") && (
-                    <div className="flex justify-between text-sm">
-                      <span className="text-muted-foreground">Claimed by</span>
-                      <span className="font-mono text-xs">
-                        {state.error.split("by ")[1]}
-                      </span>
-                    </div>
-                  )}
                 </div>
               )}
               <Button
