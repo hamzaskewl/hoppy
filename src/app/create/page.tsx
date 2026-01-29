@@ -15,9 +15,9 @@ export default function CreatePage() {
       <NavHeader />
 
       <main className="flex-1 py-12 px-4">
-        <div className="max-w-5xl mx-auto space-y-8">
+        <div className="max-w-7xl mx-auto">
           {/* Header */}
-          <div className="text-center space-y-4">
+          <div className="text-center space-y-4 mb-8">
             <h1 className="text-3xl md:text-4xl font-bold tracking-tight">
               Send Private Payments
             </h1>
@@ -27,18 +27,25 @@ export default function CreatePage() {
             </p>
           </div>
 
-          {/* Main Content */}
-          <CreateLinkForm />
+          {/* Layout: Centered form with right sidebar */}
+          <div className="relative flex justify-center">
+            {/* Main Content - Centered */}
+            <div className="w-full max-w-xl">
+              <CreateLinkForm />
+            </div>
 
-          {/* Info Section */}
-          <div className="max-w-md mx-auto mt-8 p-6 rounded-2xl glass">
-            <h3 className="font-semibold mb-3">How it works</h3>
-            <ol className="text-sm text-muted-foreground space-y-2 list-decimal list-inside">
-              <li>Connect your wallet and enter the amount</li>
-              <li>Deposit directly into the shielded pool</li>
-              <li>Receive a private claim link with your secret note</li>
-              <li>Share the link - only the holder can claim the funds</li>
-            </ol>
+            {/* Info Section - Positioned to the right of center (hidden on smaller screens) */}
+            <div className="hidden xl:block absolute left-[calc(50%+320px)] top-0 w-72 space-y-4">
+              <div className="p-5 rounded-2xl bg-card border-2 border-border sticky top-4">
+                <h3 className="font-semibold mb-3 text-sm">How it works</h3>
+                <ol className="text-xs text-muted-foreground space-y-2 list-decimal list-inside">
+                  <li>Connect your wallet and enter the amount</li>
+                  <li>Deposit directly into the shielded pool</li>
+                  <li>Receive a private claim link with your secret note</li>
+                  <li>Share the link - only the holder can claim the funds</li>
+                </ol>
+              </div>
+            </div>
           </div>
         </div>
       </main>

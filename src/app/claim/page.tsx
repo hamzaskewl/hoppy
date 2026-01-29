@@ -1,11 +1,31 @@
 import Link from "next/link";
-import { ArrowLeft, Shield } from "lucide-react";
+import Image from "next/image";
+import { ArrowLeft } from "lucide-react";
 import { ClaimFlow } from "@/components/claim/claim-flow";
 import { WalletButton } from "@/components/wallet-button";
 
+// Hoppy Logo Component
+function HoppyLogo({ size = 40 }: { size?: number }) {
+  return (
+    <div 
+      className="rounded-full overflow-hidden bg-hop-200 dark:bg-hop-800 border-2 border-hop-400 dark:border-hop-600 shadow-sm"
+      style={{ width: size, height: size }}
+    >
+      <Image
+        src="/hoppy-logo.png"
+        alt="hoppy"
+        width={size}
+        height={size}
+        className="object-cover"
+        priority
+      />
+    </div>
+  );
+}
+
 export default function ClaimPage() {
   return (
-    <div className="min-h-screen py-12 px-4">
+    <div className="min-h-screen py-12 px-4 bg-background">
       {/* Header */}
       <header className="max-w-md mx-auto mb-8">
         <div className="flex items-center justify-between mb-6">
@@ -20,11 +40,9 @@ export default function ClaimPage() {
         </div>
 
         <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-xl gradient-moss flex items-center justify-center">
-            <Shield className="w-5 h-5 text-white" />
-          </div>
+          <HoppyLogo size={40} />
           <div>
-            <h1 className="text-xl font-bold">mosskey</h1>
+            <h1 className="text-xl font-bold">hoppy</h1>
             <p className="text-sm text-muted-foreground">Claim Private Payment</p>
           </div>
         </div>
@@ -34,7 +52,7 @@ export default function ClaimPage() {
       <ClaimFlow />
 
       {/* Privacy Notice */}
-      <div className="max-w-md mx-auto mt-8 p-4 rounded-xl glass">
+      <div className="max-w-md mx-auto mt-8 p-4 rounded-xl bg-card border-2 border-border">
         <h3 className="font-semibold mb-2">How It Works</h3>
         <p className="text-sm text-muted-foreground">
           These funds are in a shielded pool. Your claim note proves ownership.

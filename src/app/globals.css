@@ -3,33 +3,70 @@
 @tailwind utilities;
 
 @layer base {
+  /* Light mode (default) - Tea green base with good contrast */
   :root {
-    --background: 0 0% 3%;
-    --foreground: 0 0% 98%;
+    /* Slightly darker tea green background */
+    --background: 125 35% 88%;
+    --foreground: 125 40% 10%;
 
-    --card: 0 0% 6%;
-    --card-foreground: 0 0% 98%;
+    /* Cards are lighter for contrast against background */
+    --card: 125 30% 96%;
+    --card-foreground: 125 40% 10%;
 
-    --primary: 142 76% 36%;
-    --primary-foreground: 0 0% 98%;
+    /* hoppy green #87DD8D */
+    --primary: 125 55% 55%;
+    --primary-foreground: 0 0% 100%;
 
-    --secondary: 0 0% 12%;
-    --secondary-foreground: 0 0% 98%;
+    /* tea green #CCEDD0 - slightly darker */
+    --secondary: 125 35% 82%;
+    --secondary-foreground: 125 40% 10%;
 
-    --muted: 0 0% 15%;
-    --muted-foreground: 0 0% 65%;
+    /* muted text more readable */
+    --muted: 125 25% 85%;
+    --muted-foreground: 125 20% 35%;
 
-    --accent: 142 76% 36%;
-    --accent-foreground: 0 0% 98%;
+    /* honey orange #F2AB40 */
+    --accent: 37 87% 55%;
+    --accent-foreground: 0 0% 10%;
 
     --destructive: 0 62% 50%;
     --destructive-foreground: 0 0% 98%;
 
-    --border: 0 0% 15%;
-    --input: 0 0% 15%;
-    --ring: 142 76% 36%;
+    /* Dark visible borders */
+    --border: 125 30% 65%;
+    --input: 125 30% 70%;
+    /* hoppy green */
+    --ring: 125 55% 50%;
 
     --radius: 0.75rem;
+  }
+
+  /* Dark mode */
+  .dark {
+    --background: 125 20% 8%;
+    --foreground: 125 20% 95%;
+
+    --card: 125 15% 12%;
+    --card-foreground: 125 20% 95%;
+
+    --primary: 125 55% 70%;
+    --primary-foreground: 125 20% 8%;
+
+    --secondary: 125 20% 18%;
+    --secondary-foreground: 125 20% 95%;
+
+    --muted: 125 15% 20%;
+    --muted-foreground: 125 15% 60%;
+
+    --accent: 37 87% 60%;
+    --accent-foreground: 0 0% 5%;
+
+    --destructive: 0 62% 50%;
+    --destructive-foreground: 0 0% 98%;
+
+    --border: 125 20% 25%;
+    --input: 125 20% 25%;
+    --ring: 125 55% 70%;
   }
 }
 
@@ -44,24 +81,24 @@
 }
 
 @layer utilities {
-  .gradient-moss {
-    @apply bg-gradient-to-r from-moss-600 via-moss-500 to-moss-400;
-  }
-  
-  .gradient-text {
-    @apply bg-clip-text text-transparent bg-gradient-to-r from-moss-400 to-moss-200;
+  .glass {
+    @apply backdrop-blur-xl bg-white/80 dark:bg-black/20 border border-white/50 dark:border-white/10;
   }
 
-  .glass {
-    @apply backdrop-blur-xl bg-white/5 border border-white/10;
+  .glass-dark {
+    @apply backdrop-blur-xl bg-black/5 dark:bg-white/5 border border-black/10 dark:border-white/10;
   }
 
   .glow {
-    box-shadow: 0 0 40px -10px hsl(142 76% 36% / 0.5);
+    box-shadow: 0 0 40px -10px hsl(125 55% 70% / 0.5);
   }
 
   .glow-sm {
-    box-shadow: 0 0 20px -5px hsl(142 76% 36% / 0.3);
+    box-shadow: 0 0 20px -5px hsl(125 55% 70% / 0.3);
+  }
+
+  .glow-honey {
+    box-shadow: 0 0 40px -10px hsl(37 87% 60% / 0.5);
   }
 }
 
@@ -103,12 +140,28 @@
 /* Fix for Privy hydration error: allow block elements inside p tags */
 #privy-root p,
 [id^="privy"] p,
-.sc-UFtxX {
-  display: block;
+.sc-UFtxX,
+.hmEmHj {
+  display: block !important;
 }
 
 #privy-root p > div,
 [id^="privy"] p > div,
-.sc-UFtxX > div {
+.sc-UFtxX > div,
+.hmEmHj > div,
+.sc-bZTxSr,
+.cCskMt {
+  display: block !important;
+}
+
+/* Ensure all Privy nested elements are block */
+[id^="privy"] * {
   display: block;
+}
+
+[id^="privy"] span,
+[id^="privy"] strong,
+[id^="privy"] em,
+[id^="privy"] a {
+  display: inline;
 }

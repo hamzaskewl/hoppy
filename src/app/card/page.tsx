@@ -1,75 +1,52 @@
 import { CardPurchaseFlow } from "@/components/card/card-purchase-flow";
 import { NavHeader } from "@/components/nav-header";
-import { CreditCard, ShieldCheck, Zap } from "lucide-react";
 
 export default function CardPage() {
   return (
-    <div className="min-h-screen flex flex-col">
+    <div className="min-h-screen flex flex-col bg-background">
       <NavHeader />
 
       <main className="flex-1 px-4 py-12">
-        <div className="max-w-5xl mx-auto space-y-12">
+        <div className="max-w-7xl mx-auto">
           {/* Header */}
-          <div className="text-center space-y-4">
-            <h1 className="text-3xl md:text-4xl font-bold tracking-tight">
+          <div className="text-center space-y-2 mb-8">
+            <h1 className="text-2xl md:text-3xl font-bold tracking-tight">
               Private Virtual Cards
             </h1>
-            <p className="text-muted-foreground text-lg max-w-xl mx-auto">
-              Get instant virtual Visa or Mastercard cards. Pay with SOL from any wallet.
+            <p className="text-muted-foreground max-w-md mx-auto">
+              Instant virtual Visa/Mastercard. Pay with SOL, no KYC required.
             </p>
           </div>
 
-          {/* Features row */}
-          <div className="grid sm:grid-cols-3 gap-4">
-            <FeatureChip
-              icon={<CreditCard className="w-4 h-4" />}
-              text="Instant issuance"
-            />
-            <FeatureChip
-              icon={<ShieldCheck className="w-4 h-4" />}
-              text="Privacy-first"
-            />
-            <FeatureChip
-              icon={<Zap className="w-4 h-4" />}
-              text="Pay with SOL"
-            />
-          </div>
-
-          {/* Main flow */}
-          <CardPurchaseFlow />
-
-          {/* Info section */}
-          <div className="grid md:grid-cols-2 gap-6 mt-12">
-            <div className="p-6 rounded-2xl glass space-y-3">
-              <h3 className="font-semibold">How it works</h3>
-              <ol className="space-y-2 text-sm text-muted-foreground list-decimal list-inside">
-                <li>Choose your card value and type</li>
-                <li>Pay the SOL amount to the provided address</li>
-                <li>Receive your virtual card details via email</li>
-                <li>Use it anywhere Visa/Mastercard is accepted online</li>
-              </ol>
+          {/* Layout: Centered flow with right sidebar */}
+          <div className="relative flex justify-center">
+            {/* Main flow - Centered */}
+            <div className="w-full max-w-3xl">
+              <CardPurchaseFlow />
             </div>
-            <div className="p-6 rounded-2xl glass space-y-3">
-              <h3 className="font-semibold">Privacy benefits</h3>
-              <ul className="space-y-2 text-sm text-muted-foreground list-disc list-inside">
-                <li>No KYC required for virtual cards</li>
-                <li>Pay from any Solana wallet</li>
-                <li>Card is not linked to your identity</li>
-                <li>Use shielded funds for maximum privacy</li>
-              </ul>
+
+            {/* Info section - Positioned to the right of center (hidden on smaller screens) */}
+            <div className="hidden xl:block absolute left-[calc(50%+400px)] top-0 w-72 space-y-4">
+              <div className="p-4 rounded-xl bg-card border-2 border-border space-y-2 sticky top-4">
+                <h3 className="font-semibold text-sm">How it works</h3>
+                <ol className="space-y-1 text-xs text-muted-foreground list-decimal list-inside">
+                  <li>Choose card value and type</li>
+                  <li>Pay SOL to the provided address</li>
+                  <li>Receive card details via email</li>
+                </ol>
+              </div>
+              <div className="p-4 rounded-xl bg-card border-2 border-border space-y-2">
+                <h3 className="font-semibold text-sm">Privacy</h3>
+                <ul className="space-y-1 text-xs text-muted-foreground list-disc list-inside">
+                  <li>No KYC for virtual cards</li>
+                  <li>Card not linked to identity</li>
+                  <li>Use shielded funds</li>
+                </ul>
+              </div>
             </div>
           </div>
         </div>
       </main>
-    </div>
-  );
-}
-
-function FeatureChip({ icon, text }: { icon: React.ReactNode; text: string }) {
-  return (
-    <div className="flex items-center justify-center gap-2 px-4 py-3 rounded-xl glass text-sm">
-      <span className="text-moss-400">{icon}</span>
-      <span>{text}</span>
     </div>
   );
 }

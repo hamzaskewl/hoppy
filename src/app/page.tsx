@@ -1,26 +1,44 @@
 import Link from "next/link";
-import { Shield, ArrowRight, Lock, Zap, CreditCard } from "lucide-react";
+import Image from "next/image";
+import { ArrowRight, CreditCard } from "lucide-react";
 import { NavHeader } from "@/components/nav-header";
+
+// Hoppy Logo Component - Uses the bunny image
+function HoppyLogo({ size = 64 }: { size?: number }) {
+  return (
+    <div 
+      className="rounded-full overflow-hidden bg-hop-200 dark:bg-hop-800 border-3 border-hop-400 dark:border-hop-500 shadow-lg"
+      style={{ width: size, height: size }}
+    >
+      <Image
+        src="/hoppy-logo.png"
+        alt="hoppy"
+        width={size}
+        height={size}
+        className="object-cover"
+        priority
+      />
+    </div>
+  );
+}
 
 export default function Home() {
   return (
-    <div className="min-h-screen flex flex-col">
+    <div className="min-h-screen flex flex-col bg-background">
       <NavHeader />
 
       {/* Hero Section */}
       <div className="flex-1 flex flex-col items-center justify-center px-4 py-20">
         <div className="max-w-4xl mx-auto text-center space-y-8">
           {/* Logo */}
-          <div className="flex items-center justify-center gap-3 mb-8">
-            <div className="w-14 h-14 rounded-2xl gradient-moss flex items-center justify-center glow">
-              <Shield className="w-8 h-8 text-white" />
-            </div>
-            <h1 className="text-4xl font-bold tracking-tight">mosskey</h1>
+          <div className="flex items-center justify-center gap-4 mb-8">
+            <HoppyLogo size={72} />
+            <h1 className="text-4xl font-bold tracking-tight">hoppy</h1>
           </div>
 
           {/* Tagline */}
           <p className="text-5xl md:text-6xl font-bold tracking-tight">
-            <span className="gradient-text">Load. Redeem. Privately.</span>
+            <span className="text-hop-700 dark:text-hop-300">Load. Redeem. Privately.</span>
           </p>
 
           <p className="text-xl text-muted-foreground max-w-2xl mx-auto">
@@ -32,133 +50,75 @@ export default function Home() {
           <div className="flex flex-col sm:flex-row gap-4 justify-center pt-4">
             <Link
               href="/create"
-              className="inline-flex items-center justify-center gap-2 px-8 py-4 rounded-xl gradient-moss text-white font-semibold text-lg transition-all hover:scale-105 glow"
+              className="inline-flex items-center justify-center gap-2 px-8 py-4 rounded-xl bg-hop-500 hover:bg-hop-600 text-white font-semibold text-lg transition-all hover:scale-105 shadow-lg shadow-hop-500/30 border-2 border-hop-600"
             >
               Send Payments
               <ArrowRight className="w-5 h-5" />
             </Link>
             <Link
               href="/card"
-              className="inline-flex items-center justify-center gap-2 px-8 py-4 rounded-xl glass text-white font-semibold text-lg transition-all hover:bg-white/10"
+              className="inline-flex items-center justify-center gap-2 px-8 py-4 rounded-xl bg-card border-2 border-border text-foreground font-semibold text-lg transition-all hover:border-honey-500 hover:bg-honey-50 dark:hover:bg-honey-900/20"
             >
-              <CreditCard className="w-5 h-5" />
+              <CreditCard className="w-5 h-5 text-honey-500" />
               Virtual Cards
             </Link>
           </div>
         </div>
       </div>
 
-      {/* Features */}
-      <div className="border-t border-border py-20 px-4">
-        <div className="max-w-5xl mx-auto">
-          <div className="grid md:grid-cols-3 gap-8">
-            <FeatureCard
-              icon={<Zap className="w-6 h-6" />}
-              title="Shielded Deposits"
-              description="Funds go directly into a privacy pool. No public trail."
-            />
-            <FeatureCard
-              icon={<Shield className="w-6 h-6" />}
-              title="Claim Notes"
-              description="Cryptographic secrets prove ownership. Only you can claim."
-            />
-            <FeatureCard
-              icon={<Lock className="w-6 h-6" />}
-              title="Unlinkable Transfers"
-              description="On-chain observers cannot connect sender to recipient."
-            />
+      {/* How it Works - Simple */}
+      <div className="py-16 px-4 bg-card border-y-2 border-border">
+        <div className="max-w-3xl mx-auto text-center">
+          <h2 className="text-2xl font-semibold mb-8">How it works</h2>
+          <div className="grid md:grid-cols-3 gap-6">
+            <div className="space-y-2">
+              <div className="w-10 h-10 rounded-full bg-hop-500 text-white flex items-center justify-center mx-auto font-bold">1</div>
+              <p className="font-medium">Create Link</p>
+              <p className="text-sm text-muted-foreground">Deposit SOL into a shielded pool</p>
+            </div>
+            <div className="space-y-2">
+              <div className="w-10 h-10 rounded-full bg-hop-500 text-white flex items-center justify-center mx-auto font-bold">2</div>
+              <p className="font-medium">Share</p>
+              <p className="text-sm text-muted-foreground">Send the claim link to anyone</p>
+            </div>
+            <div className="space-y-2">
+              <div className="w-10 h-10 rounded-full bg-hop-500 text-white flex items-center justify-center mx-auto font-bold">3</div>
+              <p className="font-medium">Claim</p>
+              <p className="text-sm text-muted-foreground">Recipient withdraws privately</p>
+            </div>
           </div>
         </div>
       </div>
 
-      {/* Virtual Cards Section */}
-      <div className="border-t border-border py-20 px-4">
-        <div className="max-w-5xl mx-auto">
-          <div className="grid lg:grid-cols-2 gap-10 items-center">
-            <div className="space-y-6">
-              <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full glass text-sm text-moss-200">
-                Powered by Starpay
-              </div>
-              <h2 className="text-3xl md:text-4xl font-semibold">
-                Private Virtual Cards
-              </h2>
-              <p className="text-muted-foreground text-lg">
-                Get instant virtual Visa or Mastercard cards. Pay with SOL, use anywhere online.
-                No KYC required for virtual cards.
-              </p>
-              <div className="flex flex-col sm:flex-row gap-3">
-                <Link
-                  href="/card"
-                  className="inline-flex items-center justify-center gap-2 px-6 py-3 rounded-xl gradient-moss text-white font-semibold transition-all hover:scale-105 glow-sm"
-                >
-                  Get a Virtual Card
-                  <ArrowRight className="w-4 h-4" />
-                </Link>
-              </div>
-            </div>
-
-            <div className="p-8 rounded-2xl glass">
-              <div className="space-y-4">
-                <div className="flex items-center gap-4">
-                  <div className="w-12 h-12 rounded-xl bg-moss-500/20 flex items-center justify-center">
-                    <CreditCard className="w-6 h-6 text-moss-400" />
-                  </div>
-                  <div>
-                    <p className="font-semibold">Instant Issuance</p>
-                    <p className="text-sm text-muted-foreground">Card ready in seconds</p>
-                  </div>
-                </div>
-                <div className="flex items-center gap-4">
-                  <div className="w-12 h-12 rounded-xl bg-moss-500/20 flex items-center justify-center">
-                    <Shield className="w-6 h-6 text-moss-400" />
-                  </div>
-                  <div>
-                    <p className="font-semibold">Privacy First</p>
-                    <p className="text-sm text-muted-foreground">No identity linked to card</p>
-                  </div>
-                </div>
-                <div className="flex items-center gap-4">
-                  <div className="w-12 h-12 rounded-xl bg-moss-500/20 flex items-center justify-center">
-                    <Zap className="w-6 h-6 text-moss-400" />
-                  </div>
-                  <div>
-                    <p className="font-semibold">Pay with SOL</p>
-                    <p className="text-sm text-muted-foreground">From any Solana wallet</p>
-                  </div>
-                </div>
-              </div>
-            </div>
+      {/* Virtual Cards Section - Simplified */}
+      <div className="py-16 px-4 bg-secondary">
+        <div className="max-w-3xl mx-auto text-center space-y-6">
+          <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-honey-200 dark:bg-honey-900/30 text-xs text-honey-700 dark:text-honey-400 font-medium">
+            Powered by Starpay
           </div>
+          <h2 className="text-2xl md:text-3xl font-semibold">
+            Private Virtual Cards
+          </h2>
+          <p className="text-muted-foreground max-w-md mx-auto">
+            Instant virtual Visa/Mastercard. Pay with SOL, no KYC required.
+          </p>
+          <Link
+            href="/card"
+            className="inline-flex items-center justify-center gap-2 px-6 py-3 rounded-xl bg-honey-500 hover:bg-honey-600 text-white font-semibold transition-all hover:scale-105 border-2 border-honey-600"
+          >
+            <CreditCard className="w-4 h-4" />
+            Get a Virtual Card
+          </Link>
         </div>
       </div>
 
       {/* Footer */}
-      <footer className="border-t border-border py-8 px-4">
-        <div className="max-w-5xl mx-auto flex items-center justify-between text-sm text-muted-foreground">
+      <footer className="border-t-2 border-border py-6 px-4 bg-card">
+        <div className="max-w-3xl mx-auto flex items-center justify-between text-xs text-muted-foreground">
           <p>Built with privacy in mind</p>
           <p>Powered by Solana</p>
         </div>
       </footer>
-    </div>
-  );
-}
-
-function FeatureCard({
-  icon,
-  title,
-  description,
-}: {
-  icon: React.ReactNode;
-  title: string;
-  description: string;
-}) {
-  return (
-    <div className="p-6 rounded-2xl glass">
-      <div className="w-12 h-12 rounded-xl bg-moss-500/20 flex items-center justify-center text-moss-400 mb-4">
-        {icon}
-      </div>
-      <h3 className="text-lg font-semibold mb-2">{title}</h3>
-      <p className="text-muted-foreground">{description}</p>
     </div>
   );
 }

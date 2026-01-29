@@ -72,16 +72,16 @@ export function WalletButton() {
       {solanaAddress ? (
         <button
           onClick={() => handleCopy(solanaAddress)}
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-moss-500/10 border border-moss-500/20 hover:bg-moss-500/20 transition-colors cursor-pointer"
+          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-hop-100 dark:bg-hop-900/30 border border-hop-200 dark:border-hop-800 hover:bg-hop-200 dark:hover:bg-hop-800/50 transition-colors cursor-pointer"
           title={`Click to copy: ${solanaAddress}`}
         >
-          <span className="text-xs font-mono text-moss-400">
+          <span className="text-xs font-mono text-hop-700 dark:text-hop-300">
             {shortenAddress(solanaAddress, 4)}
           </span>
           {copied ? (
-            <Check className="w-3 h-3 text-moss-400" />
+            <Check className="w-3 h-3 text-hop-600 dark:text-hop-400" />
           ) : (
-            <Copy className="w-3 h-3 text-moss-400/60" />
+            <Copy className="w-3 h-3 text-hop-500" />
           )}
         </button>
       ) : evmAddress ? (

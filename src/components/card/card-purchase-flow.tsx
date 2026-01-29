@@ -146,10 +146,10 @@ export function CardPurchaseFlow() {
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -20 }}
           >
-            <Card className="glass border-white/10">
+            <Card>
               <CardHeader>
                 <CardTitle className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-xl gradient-moss flex items-center justify-center">
+                  <div className="w-10 h-10 rounded-xl bg-hop-500 border-2 border-hop-600 flex items-center justify-center">
                     <CreditCard className="w-5 h-5 text-white" />
                   </div>
                   Get a Virtual Card
@@ -171,10 +171,10 @@ export function CardPurchaseFlow() {
                           setAmountInput(value.toString());
                         }}
                         className={cn(
-                          "py-3 rounded-xl font-medium transition-all",
+                          "py-3 rounded-xl font-medium transition-all border-2",
                           amount === value && amountInput === value.toString()
-                            ? "gradient-moss text-white"
-                            : "glass hover:bg-white/10"
+                            ? "bg-hop-500 text-white border-hop-600"
+                            : "bg-card border-border hover:border-hop-400"
                         )}
                       >
                         ${value}
@@ -187,10 +187,10 @@ export function CardPurchaseFlow() {
                         input?.select();
                       }}
                       className={cn(
-                        "py-3 rounded-xl font-medium transition-all",
+                        "py-3 rounded-xl font-medium transition-all border-2",
                         ![25, 50, 100, 250].includes(amount)
-                          ? "gradient-moss text-white"
-                          : "glass hover:bg-white/10"
+                          ? "bg-hop-500 text-white border-hop-600"
+                          : "bg-card border-border hover:border-hop-400"
                       )}
                     >
                       Custom
@@ -224,7 +224,7 @@ export function CardPurchaseFlow() {
                           setAmountInput(validAmount.toString());
                         }
                       }}
-                      className="glass border-white/10 pl-7 pr-3"
+                      className="bg-card border-2 border-border pl-7 pr-3"
                       placeholder="5 - 10,000"
                     />
                   </div>
@@ -239,10 +239,10 @@ export function CardPurchaseFlow() {
                         key={type}
                         onClick={() => setCardType(type)}
                         className={cn(
-                          "py-4 rounded-xl font-medium transition-all capitalize",
+                          "py-4 rounded-xl font-medium transition-all capitalize border-2",
                           cardType === type
-                            ? "gradient-moss text-white"
-                            : "glass hover:bg-white/10"
+                            ? "bg-hop-500 text-white border-hop-600"
+                            : "bg-card border-border hover:border-hop-400"
                         )}
                       >
                         {type}
@@ -258,13 +258,13 @@ export function CardPurchaseFlow() {
                     type="email"
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
-                    className="glass border-white/10"
+                    className="bg-card border-2 border-border"
                     placeholder="you@example.com"
                   />
                 </div>
 
                 {error && (
-                  <div className="p-3 rounded-xl bg-red-500/10 border border-red-500/20 text-red-200 text-sm flex items-center gap-2">
+                  <div className="p-3 rounded-xl bg-red-100 dark:bg-red-500/10 border-2 border-red-400 text-red-700 dark:text-red-200 text-sm flex items-center gap-2">
                     <AlertTriangle className="w-4 h-4" />
                     {error}
                   </div>
@@ -273,7 +273,7 @@ export function CardPurchaseFlow() {
                 <Button
                   onClick={handleCreateOrder}
                   disabled={isLoading || amount < 5 || amount > 10000}
-                  className="w-full gradient-moss text-white py-6 text-lg"
+                  className="w-full py-6 text-lg"
                 >
                   {isLoading ? (
                     <>
@@ -304,11 +304,11 @@ export function CardPurchaseFlow() {
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -20 }}
           >
-            <Card className="glass border-white/10">
+            <Card>
               <CardHeader>
                 <CardTitle className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-xl bg-amber-500/20 flex items-center justify-center">
-                    <Loader2 className="w-5 h-5 text-amber-400 animate-spin" />
+                  <div className="w-10 h-10 rounded-xl bg-honey-100 dark:bg-amber-500/20 border-2 border-honey-400 flex items-center justify-center">
+                    <Loader2 className="w-5 h-5 text-honey-600 dark:text-amber-400 animate-spin" />
                   </div>
                   Awaiting Payment
                 </CardTitle>
@@ -317,7 +317,7 @@ export function CardPurchaseFlow() {
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-6">
-                <div className="p-4 rounded-xl bg-white/5 space-y-4">
+                <div className="p-4 rounded-xl bg-secondary border-2 border-border space-y-4">
                   <div className="flex justify-between text-sm">
                     <span className="text-muted-foreground">Card Value</span>
                     <span className="font-medium">${order.pricing.cardValue}</span>
@@ -326,7 +326,7 @@ export function CardPurchaseFlow() {
                     <span className="text-muted-foreground">Fee ({order.pricing.starpayFeePercent}%)</span>
                     <span className="font-medium">${order.pricing.starpayFee.toFixed(2)}</span>
                   </div>
-                  <div className="border-t border-white/10 pt-3 flex justify-between">
+                  <div className="border-t-2 border-border pt-3 flex justify-between">
                     <span className="font-medium">Total</span>
                     <span className="font-semibold text-lg">${order.pricing.total.toFixed(2)}</span>
                   </div>
@@ -338,7 +338,7 @@ export function CardPurchaseFlow() {
                     <Input
                       value={order.payment.address}
                       readOnly
-                      className="glass border-white/10 font-mono text-sm"
+                      className="bg-card border-2 border-border font-mono text-sm"
                     />
                     <Button
                       variant="outline"
@@ -347,7 +347,7 @@ export function CardPurchaseFlow() {
                       className="shrink-0"
                     >
                       {copied === "address" ? (
-                        <Check className="w-4 h-4 text-moss-400" />
+                        <Check className="w-4 h-4 text-hop-600 dark:text-hop-400" />
                       ) : (
                         <Copy className="w-4 h-4" />
                       )}
@@ -355,11 +355,11 @@ export function CardPurchaseFlow() {
                   </div>
                 </div>
 
-                <div className="p-4 rounded-xl gradient-moss/20 border border-moss-500/30">
+                <div className="p-4 rounded-xl bg-hop-100 dark:bg-hop-500/20 border-2 border-hop-400">
                   <div className="flex items-center justify-between">
                     <span className="text-sm">Amount to send</span>
                     <div className="flex items-center gap-2">
-                      <span className="text-2xl font-bold">{order.payment.amountSol} SOL</span>
+                      <span className="text-2xl font-bold text-hop-700 dark:text-hop-300">{order.payment.amountSol} SOL</span>
                       <Button
                         variant="ghost"
                         size="icon"
@@ -367,7 +367,7 @@ export function CardPurchaseFlow() {
                         className="shrink-0"
                       >
                         {copied === "amount" ? (
-                          <Check className="w-4 h-4 text-moss-400" />
+                          <Check className="w-4 h-4 text-hop-600 dark:text-hop-400" />
                         ) : (
                           <Copy className="w-4 h-4" />
                         )}
@@ -402,9 +402,9 @@ export function CardPurchaseFlow() {
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -20 }}
           >
-            <Card className="glass border-white/10">
+            <Card>
               <CardContent className="py-16 text-center space-y-6">
-                <div className="w-16 h-16 rounded-full gradient-moss mx-auto flex items-center justify-center animate-pulse">
+                <div className="w-16 h-16 rounded-full bg-hop-500 border-2 border-hop-600 mx-auto flex items-center justify-center animate-pulse">
                   <CreditCard className="w-8 h-8 text-white" />
                 </div>
                 <div>
@@ -413,7 +413,7 @@ export function CardPurchaseFlow() {
                     Payment received! Your virtual card is being created...
                   </p>
                 </div>
-                <Loader2 className="w-8 h-8 mx-auto text-moss-400 animate-spin" />
+                <Loader2 className="w-8 h-8 mx-auto text-hop-600 dark:text-hop-400 animate-spin" />
               </CardContent>
             </Card>
           </motion.div>
@@ -427,11 +427,11 @@ export function CardPurchaseFlow() {
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -20 }}
           >
-            <Card className="glass border-moss-500/30">
+            <Card className="border-2 border-hop-400">
               <CardHeader>
                 <CardTitle className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-full bg-moss-500/20 flex items-center justify-center">
-                    <Check className="w-5 h-5 text-moss-400" />
+                  <div className="w-10 h-10 rounded-full bg-hop-200 dark:bg-hop-500/20 border-2 border-hop-500 flex items-center justify-center">
+                    <Check className="w-5 h-5 text-hop-600 dark:text-hop-400" />
                   </div>
                   Card Issued!
                 </CardTitle>
@@ -441,35 +441,35 @@ export function CardPurchaseFlow() {
               </CardHeader>
               <CardContent className="space-y-6">
                 {order.card ? (
-                  <div className="p-6 rounded-2xl bg-gradient-to-br from-slate-800 to-slate-900 border border-white/10 space-y-4">
+                  <div className="p-6 rounded-2xl bg-gradient-to-br from-slate-800 to-slate-900 border-2 border-slate-600 space-y-4 text-white">
                     <div className="flex justify-between items-start">
-                      <span className="text-xs text-muted-foreground uppercase">{cardType}</span>
+                      <span className="text-xs text-slate-400 uppercase">{cardType}</span>
                       <span className="text-lg font-bold">${order.pricing.cardValue}</span>
                     </div>
                     <div className="space-y-1">
-                      <p className="text-xs text-muted-foreground">Card Number</p>
+                      <p className="text-xs text-slate-400">Card Number</p>
                       <p className="font-mono text-lg tracking-wider">{order.card.number}</p>
                     </div>
                     <div className="flex gap-8">
                       <div>
-                        <p className="text-xs text-muted-foreground">Expiry</p>
+                        <p className="text-xs text-slate-400">Expiry</p>
                         <p className="font-mono">{order.card.expiry}</p>
                       </div>
                       <div>
-                        <p className="text-xs text-muted-foreground">CVV</p>
+                        <p className="text-xs text-slate-400">CVV</p>
                         <p className="font-mono">{order.card.cvv}</p>
                       </div>
                     </div>
                   </div>
                 ) : (
-                  <div className="p-4 rounded-xl bg-moss-500/10 border border-moss-500/20 text-center">
-                    <p className="text-moss-200">
+                  <div className="p-4 rounded-xl bg-hop-100 dark:bg-hop-500/10 border-2 border-hop-400 text-center">
+                    <p className="text-hop-700 dark:text-hop-200">
                       Card details have been sent to <strong>{email}</strong>
                     </p>
                   </div>
                 )}
 
-                <Button onClick={resetFlow} className="w-full gradient-moss text-white">
+                <Button onClick={resetFlow} className="w-full">
                   Get Another Card
                 </Button>
               </CardContent>
@@ -485,16 +485,16 @@ export function CardPurchaseFlow() {
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -20 }}
           >
-            <Card className="glass border-red-500/30">
+            <Card className="border-2 border-red-400">
               <CardContent className="py-12 text-center space-y-6">
-                <div className="w-16 h-16 rounded-full bg-red-500/20 mx-auto flex items-center justify-center">
-                  <AlertTriangle className="w-8 h-8 text-red-400" />
+                <div className="w-16 h-16 rounded-full bg-red-100 dark:bg-red-500/20 border-2 border-red-400 mx-auto flex items-center justify-center">
+                  <AlertTriangle className="w-8 h-8 text-red-600 dark:text-red-400" />
                 </div>
                 <div>
                   <h3 className="text-xl font-semibold mb-2">Something went wrong</h3>
                   <p className="text-muted-foreground">{error}</p>
                 </div>
-                <Button onClick={resetFlow} className="gradient-moss text-white">
+                <Button onClick={resetFlow}>
                   Try Again
                 </Button>
               </CardContent>

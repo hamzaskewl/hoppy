@@ -299,7 +299,7 @@ export function ClaimFlow() {
             exit={{ opacity: 0 }}
           >
             <CardContent className="py-12 text-center">
-              <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-moss-500 mx-auto" />
+              <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-hop-500 mx-auto" />
               <h3 className="mt-6 text-lg font-semibold">Reading Payment Link...</h3>
               <p className="mt-2 text-sm text-muted-foreground">
                 Validating your private payment
@@ -319,8 +319,8 @@ export function ClaimFlow() {
             <CardContent className="py-6">
               {/* Header */}
               <div className="flex justify-center mb-4">
-                <div className="w-14 h-14 rounded-full bg-moss-500/20 flex items-center justify-center">
-                  <Shield className="w-7 h-7 text-moss-400" />
+                <div className="w-14 h-14 rounded-full bg-hop-200 dark:bg-hop-500/20 border-2 border-hop-400/50 flex items-center justify-center">
+                  <Shield className="w-7 h-7 text-hop-600 dark:text-hop-400" />
                 </div>
               </div>
 
@@ -334,13 +334,13 @@ export function ClaimFlow() {
               {/* Sender privacy indicator */}
               <div className={`p-2 rounded-lg mb-4 ${
                 state.note.senderPrivacy === "basic" ? "bg-yellow-500/10 border border-yellow-500/20" :
-                "bg-moss-500/10 border border-moss-500/20"
+                "bg-hop-500/10 border border-hop-500/20"
               }`}>
                 <div className="flex items-center gap-2">
                   {state.note.senderPrivacy === "basic" ? (
                     <Eye className="w-4 h-4 text-yellow-500" />
                   ) : (
-                    <EyeOff className="w-4 h-4 text-moss-500" />
+                    <EyeOff className="w-4 h-4 text-hop-500" />
                   )}
                   <span className="text-xs">
                     Sender: {state.note.senderPrivacy === "basic" ? "Traceable (you can look up who sent this)" : "Hidden (ZK protected)"}
@@ -362,13 +362,13 @@ export function ClaimFlow() {
                         onClick={() => setRecipientPrivacy(level)}
                         className={`p-3 rounded-xl border-2 transition-all text-left ${
                           isSelected
-                            ? level === "quick" ? "border-yellow-500 bg-yellow-500/10" : "border-moss-500 bg-moss-500/10"
+                            ? level === "quick" ? "border-yellow-500 bg-yellow-500/10" : "border-hop-500 bg-hop-500/10"
                             : "border-border hover:border-muted-foreground/50 bg-background"
                         }`}
                       >
                         <div className="flex items-center gap-2 mb-1">
                           {level === "quick" && <Eye className="w-4 h-4 text-yellow-500" />}
-                          {level === "private" && <EyeOff className="w-4 h-4 text-moss-500" />}
+                          {level === "private" && <EyeOff className="w-4 h-4 text-hop-500" />}
                           <span className="text-sm font-semibold">{info.name}</span>
                         </div>
                         <p className="text-lg font-bold">
@@ -386,7 +386,7 @@ export function ClaimFlow() {
               {/* Privacy explanation */}
               <div className={`p-3 rounded-lg mb-4 ${
                 recipientPrivacy === "quick" ? "bg-yellow-500/5 border border-yellow-500/20" :
-                "bg-moss-500/5 border border-moss-500/20"
+                "bg-hop-500/5 border border-hop-500/20"
               }`}>
                 <p className="text-xs text-muted-foreground">
                   {RECIPIENT_PRIVACY[recipientPrivacy].description}
@@ -402,7 +402,7 @@ export function ClaimFlow() {
                   <button
                     onClick={() => setUseCustomAddress(false)}
                     className={`flex-1 py-2 px-3 rounded-lg text-sm transition-all ${
-                      !useCustomAddress ? "bg-moss-500/20 border border-moss-500" : "bg-background border border-border"
+                      !useCustomAddress ? "bg-hop-500/20 border border-hop-500" : "bg-background border border-border"
                     }`}
                   >
                     Connect Wallet
@@ -410,7 +410,7 @@ export function ClaimFlow() {
                   <button
                     onClick={() => setUseCustomAddress(true)}
                     className={`flex-1 py-2 px-3 rounded-lg text-sm transition-all ${
-                      useCustomAddress ? "bg-moss-500/20 border border-moss-500" : "bg-background border border-border"
+                      useCustomAddress ? "bg-hop-500/20 border border-hop-500" : "bg-background border border-border"
                     }`}
                   >
                     Paste Address
@@ -526,7 +526,7 @@ export function ClaimFlow() {
                 initial={{ scale: 0 }}
                 animate={{ scale: 1 }}
                 transition={{ type: "spring", stiffness: 200, damping: 15 }}
-                className="w-20 h-20 rounded-full bg-moss-500 flex items-center justify-center mx-auto"
+                className="w-20 h-20 rounded-full bg-hop-500 flex items-center justify-center mx-auto"
               >
                 <Check className="w-10 h-10 text-white" />
               </motion.div>
@@ -540,10 +540,10 @@ export function ClaimFlow() {
               </p>
 
               {/* Privacy confirmation */}
-              <div className="mt-4 p-3 rounded-lg bg-moss-500/10 border border-moss-500/20 inline-block">
+              <div className="mt-4 p-3 rounded-lg bg-hop-100 dark:bg-hop-500/10 border-2 border-hop-400/50 inline-block">
                 <div className="flex items-center gap-2">
-                  <Shield className="w-4 h-4 text-moss-400" />
-                  <p className="text-xs text-moss-300">
+                  <Shield className="w-4 h-4 text-hop-600 dark:text-hop-400" />
+                  <p className="text-xs text-hop-700 dark:text-hop-300 font-medium">
                     Privacy preserved - no link to sender
                   </p>
                 </div>
@@ -551,10 +551,10 @@ export function ClaimFlow() {
 
               {/* Transaction Hash */}
               {state.withdrawTxHash && (
-                <div className="mt-6 p-3 rounded-xl bg-background border border-border inline-block">
+                <div className="mt-6 p-3 rounded-xl bg-card border-2 border-border inline-block">
                   <button
                     onClick={() => handleCopyTxHash(state.withdrawTxHash!)}
-                    className="flex items-center gap-2 text-sm font-mono text-moss-400 hover:text-moss-300"
+                    className="flex items-center gap-2 text-sm font-mono text-hop-600 dark:text-hop-400 hover:text-hop-700 dark:hover:text-hop-300"
                   >
                     Tx: {shortenAddress(state.withdrawTxHash, 8)}
                     {copied ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}

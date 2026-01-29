@@ -6,9 +6,9 @@ import { Providers } from "@/components/providers";
 const inter = Inter({ subsets: ["latin"] });
 
 export const metadata: Metadata = {
-  title: "mosskey | Privacy-First Payments",
+  title: "hoppy | Privacy-First Payments",
   description: "Load. Redeem. Privately. A privacy-first payment platform on Solana.",
-  keywords: ["privacy", "solana", "payments", "crypto", "web3"],
+  keywords: ["privacy", "solana", "payments", "crypto", "web3", "hoppy"],
 };
 
 export default function RootLayout({
@@ -17,7 +17,7 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en" className="dark">
+    <html lang="en" suppressHydrationWarning>
       <body className={inter.className} suppressHydrationWarning>
         <Providers>
           <main className="min-h-screen">

@@ -39,18 +39,24 @@ const config: Config = {
         border: "hsl(var(--border))",
         input: "hsl(var(--input))",
         ring: "hsl(var(--ring))",
-        moss: {
-          50: "#f0fdf4",
-          100: "#dcfce7",
-          200: "#bbf7d0",
-          300: "#86efac",
-          400: "#4ade80",
-          500: "#22c55e",
-          600: "#16a34a",
-          700: "#15803d",
-          800: "#166534",
-          900: "#14532d",
-          950: "#052e16",
+        // hoppy color palette based on: #F2AB40, #A3DC81, #87DD8D, #CCEDD0, #B0EF84
+        hop: {
+          50: "#f4fbf0",
+          100: "#e8f7e0",
+          200: "#CCEDD0",  // very light green from palette
+          300: "#B0EF84",  // lime green from palette
+          400: "#A3DC81",  // light green - primary
+          500: "#87DD8D",  // mint green - primary
+          600: "#6bc970",
+          700: "#4fa854",
+          800: "#3d8543",
+          900: "#2d6333",
+          950: "#1a3d1f",
+        },
+        honey: {
+          400: "#F5BC5C",
+          500: "#F2AB40",  // orange/gold from palette
+          600: "#E09520",
         },
       },
       borderRadius: {

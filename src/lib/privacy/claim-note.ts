@@ -88,11 +88,11 @@ export async function createClaimNote(
   const secret = bs58.encode(secretBytes);
   
   // Derive nullifier (used to prevent double-spending)
-  const nullifierBytes = await hash(secretBytes, "mosskey:nullifier:v1");
+  const nullifierBytes = await hash(secretBytes, "hoppy:nullifier:v1");
   const nullifier = bs58.encode(nullifierBytes);
   
   // Derive commitment (stored publicly in the pool)
-  const commitmentBytes = await hash(secretBytes, "mosskey:commitment:v1");
+  const commitmentBytes = await hash(secretBytes, "hoppy:commitment:v1");
   const commitment = bs58.encode(commitmentBytes);
   
   return {
@@ -116,10 +116,10 @@ export async function reconstructNoteFromSecret(
 ): Promise<ClaimNote> {
   const secretBytes = bs58.decode(secret);
   
-  const nullifierBytes = await hash(secretBytes, "mosskey:nullifier:v1");
+  const nullifierBytes = await hash(secretBytes, "hoppy:nullifier:v1");
   const nullifier = bs58.encode(nullifierBytes);
   
-  const commitmentBytes = await hash(secretBytes, "mosskey:commitment:v1");
+  const commitmentBytes = await hash(secretBytes, "hoppy:commitment:v1");
   const commitment = bs58.encode(commitmentBytes);
   
   return {

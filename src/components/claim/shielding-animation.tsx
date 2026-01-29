@@ -15,7 +15,7 @@ export function ShieldingAnimation({ status, message }: ShieldingAnimationProps)
       <div className="relative w-40 h-40 flex items-center justify-center">
         {/* Outer Ring */}
         <motion.div
-          className="absolute inset-0 rounded-full border-2 border-moss-500/30"
+          className="absolute inset-0 rounded-full border-2 border-hop-500/30"
           animate={
             status === "shielding"
               ? {
@@ -33,7 +33,7 @@ export function ShieldingAnimation({ status, message }: ShieldingAnimationProps)
 
         {/* Middle Ring */}
         <motion.div
-          className="absolute inset-4 rounded-full border-2 border-moss-500/50"
+          className="absolute inset-4 rounded-full border-2 border-hop-500/50"
           animate={
             status === "shielding"
               ? {
@@ -52,7 +52,7 @@ export function ShieldingAnimation({ status, message }: ShieldingAnimationProps)
 
         {/* Inner Glow */}
         <motion.div
-          className="absolute inset-8 rounded-full bg-moss-500/20"
+          className="absolute inset-8 rounded-full bg-hop-500/20"
           animate={
             status === "shielding"
               ? {
@@ -74,24 +74,24 @@ export function ShieldingAnimation({ status, message }: ShieldingAnimationProps)
         <motion.div
           className={`relative z-10 w-20 h-20 rounded-full flex items-center justify-center ${
             status === "complete"
-              ? "bg-moss-500"
+              ? "bg-hop-500"
               : status === "error"
               ? "bg-red-500/20"
-              : "bg-moss-500/20"
+              : "bg-hop-500/20"
           }`}
           initial={{ scale: 0.8, opacity: 0 }}
           animate={{ scale: 1, opacity: 1 }}
           transition={{ duration: 0.5 }}
         >
           {status === "detecting" && (
-            <Loader2 className="w-8 h-8 text-moss-400 animate-spin" />
+            <Loader2 className="w-8 h-8 text-hop-600 dark:text-hop-400 animate-spin" />
           )}
           {status === "shielding" && (
             <motion.div
               animate={{ rotate: 360 }}
               transition={{ duration: 3, repeat: Infinity, ease: "linear" }}
             >
-              <Shield className="w-10 h-10 text-moss-400" />
+              <Shield className="w-10 h-10 text-hop-600 dark:text-hop-400" />
             </motion.div>
           )}
           {status === "complete" && (
@@ -114,7 +114,7 @@ export function ShieldingAnimation({ status, message }: ShieldingAnimationProps)
             {[...Array(6)].map((_, i) => (
               <motion.div
                 key={i}
-                className="absolute w-2 h-2 rounded-full bg-moss-400"
+                className="absolute w-2 h-2 rounded-full bg-hop-400"
                 initial={{
                   x: 0,
                   y: 0,
