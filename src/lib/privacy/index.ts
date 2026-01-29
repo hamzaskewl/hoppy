@@ -27,23 +27,31 @@ export {
   isValidNote,
 } from "./claim-note";
 
-// Privacy Cash Double Hop (Current Production Implementation)
+// Privacy Cash Adapter (Current Production Implementation)
 // Note: Privacy Cash SDK operations are in API routes (server-side only)
 export {
   // Types
   type CompositeSecret,
   type DoubleHopNote,
   type FeeEstimate,
+  type SenderPrivacy,
+  type RecipientPrivacy,
+  type SenderPrivacyInfo,
+  type RecipientPrivacyInfo,
+  // Legacy types
   type PrivacyLevel,
-  type PrivacyLevelInfo,
   // Constants
-  PRIVACY_LEVELS,
+  SENDER_PRIVACY,
+  RECIPIENT_PRIVACY,
+  PRIVACY_LEVELS, // Legacy
   // Functions
   generateCompositeSecret,
   decodeCompositeSecret,
   calculateFees,
   calculateDepositForRecipientAmount,
-  calculateTotalDeposit,
+  calculateSenderCost,
+  calculateRecipientReceives,
+  calculateTotalDeposit, // Legacy
   serializeDoubleHopNote,
   deserializeDoubleHopNote,
   createDoubleHopClaimUrl,

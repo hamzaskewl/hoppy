@@ -1,18 +1,21 @@
 "use client";
 
-import { useEffect, useState, useCallback, useRef } from "react";
+import { useEffect, useState, useCallback, useRef, useMemo } from "react";
 import { usePrivy } from "@privy-io/react-auth";
 import { motion, AnimatePresence } from "framer-motion";
-import { Wallet, Check, Copy, ArrowRight, AlertTriangle, Shield, Lock, Zap } from "lucide-react";
+import { Wallet, Check, Copy, ArrowRight, AlertTriangle, Shield, Lock, Zap, Eye, EyeOff } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
 import { ShieldingAnimation } from "./shielding-animation";
 import { 
   extractDoubleHopNoteFromUrl,
   decodeCompositeSecret,
-  calculateFees,
-  PRIVACY_LEVELS,
+  calculateRecipientReceives,
+  RECIPIENT_PRIVACY,
+  SENDER_PRIVACY,
   type DoubleHopNote,
+  type RecipientPrivacy,
 } from "@/lib/privacy";
 import { formatSol, shortenAddress, lamportsToSol } from "@/lib/utils";
 import { PublicKey } from "@solana/web3.js";
@@ -57,8 +60,28 @@ export function ClaimFlow() {
   });
   const [copied, setCopied] = useState(false);
   const [claimProgress, setClaimProgress] = useState<string>("");
+  const [recipientPrivacy, setRecipientPrivacy] = useState<RecipientPrivacy>("quick");
+  const [pasteAddress, setPasteAddress] = useState<string>("");
+  const [useCustomAddress, setUseCustomAddress] = useState(false);
   
   const hasStartedParsing = useRef(false);
+  
+  // Calculate what recipient receives based on their privacy choice
+  const receiveBreakdown = useMemo(() => {
+    if (!state.note) return null;
+    return calculateRecipientReceives(state.note.amount, recipientPrivacy);
+  }, [state.note, recipientPrivacy]);
+  
+  // Validate paste address
+  const isValidPasteAddress = useMemo(() => {
+    if (!pasteAddress) return false;
+    try {
+      new PublicKey(pasteAddress);
+      return true;
+    } catch {
+      return false;
+    }
+  }, [pasteAddress]);
 
   // Get user's wallet address (Solana only)
   const getUserWalletAddress = useCallback((): PublicKey | null => {
@@ -170,12 +193,26 @@ export function ClaimFlow() {
 
   // Handle claim
   const handleClaim = async () => {
-    const walletAddress = getUserWalletAddress();
+    // Get recipient address from either paste or connected wallet
+    let recipientAddress: string;
     
-    if (!walletAddress || !state.note) {
-      if (!authenticated) {
-        login();
+    if (useCustomAddress) {
+      if (!isValidPasteAddress) {
+        return;
       }
+      recipientAddress = pasteAddress;
+    } else {
+      const walletAddress = getUserWalletAddress();
+      if (!walletAddress) {
+        if (!authenticated) {
+          login();
+        }
+        return;
+      }
+      recipientAddress = walletAddress.toBase58();
+    }
+    
+    if (!state.note) {
       return;
     }
 
@@ -183,10 +220,13 @@ export function ClaimFlow() {
     setClaimProgress("Initializing withdrawal...");
 
     try {
-      console.log("[Claim] Processing double hop claim...");
-      console.log("[Claim] Recipient:", walletAddress.toBase58());
+      console.log("[Claim] Processing claim...");
+      console.log("[Claim] Recipient:", recipientAddress);
+      console.log("[Claim] Privacy level:", recipientPrivacy);
 
-      setClaimProgress("Connecting to Privacy Cash...");
+      setClaimProgress(recipientPrivacy === "private" 
+        ? "Routing through privacy layer..." 
+        : "Connecting to Privacy Cash...");
       
       // Call API route to handle Privacy Cash withdrawal (server-side)
       const response = await fetch("/api/privacy-cash/claim", {
@@ -196,7 +236,8 @@ export function ClaimFlow() {
         },
         body: JSON.stringify({
           note: state.note,
-          recipientAddress: walletAddress.toBase58(),
+          recipientAddress,
+          recipientPrivacy,
         }),
       });
 
@@ -246,8 +287,6 @@ export function ClaimFlow() {
   };
 
   // Calculate fees for display
-  const feeInfo = state.note ? calculateFees(state.note.amount) : null;
-
   return (
     <Card className="w-full max-w-md mx-auto overflow-hidden">
       <AnimatePresence mode="wait">
@@ -277,122 +316,172 @@ export function ClaimFlow() {
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
           >
-            <CardContent className="py-8">
-              {/* Success indicator */}
-              <div className="flex justify-center mb-6">
-                <div className="w-16 h-16 rounded-full bg-moss-500/20 flex items-center justify-center">
-                  <Shield className="w-8 h-8 text-moss-400" />
+            <CardContent className="py-6">
+              {/* Header */}
+              <div className="flex justify-center mb-4">
+                <div className="w-14 h-14 rounded-full bg-moss-500/20 flex items-center justify-center">
+                  <Shield className="w-7 h-7 text-moss-400" />
                 </div>
               </div>
 
-              <h3 className="text-xl font-bold text-center mb-2">
-                Private Payment Found
+              <h3 className="text-xl font-bold text-center mb-1">
+                Payment Ready to Claim
               </h3>
-              <p className="text-sm text-muted-foreground text-center mb-6">
-                Connect your wallet to claim these funds
+              <p className="text-sm text-muted-foreground text-center mb-4">
+                {lamportsToSol(state.note.amount).toFixed(4)} SOL available in pool
               </p>
 
-              {/* Amount */}
-              <div className="p-4 rounded-xl bg-moss-500/10 border border-moss-500/20 mb-4">
-                <p className="text-sm text-muted-foreground text-center">You Will Receive</p>
-                <p className="text-3xl font-bold text-moss-400 text-center">
-                  {feeInfo ? formatSol(feeInfo.recipientReceives) : formatSol(state.note.amount)} SOL
+              {/* Sender privacy indicator */}
+              <div className={`p-2 rounded-lg mb-4 ${
+                state.note.senderPrivacy === "basic" ? "bg-yellow-500/10 border border-yellow-500/20" :
+                "bg-moss-500/10 border border-moss-500/20"
+              }`}>
+                <div className="flex items-center gap-2">
+                  {state.note.senderPrivacy === "basic" ? (
+                    <Eye className="w-4 h-4 text-yellow-500" />
+                  ) : (
+                    <EyeOff className="w-4 h-4 text-moss-500" />
+                  )}
+                  <span className="text-xs">
+                    Sender: {state.note.senderPrivacy === "basic" ? "Traceable (you can look up who sent this)" : "Hidden (ZK protected)"}
+                  </span>
+                </div>
+              </div>
+
+              {/* Your Privacy Level Selector */}
+              <div className="mb-4">
+                <label className="text-sm text-muted-foreground mb-2 block">Your Privacy Level</label>
+                <div className="grid grid-cols-2 gap-2">
+                  {(Object.keys(RECIPIENT_PRIVACY) as RecipientPrivacy[]).map((level) => {
+                    const info = RECIPIENT_PRIVACY[level];
+                    const isSelected = recipientPrivacy === level;
+                    const receives = calculateRecipientReceives(state.note!.amount, level);
+                    return (
+                      <button
+                        key={level}
+                        onClick={() => setRecipientPrivacy(level)}
+                        className={`p-3 rounded-xl border-2 transition-all text-left ${
+                          isSelected
+                            ? level === "quick" ? "border-yellow-500 bg-yellow-500/10" : "border-moss-500 bg-moss-500/10"
+                            : "border-border hover:border-muted-foreground/50 bg-background"
+                        }`}
+                      >
+                        <div className="flex items-center gap-2 mb-1">
+                          {level === "quick" && <Eye className="w-4 h-4 text-yellow-500" />}
+                          {level === "private" && <EyeOff className="w-4 h-4 text-moss-500" />}
+                          <span className="text-sm font-semibold">{info.name}</span>
+                        </div>
+                        <p className="text-lg font-bold">
+                          {lamportsToSol(receives.recipientReceives).toFixed(4)} SOL
+                        </p>
+                        <p className="text-xs text-muted-foreground">
+                          {info.recipientHidden ? "You stay hidden" : "Sender can see you"}
+                        </p>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Privacy explanation */}
+              <div className={`p-3 rounded-lg mb-4 ${
+                recipientPrivacy === "quick" ? "bg-yellow-500/5 border border-yellow-500/20" :
+                "bg-moss-500/5 border border-moss-500/20"
+              }`}>
+                <p className="text-xs text-muted-foreground">
+                  {RECIPIENT_PRIVACY[recipientPrivacy].description}
                 </p>
-                {feeInfo && feeInfo.totalFee > 0 && (
-                  <p className="text-xs text-muted-foreground text-center mt-1">
-                    (after {lamportsToSol(feeInfo.totalFee).toFixed(4)} SOL network fees)
-                  </p>
+              </div>
+
+              {/* Destination Address */}
+              <div className="mb-4">
+                <label className="text-sm text-muted-foreground mb-2 block">Receive To</label>
+                
+                {/* Toggle between paste and connect */}
+                <div className="flex gap-2 mb-2">
+                  <button
+                    onClick={() => setUseCustomAddress(false)}
+                    className={`flex-1 py-2 px-3 rounded-lg text-sm transition-all ${
+                      !useCustomAddress ? "bg-moss-500/20 border border-moss-500" : "bg-background border border-border"
+                    }`}
+                  >
+                    Connect Wallet
+                  </button>
+                  <button
+                    onClick={() => setUseCustomAddress(true)}
+                    className={`flex-1 py-2 px-3 rounded-lg text-sm transition-all ${
+                      useCustomAddress ? "bg-moss-500/20 border border-moss-500" : "bg-background border border-border"
+                    }`}
+                  >
+                    Paste Address
+                  </button>
+                </div>
+
+                {useCustomAddress ? (
+                  <div className="space-y-2">
+                    <Input
+                      type="text"
+                      placeholder="Enter Solana address..."
+                      value={pasteAddress}
+                      onChange={(e) => setPasteAddress(e.target.value)}
+                      className={`font-mono text-sm ${
+                        pasteAddress && !isValidPasteAddress ? "border-red-500" : ""
+                      }`}
+                    />
+                    {pasteAddress && !isValidPasteAddress && (
+                      <p className="text-xs text-red-400">Invalid Solana address</p>
+                    )}
+                  </div>
+                ) : (
+                  <>
+                    {authenticated && ready ? (
+                      getUserWalletAddress() ? (
+                        <div className="p-3 rounded-xl bg-background border border-border">
+                          <p className="font-mono text-sm">
+                            {shortenAddress(getUserWalletAddress()!.toBase58(), 8)}
+                          </p>
+                        </div>
+                      ) : (
+                        <div className="p-3 rounded-lg bg-yellow-500/10 border border-yellow-500/20">
+                          <p className="text-xs text-yellow-400">
+                            No Solana wallet found. Try paste address instead.
+                          </p>
+                        </div>
+                      )
+                    ) : (
+                      <Button 
+                        onClick={login} 
+                        className="w-full" 
+                        variant="outline"
+                        disabled={!ready}
+                      >
+                        <Wallet className="w-4 h-4 mr-2" />
+                        {ready ? "Connect Wallet" : "Loading..."}
+                      </Button>
+                    )}
+                  </>
                 )}
               </div>
 
-              {/* Privacy level indicator */}
-              {state.note.privacyLevel && (
-                <div className={`p-3 rounded-lg mb-4 ${
-                  state.note.privacyLevel === "basic" ? "bg-yellow-500/10 border border-yellow-500/20" :
-                  state.note.privacyLevel === "private" ? "bg-blue-500/10 border border-blue-500/20" :
-                  "bg-moss-500/10 border border-moss-500/20"
-                }`}>
-                  <div className="flex items-center gap-2 mb-1">
-                    <Shield className={`w-4 h-4 ${
-                      state.note.privacyLevel === "basic" ? "text-yellow-500" :
-                      state.note.privacyLevel === "private" ? "text-blue-500" :
-                      "text-moss-500"
-                    }`} />
-                    <span className="text-sm font-semibold">
-                      {PRIVACY_LEVELS[state.note.privacyLevel].name} Privacy
-                    </span>
-                  </div>
-                  <p className="text-xs text-muted-foreground">
-                    {PRIVACY_LEVELS[state.note.privacyLevel].description}
-                  </p>
-                </div>
-              )}
-
-              {/* Privacy notice */}
-              <div className="p-3 rounded-lg bg-background border border-border mb-6">
-                <div className="flex items-start gap-2">
-                  <Lock className="w-4 h-4 text-moss-400 mt-0.5 flex-shrink-0" />
-                  <p className="text-xs text-muted-foreground">
-                    <span className="text-moss-300 font-medium">Shielded funds:</span> These funds 
-                    are in a privacy pool. The sender&apos;s identity is {
-                      state.note.privacyLevel === "basic" ? "discoverable if you look up the ephemeral wallet." :
-                      "protected by zero-knowledge proofs."
-                    }
-                  </p>
-                </div>
-              </div>
-
-              {/* Wallet connection / claim */}
-              {authenticated && ready ? (
-                getUserWalletAddress() ? (
-                  <div className="space-y-3">
-                    <div className="p-3 rounded-xl bg-background border border-border">
-                      <p className="text-xs text-muted-foreground mb-1">Claim to your wallet</p>
-                      <p className="font-mono text-sm">
-                        {shortenAddress(getUserWalletAddress()!.toBase58(), 6)}
-                      </p>
-                    </div>
-                    <Button
-                      onClick={handleClaim}
-                      className="w-full"
-                      size="lg"
-                    >
-                      <Zap className="w-4 h-4 mr-2" />
-                      Claim {feeInfo ? formatSol(feeInfo.recipientReceives) : formatSol(state.note.amount)} SOL
-                      <ArrowRight className="w-4 h-4 ml-2" />
-                    </Button>
-                  </div>
-                ) : (
-                  <div className="space-y-3">
-                    <div className="p-3 rounded-lg bg-yellow-500/10 border border-yellow-500/20">
-                      <p className="text-xs text-yellow-400 font-medium mb-1">
-                        ⚠️ No Solana Wallet Detected
-                      </p>
-                      <p className="text-xs text-muted-foreground">
-                        Please connect a Solana wallet (Phantom, Solflare) to claim.
-                      </p>
-                    </div>
-                    <Button
-                      onClick={logout}
-                      className="w-full"
-                      size="lg"
-                      variant="outline"
-                    >
-                      Logout & Reconnect
-                    </Button>
-                  </div>
-                )
-              ) : (
-                <Button 
-                  onClick={login} 
-                  className="w-full" 
-                  size="lg"
-                  disabled={!ready}
-                >
-                  <Wallet className="w-4 h-4 mr-2" />
-                  {ready ? "Connect Wallet to Claim" : "Loading..."}
-                </Button>
-              )}
+              {/* Claim Button */}
+              <Button
+                onClick={handleClaim}
+                className="w-full"
+                size="lg"
+                disabled={
+                  useCustomAddress 
+                    ? !isValidPasteAddress 
+                    : (!authenticated || !getUserWalletAddress())
+                }
+              >
+                <Zap className="w-4 h-4 mr-2" />
+                Claim {receiveBreakdown ? lamportsToSol(receiveBreakdown.recipientReceives).toFixed(4) : "0"} SOL
+                <ArrowRight className="w-4 h-4 ml-2" />
+              </Button>
+              
+              <p className="text-xs text-muted-foreground text-center mt-2">
+                Gasless - no SOL needed to claim
+              </p>
             </CardContent>
           </motion.div>
         )}

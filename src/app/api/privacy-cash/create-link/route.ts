@@ -1,14 +1,11 @@
 /**
  * API Route: Create Privacy Cash Link
  * 
- * Supports multiple privacy levels:
- * - Basic: Sender → Eph → Pool → Recipient (cheapest, sender visible to recipient)
- * - Private: Sender → Pool → Eph → Pool → Recipient (sender hidden)
- * - Maximum: Sender → Pool → Eph1 → Pool → Eph2 → Pool → Recipient (everyone hidden)
+ * Sender chooses their privacy level:
+ * - Basic: Sender → Eph → Pool (cheapest, sender traceable)
+ * - Private: Sender → Pool → Eph → Pool (sender hidden via ZK)
  * 
- * NOTE: Private and Maximum levels require additional client-side transactions
- * which are not yet fully implemented. Currently they work like Basic but
- * with higher fees calculated.
+ * Recipient chooses their privacy level when claiming.
  */
 
 import { NextRequest, NextResponse } from "next/server";
@@ -16,9 +13,8 @@ import { Connection } from "@solana/web3.js";
 import { PrivacyCash } from "privacycash";
 import {
   decodeCompositeSecret,
-  calculateTotalDeposit,
   type DoubleHopNote,
-  type PrivacyLevel,
+  type SenderPrivacy,
 } from "@/lib/privacy/privacy-cash-adapter";
 
 const RPC_URL = process.env.NEXT_PUBLIC_SOLANA_RPC_URL || "https://api.devnet.solana.com";
@@ -28,11 +24,12 @@ export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
     const { 
-      amount, 
+      amount,  // Pool amount (what recipient can claim from)
       compositeSecret: secretEncoded, 
       ephemeralAddress, 
       fundingTxHash,
-      privacyLevel = "basic" as PrivacyLevel,
+      senderPrivacy: senderPrivacyRaw,
+      senderAddress, // For reclaim feature
     } = body;
 
     if (!amount || amount <= 0) {
@@ -41,6 +38,12 @@ export async function POST(request: NextRequest) {
         { status: 400 }
       );
     }
+
+    // Validate and default sender privacy
+    const senderPrivacy: SenderPrivacy = 
+      (senderPrivacyRaw === "basic" || senderPrivacyRaw === "private") 
+        ? senderPrivacyRaw 
+        : "basic";
 
     if (!secretEncoded || !ephemeralAddress || !fundingTxHash) {
       return NextResponse.json(
@@ -85,50 +88,63 @@ export async function POST(request: NextRequest) {
       retries++;
     }
 
-    // Calculate deposit requirements based on privacy level
-    const deposit = calculateTotalDeposit(amount, privacyLevel);
-    
-    console.log(`[API] Privacy level: ${privacyLevel} (${deposit.privacyLevelInfo.hops} hops)`);
+    console.log(`[API] Sender privacy: ${senderPrivacy}`);
+    console.log(`[API] Pool amount: ${amount / 1e9} SOL`);
     
     // Verify ephemeral wallet has received the funds
     const ephemeralBalance = await connection.getBalance(compositeSecret.ephemeralKeypair.publicKey);
     
-    if (ephemeralBalance < deposit.depositAmount) {
+    if (ephemeralBalance < amount) {
       return NextResponse.json(
         { 
           success: false, 
-          error: `Insufficient balance in ephemeral wallet. Expected ${deposit.depositAmount / 1e9} SOL, got ${ephemeralBalance / 1e9} SOL. Transaction may still be processing.` 
+          error: `Insufficient balance in ephemeral wallet. Expected ${amount / 1e9} SOL, got ${ephemeralBalance / 1e9} SOL. Transaction may still be processing.` 
         },
         { status: 400 }
       );
     }
 
     console.log(`[API] Ephemeral wallet balance: ${ephemeralBalance / 1e9} SOL`);
-    console.log(`[API] Depositing to Privacy Cash: ${deposit.depositAmount / 1e9} SOL`);
-    console.log(`[API] Recipient will receive: ${deposit.recipientAmount / 1e9} SOL`);
+    console.log(`[API] Sender privacy: ${senderPrivacy}`);
 
-    // 4. Ephemeral deposits to Privacy Cash
-    const privacyCashClient = new PrivacyCash({
-      RPC_url: RPC_URL,
-      owner: compositeSecret.ephemeralKeypair,
-      enableDebug: true,
-    });
+    let depositTxHash: string | undefined;
+    let fundsLocation: "ephemeral" | "pool";
     
-    const depositResult = await privacyCashClient.deposit({
-      lamports: deposit.depositAmount,
-    });
+    // 4. Conditionally deposit to Privacy Cash based on sender privacy
+    if (senderPrivacy === "private") {
+      // Private sender: deposit to pool for ZK privacy
+      console.log(`[API] Private sender: depositing ${amount / 1e9} SOL to Privacy Cash pool`);
+      
+      const privacyCashClient = new PrivacyCash({
+        RPC_url: RPC_URL,
+        owner: compositeSecret.ephemeralKeypair,
+        enableDebug: true,
+      });
+      
+      const depositResult = await privacyCashClient.deposit({
+        lamports: amount,
+      });
 
-    const depositTxHash = depositResult.tx || depositResult.txHash || depositResult.signature || "deposit-tx";
+      depositTxHash = depositResult.tx;
+      fundsLocation = "pool";
+      console.log(`[API] Deposited to pool: ${depositTxHash}`);
+    } else {
+      // Basic sender: leave funds in ephemeral (no pool needed yet)
+      console.log(`[API] Basic sender: funds staying in ephemeral wallet`);
+      fundsLocation = "ephemeral";
+    }
 
     // 5. Create the note
     const note: DoubleHopNote = {
       secret: compositeSecret.full,
-      amount,
+      amount, // Amount available for recipient
       network: NETWORK,
       createdAt: Date.now(),
       ephemeralAddress,
-      status: "deposited",
-      privacyLevel,
+      status: fundsLocation === "pool" ? "deposited" : "funded",
+      senderPrivacy,
+      senderAddress: senderPrivacy === "basic" ? senderAddress : undefined, // Only store for reclaim if basic
+      fundsLocation,
     };
 
     return NextResponse.json({

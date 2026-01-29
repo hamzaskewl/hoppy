@@ -2,18 +2,20 @@
 
 import { useState, useMemo } from "react";
 import { QRCodeSVG } from "qrcode.react";
-import { Copy, Check, Shield, Wallet, ArrowRight, Lock, Info, AlertTriangle, Eye, EyeOff, ShieldCheck } from "lucide-react";
+import { Copy, Check, Shield, Wallet, ArrowRight, Lock, Info, AlertTriangle, Eye, EyeOff } from "lucide-react";
 import { usePrivy } from "@privy-io/react-auth";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { 
-  calculateTotalDeposit,
   createDoubleHopClaimUrl,
   generateCompositeSecret,
-  PRIVACY_LEVELS,
+  calculateSenderCost,
+  calculateRecipientReceives,
+  SENDER_PRIVACY,
+  RECIPIENT_PRIVACY,
   type DoubleHopNote,
-  type PrivacyLevel,
+  type SenderPrivacy,
 } from "@/lib/privacy";
 import { shortenAddress, solToLamports, lamportsToSol } from "@/lib/utils";
 import { Connection, Transaction, SystemProgram, PublicKey, LAMPORTS_PER_SOL } from "@solana/web3.js";
@@ -24,7 +26,7 @@ export function CreateLinkForm() {
   const { login, logout, authenticated, ready, user } = usePrivy();
   const [step, setStep] = useState<Step>("connect");
   const [amount, setAmount] = useState<string>("0.1");
-  const [privacyLevel, setPrivacyLevel] = useState<PrivacyLevel>("basic");
+  const [senderPrivacy, setSenderPrivacy] = useState<SenderPrivacy>("basic");
   const [isDepositing, setIsDepositing] = useState(false);
   const [doubleHopNote, setDoubleHopNote] = useState<DoubleHopNote | null>(null);
   const [claimUrl, setClaimUrl] = useState<string>("");
@@ -34,14 +36,42 @@ export function CreateLinkForm() {
   const [error, setError] = useState<string | null>(null);
   const [depositProgress, setDepositProgress] = useState<string>("");
 
-  // Calculate fees whenever amount or privacy level changes
-  const feeBreakdown = useMemo(() => {
+  // Calculate costs based on amount and sender privacy
+  const costBreakdown = useMemo(() => {
     const amountNum = parseFloat(amount) || 0;
     if (amountNum <= 0) return null;
     
-    const lamports = solToLamports(amountNum);
-    return calculateTotalDeposit(lamports, privacyLevel);
-  }, [amount, privacyLevel]);
+    const recipientAmount = solToLamports(amountNum);
+    const senderCost = calculateSenderCost(recipientAmount, senderPrivacy);
+    
+    // Show recipient preview based on sender privacy + recipient privacy
+    // Basic sender: funds in ephemeral
+    // Private sender: funds in pool
+    const inPool = senderPrivacy === "private";
+    
+    let recipientQuick, recipientPrivate;
+    
+    if (inPool) {
+      // Funds in pool: recipient pays withdrawal fee
+      recipientQuick = calculateRecipientReceives(recipientAmount, "quick");
+      recipientPrivate = calculateRecipientReceives(recipientAmount, "private");
+    } else {
+      // Funds in ephemeral
+      // Quick: direct transfer (no fee!)
+      // Private: deposit + withdraw (1 hop fee)
+      recipientQuick = { recipientReceives: recipientAmount, fee: 0 };
+      recipientPrivate = calculateRecipientReceives(recipientAmount, "quick"); // 1 hop
+    }
+    
+    return {
+      recipientAmount,
+      senderPays: senderCost.senderPays,
+      senderFee: senderCost.senderFee,
+      senderPrivacyInfo: senderCost.privacyInfo,
+      recipientQuick: recipientQuick.recipientReceives,
+      recipientPrivate: recipientPrivate.recipientReceives,
+    };
+  }, [amount, senderPrivacy]);
 
   // Get Solana wallet address - look for chainType: 'solana'
   const getSolanaAddress = (): string | null => {
@@ -81,8 +111,8 @@ export function CreateLinkForm() {
       return;
     }
 
-    if (!feeBreakdown) {
-      setError("Unable to calculate fees");
+    if (!costBreakdown) {
+      setError("Unable to calculate costs");
       return;
     }
 
@@ -135,9 +165,9 @@ export function CreateLinkForm() {
       
       console.log("[Create] Using wallet:", solanaProvider.publicKey?.toBase58());
 
-      console.log("[Create] Starting double hop deposit...");
-      console.log("[Create] Amount:", amount, "SOL");
-      console.log("[Create] Total with fees:", lamportsToSol(feeBreakdown.total), "SOL");
+      console.log("[Create] Starting deposit with privacy level:", senderPrivacy);
+      console.log("[Create] Pool amount:", lamportsToSol(costBreakdown.poolAmount), "SOL");
+      console.log("[Create] Sender pays:", lamportsToSol(costBreakdown.senderPays), "SOL");
 
       setDepositProgress("Generating ephemeral wallet...");
       
@@ -157,7 +187,7 @@ export function CreateLinkForm() {
         SystemProgram.transfer({
           fromPubkey: new PublicKey(solanaAddress),
           toPubkey: compositeSecret.ephemeralKeypair.publicKey,
-          lamports: feeBreakdown.total,
+          lamports: costBreakdown.recipientAmount, // Amount for recipient
         })
       );
 
@@ -204,11 +234,12 @@ export function CreateLinkForm() {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          amount: feeBreakdown.recipientAmount,
+          amount: costBreakdown.recipientAmount, // Amount for recipient
           compositeSecret: compositeSecret.full,
           ephemeralAddress,
           fundingTxHash,
-          privacyLevel,
+          senderPrivacy,
+          senderAddress: solanaAddress, // For reclaim feature
         }),
       });
 
@@ -352,17 +383,17 @@ export function CreateLinkForm() {
               />
             </div>
 
-            {/* Privacy Level Selector */}
+            {/* Sender Privacy Selector */}
             <div className="space-y-2">
-              <label className="text-sm text-muted-foreground">Privacy Level</label>
-              <div className="grid grid-cols-3 gap-2">
-                {(Object.keys(PRIVACY_LEVELS) as PrivacyLevel[]).map((level) => {
-                  const info = PRIVACY_LEVELS[level];
-                  const isSelected = privacyLevel === level;
+              <label className="text-sm text-muted-foreground">Your Privacy (Sender)</label>
+              <div className="grid grid-cols-2 gap-2">
+                {(Object.keys(SENDER_PRIVACY) as SenderPrivacy[]).map((level) => {
+                  const info = SENDER_PRIVACY[level];
+                  const isSelected = senderPrivacy === level;
                   return (
                     <button
                       key={level}
-                      onClick={() => setPrivacyLevel(level)}
+                      onClick={() => setSenderPrivacy(level)}
                       className={`p-3 rounded-xl border-2 transition-all text-left ${
                         isSelected
                           ? "border-moss-500 bg-moss-500/10"
@@ -371,12 +402,11 @@ export function CreateLinkForm() {
                     >
                       <div className="flex items-center gap-2 mb-1">
                         {level === "basic" && <Eye className="w-4 h-4 text-yellow-500" />}
-                        {level === "private" && <EyeOff className="w-4 h-4 text-blue-500" />}
-                        {level === "maximum" && <ShieldCheck className="w-4 h-4 text-moss-500" />}
+                        {level === "private" && <EyeOff className="w-4 h-4 text-moss-500" />}
                         <span className="text-sm font-semibold">{info.name}</span>
                       </div>
                       <p className="text-xs text-muted-foreground">
-                        {info.hops} hop{info.hops > 1 ? "s" : ""}
+                        {info.estimatedCost}
                       </p>
                     </button>
                   );
@@ -384,42 +414,28 @@ export function CreateLinkForm() {
               </div>
             </div>
 
-            {/* Privacy Level Details */}
-            {feeBreakdown && (
+            {/* Sender Privacy Details */}
+            {costBreakdown && (
               <div className={`p-3 rounded-xl border ${
-                privacyLevel === "basic" ? "bg-yellow-500/5 border-yellow-500/20" :
-                privacyLevel === "private" ? "bg-blue-500/5 border-blue-500/20" :
+                senderPrivacy === "basic" ? "bg-yellow-500/5 border-yellow-500/20" :
                 "bg-moss-500/5 border-moss-500/20"
               }`}>
                 <div className="flex items-start gap-2">
-                  {privacyLevel === "basic" && <Eye className="w-4 h-4 text-yellow-500 mt-0.5 flex-shrink-0" />}
-                  {privacyLevel === "private" && <EyeOff className="w-4 h-4 text-blue-500 mt-0.5 flex-shrink-0" />}
-                  {privacyLevel === "maximum" && <ShieldCheck className="w-4 h-4 text-moss-500 mt-0.5 flex-shrink-0" />}
+                  {senderPrivacy === "basic" && <Eye className="w-4 h-4 text-yellow-500 mt-0.5 flex-shrink-0" />}
+                  {senderPrivacy === "private" && <EyeOff className="w-4 h-4 text-moss-500 mt-0.5 flex-shrink-0" />}
                   <div className="space-y-2 flex-1">
                     <p className="text-xs text-muted-foreground">
-                      {feeBreakdown.privacyLevelInfo.description}
+                      {costBreakdown.senderPrivacyInfo.description}
                     </p>
-                    <div className="grid grid-cols-2 gap-2 text-xs">
-                      <div className="flex items-center gap-1">
-                        {feeBreakdown.privacyLevelInfo.senderHidden ? (
-                          <Check className="w-3 h-3 text-moss-500" />
-                        ) : (
-                          <AlertTriangle className="w-3 h-3 text-yellow-500" />
-                        )}
-                        <span className={feeBreakdown.privacyLevelInfo.senderHidden ? "text-moss-400" : "text-yellow-400"}>
-                          {feeBreakdown.privacyLevelInfo.senderHidden ? "Sender hidden" : "Sender visible"}
-                        </span>
-                      </div>
-                      <div className="flex items-center gap-1">
-                        {feeBreakdown.privacyLevelInfo.recipientHiddenFromLinkHolder ? (
-                          <Check className="w-3 h-3 text-moss-500" />
-                        ) : (
-                          <AlertTriangle className="w-3 h-3 text-yellow-500" />
-                        )}
-                        <span className={feeBreakdown.privacyLevelInfo.recipientHiddenFromLinkHolder ? "text-moss-400" : "text-yellow-400"}>
-                          {feeBreakdown.privacyLevelInfo.recipientHiddenFromLinkHolder ? "Recipient hidden" : "Recipient visible"}
-                        </span>
-                      </div>
+                    <div className="flex items-center gap-1 text-xs">
+                      {costBreakdown.senderPrivacyInfo.senderHidden ? (
+                        <Check className="w-3 h-3 text-moss-500" />
+                      ) : (
+                        <AlertTriangle className="w-3 h-3 text-yellow-500" />
+                      )}
+                      <span className={costBreakdown.senderPrivacyInfo.senderHidden ? "text-moss-400" : "text-yellow-400"}>
+                        {costBreakdown.senderPrivacyInfo.senderHidden ? "Your identity is protected" : "Recipient could trace you"}
+                      </span>
                     </div>
                   </div>
                 </div>
@@ -432,54 +448,59 @@ export function CreateLinkForm() {
               </div>
             )}
 
-            {/* Fee Breakdown */}
-            {feeBreakdown && (
+            {/* Cost Breakdown */}
+            {costBreakdown && (
               <div className="p-4 rounded-xl bg-background border border-border space-y-3">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2 text-sm font-medium">
-                    <Info className="w-4 h-4 text-muted-foreground" />
-                    <span>Cost Breakdown</span>
-                  </div>
-                  <span className="text-xs px-2 py-0.5 rounded-full bg-muted">
-                    {feeBreakdown.privacyLevelInfo.hops} hop{feeBreakdown.privacyLevelInfo.hops > 1 ? "s" : ""}
-                  </span>
+                <div className="flex items-center gap-2 text-sm font-medium">
+                  <Info className="w-4 h-4 text-muted-foreground" />
+                  <span>Cost Summary</span>
                 </div>
                 
                 <div className="space-y-2 text-sm">
                   <div className="flex items-center justify-between">
-                    <span className="text-muted-foreground">Recipient receives</span>
-                    <span className="font-semibold text-moss-400">{amount || "0"} SOL</span>
+                    <span className="text-muted-foreground">You send</span>
+                    <span className="font-semibold">{lamportsToSol(costBreakdown.senderPays).toFixed(4)} SOL</span>
+                  </div>
+                  
+                  {costBreakdown.senderFee > 0 && (
+                    <div className="flex items-center justify-between text-xs">
+                      <span className="text-muted-foreground">Your privacy fee</span>
+                      <span className="text-muted-foreground">
+                        -{lamportsToSol(costBreakdown.senderFee).toFixed(4)} SOL
+                      </span>
+                    </div>
+                  )}
+                  
+                  <div className="flex items-center justify-between text-xs">
+                    <span className="text-muted-foreground">
+                      Available for recipient {senderPrivacy === "private" ? "(in pool)" : "(in ephemeral)"}
+                    </span>
+                    <span className="text-muted-foreground">
+                      {lamportsToSol(costBreakdown.recipientAmount).toFixed(4)} SOL
+                    </span>
                   </div>
                   
                   <div className="border-t border-border my-2" />
                   
-                  <div className="flex items-center justify-between text-xs">
-                    <span className="text-muted-foreground">
-                      Base fee ({feeBreakdown.privacyLevelInfo.hops}× 0.006 SOL)
-                    </span>
-                    <span className="text-muted-foreground">
-                      {lamportsToSol(feeBreakdown.fees.baseFee).toFixed(4)} SOL
-                    </span>
-                  </div>
+                  <p className="text-xs text-muted-foreground mb-2">
+                    Recipient chooses their privacy level when claiming:
+                  </p>
                   
-                  <div className="flex items-center justify-between text-xs">
-                    <span className="text-muted-foreground">
-                      Percentage fee (~{(0.35 * feeBreakdown.privacyLevelInfo.hops).toFixed(2)}%)
-                    </span>
-                    <span className="text-muted-foreground">
-                      {lamportsToSol(feeBreakdown.fees.percentageFee).toFixed(6)} SOL
-                    </span>
-                  </div>
-                  
-                  <div className="border-t border-border my-2" />
-                  
-                  <div className="flex items-center justify-between font-medium">
-                    <span>You pay</span>
-                    <span className="text-lg">{lamportsToSol(feeBreakdown.total).toFixed(4)} SOL</span>
-                  </div>
-                  
-                  <div className="text-xs text-muted-foreground text-right">
-                    ~{((feeBreakdown.total - feeBreakdown.recipientAmount) / feeBreakdown.recipientAmount * 100).toFixed(1)}% overhead
+                  <div className="grid grid-cols-2 gap-2">
+                    <div className="p-2 rounded-lg bg-yellow-500/5 border border-yellow-500/20">
+                      <p className="text-xs text-yellow-400 font-medium">Quick Claim</p>
+                      <p className="text-sm font-semibold text-yellow-300">
+                        {lamportsToSol(costBreakdown.recipientQuick).toFixed(4)} SOL
+                      </p>
+                      <p className="text-xs text-muted-foreground">Visible to you</p>
+                    </div>
+                    <div className="p-2 rounded-lg bg-moss-500/5 border border-moss-500/20">
+                      <p className="text-xs text-moss-400 font-medium">Private Claim</p>
+                      <p className="text-sm font-semibold text-moss-300">
+                        {lamportsToSol(costBreakdown.recipientPrivate).toFixed(4)} SOL
+                      </p>
+                      <p className="text-xs text-muted-foreground">Hidden from you</p>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -490,10 +511,10 @@ export function CreateLinkForm() {
               loading={isDepositing}
               className="w-full"
               size="lg"
-              disabled={!feeBreakdown || feeBreakdown.recipientAmount <= 0}
+              disabled={!costBreakdown || costBreakdown.poolAmount <= 0}
             >
               <Shield className="w-4 h-4 mr-2" />
-              Create {PRIVACY_LEVELS[privacyLevel].name} Link
+              Create {senderPrivacy === "private" ? "Private" : ""} Link
             </Button>
           </div>
         )}
