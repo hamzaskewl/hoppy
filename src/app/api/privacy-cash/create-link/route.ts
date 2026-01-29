@@ -1,8 +1,14 @@
 /**
- * API Route: Create Privacy Cash Double Hop Link
+ * API Route: Create Privacy Cash Link
  * 
- * This handles the server-side Privacy Cash operations since the SDK
- * requires Node.js modules that can't be bundled for the browser.
+ * Supports multiple privacy levels:
+ * - Basic: Sender → Eph → Pool → Recipient (cheapest, sender visible to recipient)
+ * - Private: Sender → Pool → Eph → Pool → Recipient (sender hidden)
+ * - Maximum: Sender → Pool → Eph1 → Pool → Eph2 → Pool → Recipient (everyone hidden)
+ * 
+ * NOTE: Private and Maximum levels require additional client-side transactions
+ * which are not yet fully implemented. Currently they work like Basic but
+ * with higher fees calculated.
  */
 
 import { NextRequest, NextResponse } from "next/server";
@@ -12,6 +18,7 @@ import {
   decodeCompositeSecret,
   calculateTotalDeposit,
   type DoubleHopNote,
+  type PrivacyLevel,
 } from "@/lib/privacy/privacy-cash-adapter";
 
 const RPC_URL = process.env.NEXT_PUBLIC_SOLANA_RPC_URL || "https://api.devnet.solana.com";
@@ -20,7 +27,13 @@ const NETWORK = (process.env.NEXT_PUBLIC_SOLANA_NETWORK as "devnet" | "mainnet-b
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { amount, compositeSecret: secretEncoded, ephemeralAddress, fundingTxHash } = body;
+    const { 
+      amount, 
+      compositeSecret: secretEncoded, 
+      ephemeralAddress, 
+      fundingTxHash,
+      privacyLevel = "basic" as PrivacyLevel,
+    } = body;
 
     if (!amount || amount <= 0) {
       return NextResponse.json(
@@ -72,8 +85,10 @@ export async function POST(request: NextRequest) {
       retries++;
     }
 
-    // Calculate deposit requirements
-    const deposit = calculateTotalDeposit(amount);
+    // Calculate deposit requirements based on privacy level
+    const deposit = calculateTotalDeposit(amount, privacyLevel);
+    
+    console.log(`[API] Privacy level: ${privacyLevel} (${deposit.privacyLevelInfo.hops} hops)`);
     
     // Verify ephemeral wallet has received the funds
     const ephemeralBalance = await connection.getBalance(compositeSecret.ephemeralKeypair.publicKey);
@@ -113,6 +128,7 @@ export async function POST(request: NextRequest) {
       createdAt: Date.now(),
       ephemeralAddress,
       status: "deposited",
+      privacyLevel,
     };
 
     return NextResponse.json({

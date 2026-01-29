@@ -11,6 +11,7 @@ import {
   extractDoubleHopNoteFromUrl,
   decodeCompositeSecret,
   calculateFees,
+  PRIVACY_LEVELS,
   type DoubleHopNote,
 } from "@/lib/privacy";
 import { formatSol, shortenAddress, lamportsToSol } from "@/lib/utils";
@@ -304,13 +305,39 @@ export function ClaimFlow() {
                 )}
               </div>
 
+              {/* Privacy level indicator */}
+              {state.note.privacyLevel && (
+                <div className={`p-3 rounded-lg mb-4 ${
+                  state.note.privacyLevel === "basic" ? "bg-yellow-500/10 border border-yellow-500/20" :
+                  state.note.privacyLevel === "private" ? "bg-blue-500/10 border border-blue-500/20" :
+                  "bg-moss-500/10 border border-moss-500/20"
+                }`}>
+                  <div className="flex items-center gap-2 mb-1">
+                    <Shield className={`w-4 h-4 ${
+                      state.note.privacyLevel === "basic" ? "text-yellow-500" :
+                      state.note.privacyLevel === "private" ? "text-blue-500" :
+                      "text-moss-500"
+                    }`} />
+                    <span className="text-sm font-semibold">
+                      {PRIVACY_LEVELS[state.note.privacyLevel].name} Privacy
+                    </span>
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    {PRIVACY_LEVELS[state.note.privacyLevel].description}
+                  </p>
+                </div>
+              )}
+
               {/* Privacy notice */}
               <div className="p-3 rounded-lg bg-background border border-border mb-6">
                 <div className="flex items-start gap-2">
                   <Lock className="w-4 h-4 text-moss-400 mt-0.5 flex-shrink-0" />
                   <p className="text-xs text-muted-foreground">
-                    <span className="text-moss-300 font-medium">Double hop privacy:</span> These funds 
-                    are in a shielded pool. No one can trace where they came from.
+                    <span className="text-moss-300 font-medium">Shielded funds:</span> These funds 
+                    are in a privacy pool. The sender&apos;s identity is {
+                      state.note.privacyLevel === "basic" ? "discoverable if you look up the ephemeral wallet." :
+                      "protected by zero-knowledge proofs."
+                    }
                   </p>
                 </div>
               </div>

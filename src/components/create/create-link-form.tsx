@@ -1,8 +1,8 @@
 "use client";
 
-import { useState, useEffect, useMemo } from "react";
+import { useState, useMemo } from "react";
 import { QRCodeSVG } from "qrcode.react";
-import { Copy, Check, Shield, Wallet, ArrowRight, Lock, Info, AlertTriangle } from "lucide-react";
+import { Copy, Check, Shield, Wallet, ArrowRight, Lock, Info, AlertTriangle, Eye, EyeOff, ShieldCheck } from "lucide-react";
 import { usePrivy } from "@privy-io/react-auth";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -11,7 +11,9 @@ import {
   calculateTotalDeposit,
   createDoubleHopClaimUrl,
   generateCompositeSecret,
+  PRIVACY_LEVELS,
   type DoubleHopNote,
+  type PrivacyLevel,
 } from "@/lib/privacy";
 import { shortenAddress, solToLamports, lamportsToSol } from "@/lib/utils";
 import { Connection, Transaction, SystemProgram, PublicKey, LAMPORTS_PER_SOL } from "@solana/web3.js";
@@ -22,6 +24,7 @@ export function CreateLinkForm() {
   const { login, logout, authenticated, ready, user } = usePrivy();
   const [step, setStep] = useState<Step>("connect");
   const [amount, setAmount] = useState<string>("0.1");
+  const [privacyLevel, setPrivacyLevel] = useState<PrivacyLevel>("basic");
   const [isDepositing, setIsDepositing] = useState(false);
   const [doubleHopNote, setDoubleHopNote] = useState<DoubleHopNote | null>(null);
   const [claimUrl, setClaimUrl] = useState<string>("");
@@ -31,14 +34,14 @@ export function CreateLinkForm() {
   const [error, setError] = useState<string | null>(null);
   const [depositProgress, setDepositProgress] = useState<string>("");
 
-  // Calculate fees whenever amount changes
+  // Calculate fees whenever amount or privacy level changes
   const feeBreakdown = useMemo(() => {
     const amountNum = parseFloat(amount) || 0;
     if (amountNum <= 0) return null;
     
     const lamports = solToLamports(amountNum);
-    return calculateTotalDeposit(lamports);
-  }, [amount]);
+    return calculateTotalDeposit(lamports, privacyLevel);
+  }, [amount, privacyLevel]);
 
   // Get Solana wallet address - look for chainType: 'solana'
   const getSolanaAddress = (): string | null => {
@@ -205,6 +208,7 @@ export function CreateLinkForm() {
           compositeSecret: compositeSecret.full,
           ephemeralAddress,
           fundingTxHash,
+          privacyLevel,
         }),
       });
 
@@ -348,6 +352,80 @@ export function CreateLinkForm() {
               />
             </div>
 
+            {/* Privacy Level Selector */}
+            <div className="space-y-2">
+              <label className="text-sm text-muted-foreground">Privacy Level</label>
+              <div className="grid grid-cols-3 gap-2">
+                {(Object.keys(PRIVACY_LEVELS) as PrivacyLevel[]).map((level) => {
+                  const info = PRIVACY_LEVELS[level];
+                  const isSelected = privacyLevel === level;
+                  return (
+                    <button
+                      key={level}
+                      onClick={() => setPrivacyLevel(level)}
+                      className={`p-3 rounded-xl border-2 transition-all text-left ${
+                        isSelected
+                          ? "border-moss-500 bg-moss-500/10"
+                          : "border-border hover:border-moss-500/50 bg-background"
+                      }`}
+                    >
+                      <div className="flex items-center gap-2 mb-1">
+                        {level === "basic" && <Eye className="w-4 h-4 text-yellow-500" />}
+                        {level === "private" && <EyeOff className="w-4 h-4 text-blue-500" />}
+                        {level === "maximum" && <ShieldCheck className="w-4 h-4 text-moss-500" />}
+                        <span className="text-sm font-semibold">{info.name}</span>
+                      </div>
+                      <p className="text-xs text-muted-foreground">
+                        {info.hops} hop{info.hops > 1 ? "s" : ""}
+                      </p>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Privacy Level Details */}
+            {feeBreakdown && (
+              <div className={`p-3 rounded-xl border ${
+                privacyLevel === "basic" ? "bg-yellow-500/5 border-yellow-500/20" :
+                privacyLevel === "private" ? "bg-blue-500/5 border-blue-500/20" :
+                "bg-moss-500/5 border-moss-500/20"
+              }`}>
+                <div className="flex items-start gap-2">
+                  {privacyLevel === "basic" && <Eye className="w-4 h-4 text-yellow-500 mt-0.5 flex-shrink-0" />}
+                  {privacyLevel === "private" && <EyeOff className="w-4 h-4 text-blue-500 mt-0.5 flex-shrink-0" />}
+                  {privacyLevel === "maximum" && <ShieldCheck className="w-4 h-4 text-moss-500 mt-0.5 flex-shrink-0" />}
+                  <div className="space-y-2 flex-1">
+                    <p className="text-xs text-muted-foreground">
+                      {feeBreakdown.privacyLevelInfo.description}
+                    </p>
+                    <div className="grid grid-cols-2 gap-2 text-xs">
+                      <div className="flex items-center gap-1">
+                        {feeBreakdown.privacyLevelInfo.senderHidden ? (
+                          <Check className="w-3 h-3 text-moss-500" />
+                        ) : (
+                          <AlertTriangle className="w-3 h-3 text-yellow-500" />
+                        )}
+                        <span className={feeBreakdown.privacyLevelInfo.senderHidden ? "text-moss-400" : "text-yellow-400"}>
+                          {feeBreakdown.privacyLevelInfo.senderHidden ? "Sender hidden" : "Sender visible"}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-1">
+                        {feeBreakdown.privacyLevelInfo.recipientHiddenFromLinkHolder ? (
+                          <Check className="w-3 h-3 text-moss-500" />
+                        ) : (
+                          <AlertTriangle className="w-3 h-3 text-yellow-500" />
+                        )}
+                        <span className={feeBreakdown.privacyLevelInfo.recipientHiddenFromLinkHolder ? "text-moss-400" : "text-yellow-400"}>
+                          {feeBreakdown.privacyLevelInfo.recipientHiddenFromLinkHolder ? "Recipient hidden" : "Recipient visible"}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+
             {error && (
               <div className="p-3 rounded-lg bg-red-500/10 border border-red-500/20">
                 <p className="text-sm text-red-400">{error}</p>
@@ -357,9 +435,14 @@ export function CreateLinkForm() {
             {/* Fee Breakdown */}
             {feeBreakdown && (
               <div className="p-4 rounded-xl bg-background border border-border space-y-3">
-                <div className="flex items-center gap-2 text-sm font-medium">
-                  <Info className="w-4 h-4 text-muted-foreground" />
-                  <span>Cost Breakdown</span>
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2 text-sm font-medium">
+                    <Info className="w-4 h-4 text-muted-foreground" />
+                    <span>Cost Breakdown</span>
+                  </div>
+                  <span className="text-xs px-2 py-0.5 rounded-full bg-muted">
+                    {feeBreakdown.privacyLevelInfo.hops} hop{feeBreakdown.privacyLevelInfo.hops > 1 ? "s" : ""}
+                  </span>
                 </div>
                 
                 <div className="space-y-2 text-sm">
@@ -371,16 +454,20 @@ export function CreateLinkForm() {
                   <div className="border-t border-border my-2" />
                   
                   <div className="flex items-center justify-between text-xs">
-                    <span className="text-muted-foreground">Privacy Cash fee (0.35%)</span>
                     <span className="text-muted-foreground">
-                      {lamportsToSol(feeBreakdown.fees.percentageFee).toFixed(6)} SOL
+                      Base fee ({feeBreakdown.privacyLevelInfo.hops}× 0.006 SOL)
+                    </span>
+                    <span className="text-muted-foreground">
+                      {lamportsToSol(feeBreakdown.fees.baseFee).toFixed(4)} SOL
                     </span>
                   </div>
                   
                   <div className="flex items-center justify-between text-xs">
-                    <span className="text-muted-foreground">Withdrawal base fee</span>
                     <span className="text-muted-foreground">
-                      {lamportsToSol(feeBreakdown.fees.baseFee).toFixed(4)} SOL
+                      Percentage fee (~{(0.35 * feeBreakdown.privacyLevelInfo.hops).toFixed(2)}%)
+                    </span>
+                    <span className="text-muted-foreground">
+                      {lamportsToSol(feeBreakdown.fees.percentageFee).toFixed(6)} SOL
                     </span>
                   </div>
                   
@@ -390,20 +477,13 @@ export function CreateLinkForm() {
                     <span>You pay</span>
                     <span className="text-lg">{lamportsToSol(feeBreakdown.total).toFixed(4)} SOL</span>
                   </div>
+                  
+                  <div className="text-xs text-muted-foreground text-right">
+                    ~{((feeBreakdown.total - feeBreakdown.recipientAmount) / feeBreakdown.recipientAmount * 100).toFixed(1)}% overhead
+                  </div>
                 </div>
               </div>
             )}
-
-            {/* Privacy Info */}
-            <div className="p-3 rounded-lg bg-moss-500/10 border border-moss-500/20">
-              <div className="flex items-start gap-2">
-                <Lock className="w-4 h-4 text-moss-400 mt-0.5 flex-shrink-0" />
-                <p className="text-xs text-muted-foreground">
-                  <span className="text-moss-300 font-medium">Double hop enabled:</span> Funds route through 
-                  an ephemeral wallet → Privacy Cash → recipient. No on-chain link between you and recipient.
-                </p>
-              </div>
-            </div>
 
             <Button
               onClick={handleDeposit}
@@ -413,7 +493,7 @@ export function CreateLinkForm() {
               disabled={!feeBreakdown || feeBreakdown.recipientAmount <= 0}
             >
               <Shield className="w-4 h-4 mr-2" />
-              Create Private Link
+              Create {PRIVACY_LEVELS[privacyLevel].name} Link
             </Button>
           </div>
         )}

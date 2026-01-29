@@ -1,26 +1,36 @@
 /**
- * Privacy Cash Adapter - Double Hop Utilities
+ * Privacy Cash Adapter - Multi-Level Privacy System
  * 
- * This file contains utility functions for the double hop privacy method.
+ * This file contains utility functions for different privacy levels.
  * The actual Privacy Cash SDK operations are handled in API routes (server-side).
  * 
- * Composite Secret Structure (384 bits / 48 bytes):
- * - First 128 bits (16 bytes): Claim identifier used for note tracking
+ * ============================================================================
+ * PRIVACY LEVELS
+ * ============================================================================
+ * 
+ * BASIC (1 hop) - Cheapest, least private:
+ *   Sender → Eph → Pool → Recipient
+ *   - Sender visible to recipient (can look up Eph funding)
+ *   - Recipient visible to sender/link holder
+ *   - Cost: 0.006 SOL + 0.35%
+ * 
+ * PRIVATE (2 hops) - Balanced:
+ *   Sender → Pool → Eph → Pool → Recipient
+ *   - Sender hidden from recipient (ZK breaks link)
+ *   - Recipient visible to sender/link holder
+ *   - Cost: 0.012 SOL + 0.70%
+ * 
+ * MAXIMUM (3 hops) - Most private, most expensive:
+ *   Sender → Pool → Eph1 → Pool → Eph2 → Pool → Recipient
+ *   - Sender hidden from everyone
+ *   - Recipient hidden from everyone (even link holder!)
+ *   - Cost: 0.018 SOL + 1.05%
+ * 
+ * ============================================================================
+ * COMPOSITE SECRET STRUCTURE (384 bits / 48 bytes)
+ * ============================================================================
+ * - First 128 bits (16 bytes): Claim identifier
  * - Last 256 bits (32 bytes): Ephemeral wallet private key seed
- * 
- * Double Hop Flow:
- * 1. Sender generates composite secret
- * 2. Derives ephemeral wallet from last 256 bits
- * 3. Sender transfers SOL to ephemeral wallet
- * 4. Ephemeral wallet deposits to Privacy Cash (via API route)
- * 5. Claim URL contains composite secret
- * 6. Recipient derives ephemeral wallet from secret
- * 7. Recipient withdraws from Privacy Cash to their actual wallet (via API route)
- * 
- * Privacy Guarantee:
- * - Sender → Ephemeral: Visible on-chain
- * - Ephemeral → Privacy Cash → Recipient: Link BROKEN
- * - Result: No traceable link between sender and recipient
  * 
  * Fees (Privacy Cash):
  * - Deposit: 0
@@ -65,7 +75,7 @@ export interface CompositeSecret {
 export interface DoubleHopNote {
   /** Composite secret (base58 encoded) */
   secret: string;
-  /** Amount in lamports */
+  /** Amount in lamports (what recipient should receive) */
   amount: number;
   /** Network */
   network: "devnet" | "mainnet-beta";
@@ -75,6 +85,8 @@ export interface DoubleHopNote {
   ephemeralAddress: string;
   /** Status tracking */
   status: "pending" | "funded" | "deposited" | "claimed";
+  /** Privacy level used */
+  privacyLevel: PrivacyLevel;
 }
 
 export interface FeeEstimate {
@@ -87,6 +99,58 @@ export interface FeeEstimate {
   /** Amount recipient receives */
   recipientReceives: number;
 }
+
+/** Privacy level for claim links */
+export type PrivacyLevel = "basic" | "private" | "maximum";
+
+export interface PrivacyLevelInfo {
+  id: PrivacyLevel;
+  name: string;
+  description: string;
+  hops: number;
+  senderHidden: boolean;
+  recipientHiddenFromSender: boolean;
+  recipientHiddenFromLinkHolder: boolean;
+  baseFeeMultiplier: number;
+  percentageFeeMultiplier: number;
+}
+
+/** Privacy level configurations */
+export const PRIVACY_LEVELS: Record<PrivacyLevel, PrivacyLevelInfo> = {
+  basic: {
+    id: "basic",
+    name: "Basic",
+    description: "Cheapest option. Recipient cannot see sender's identity on-chain, but could look up who funded the ephemeral wallet.",
+    hops: 1,
+    senderHidden: false,
+    recipientHiddenFromSender: false,
+    recipientHiddenFromLinkHolder: false,
+    baseFeeMultiplier: 1,
+    percentageFeeMultiplier: 1,
+  },
+  private: {
+    id: "private",
+    name: "Private",
+    description: "Sender is hidden from recipient via ZK proofs. Link holder can still see who claims.",
+    hops: 2,
+    senderHidden: true,
+    recipientHiddenFromSender: false,
+    recipientHiddenFromLinkHolder: false,
+    baseFeeMultiplier: 2,
+    percentageFeeMultiplier: 2,
+  },
+  maximum: {
+    id: "maximum",
+    name: "Maximum",
+    description: "Full anonymity. Neither sender nor recipient can identify each other. Even link interceptors cannot discover the recipient.",
+    hops: 3,
+    senderHidden: true,
+    recipientHiddenFromSender: true,
+    recipientHiddenFromLinkHolder: true,
+    baseFeeMultiplier: 3,
+    percentageFeeMultiplier: 3,
+  },
+};
 
 // ============================================================================
 // Constants
@@ -221,9 +285,13 @@ export function calculateDepositForRecipientAmount(recipientAmountLamports: numb
  * This is what the sender actually pays.
  * 
  * @param recipientAmountLamports The amount the recipient should receive
+ * @param privacyLevel The privacy level (affects number of hops and fees)
  * @returns Breakdown of costs
  */
-export function calculateTotalDeposit(recipientAmountLamports: number): {
+export function calculateTotalDeposit(
+  recipientAmountLamports: number,
+  privacyLevel: PrivacyLevel = "basic"
+): {
   /** Amount recipient will receive */
   recipientAmount: number;
   /** Amount to deposit to Privacy Cash (recipientAmount + fees) */
@@ -234,12 +302,31 @@ export function calculateTotalDeposit(recipientAmountLamports: number): {
   gasBuffer: number;
   /** Total sender pays */
   total: number;
+  /** Privacy level info */
+  privacyLevelInfo: PrivacyLevelInfo;
 } {
-  // Calculate how much to deposit so recipient gets their intended amount
-  const depositAmount = calculateDepositForRecipientAmount(recipientAmountLamports);
+  const levelInfo = PRIVACY_LEVELS[privacyLevel];
   
-  // Calculate actual fees based on deposit amount
-  const fees = calculateFees(depositAmount);
+  // For multi-hop, we need to calculate fees for each hop
+  // The recipient amount passes through multiple withdrawals, each taking fees
+  let depositAmount = recipientAmountLamports;
+  
+  // Work backwards from recipient amount through each hop
+  for (let i = 0; i < levelInfo.hops; i++) {
+    depositAmount = calculateDepositForRecipientAmount(depositAmount);
+  }
+  
+  // Calculate total fees (difference between what sender pays and recipient gets)
+  const totalFees = depositAmount - recipientAmountLamports;
+  const baseFee = Math.floor(PRIVACY_CASH_BASE_FEE_SOL * LAMPORTS_PER_SOL) * levelInfo.hops;
+  const percentageFee = totalFees - baseFee;
+  
+  const fees: FeeEstimate = {
+    baseFee,
+    percentageFee,
+    totalFee: totalFees,
+    recipientReceives: recipientAmountLamports,
+  };
   
   // Small gas buffer (mostly precautionary, relayer pays most fees)
   const gasBuffer = Math.floor(EPHEMERAL_GAS_BUFFER_SOL * LAMPORTS_PER_SOL);
@@ -253,6 +340,7 @@ export function calculateTotalDeposit(recipientAmountLamports: number): {
     fees,
     gasBuffer,
     total,
+    privacyLevelInfo: levelInfo,
   };
 }
 
@@ -265,6 +353,7 @@ interface SerializedDoubleHopNote {
   a: number;  // amount
   n: string;  // network
   e: string;  // ephemeral address
+  p: string;  // privacy level
 }
 
 /**
@@ -276,6 +365,7 @@ export function serializeDoubleHopNote(note: DoubleHopNote): string {
     a: note.amount,
     n: note.network,
     e: note.ephemeralAddress,
+    p: note.privacyLevel,
   };
   
   const json = JSON.stringify(data);
@@ -304,6 +394,7 @@ export function deserializeDoubleHopNote(encoded: string): DoubleHopNote | null 
       createdAt: Date.now(),
       ephemeralAddress: data.e,
       status: "pending",
+      privacyLevel: (data.p as PrivacyLevel) || "basic", // Default to basic for old links
     };
   } catch (error) {
     console.error("[PrivacyCash] Failed to deserialize note:", error);

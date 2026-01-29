@@ -34,6 +34,10 @@ export {
   type CompositeSecret,
   type DoubleHopNote,
   type FeeEstimate,
+  type PrivacyLevel,
+  type PrivacyLevelInfo,
+  // Constants
+  PRIVACY_LEVELS,
   // Functions
   generateCompositeSecret,
   decodeCompositeSecret,

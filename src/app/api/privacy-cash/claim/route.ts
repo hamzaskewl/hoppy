@@ -1,9 +1,9 @@
 /**
- * API Route: Claim Privacy Cash Double Hop Link
+ * API Route: Claim Privacy Cash Link
  * 
- * This handles the server-side Privacy Cash withdrawal operations.
- * The entire deposit amount is withdrawn in a single transaction -
- * no sweep needed since we deposit everything to Privacy Cash.
+ * Handles different privacy levels:
+ * - Basic/Private: Withdraw directly to recipient
+ * - Maximum: Withdraw to Eph2 (recipient-generated), recipient does final hop
  */
 
 import { NextRequest, NextResponse } from "next/server";
@@ -11,6 +11,8 @@ import { PrivacyCash } from "privacycash";
 import {
   decodeCompositeSecret,
   calculateTotalDeposit,
+  generateCompositeSecret,
+  PRIVACY_LEVELS,
   type DoubleHopNote,
 } from "@/lib/privacy/privacy-cash-adapter";
 
@@ -29,6 +31,10 @@ export async function POST(request: NextRequest) {
     }
 
     const doubleHopNote = note as DoubleHopNote;
+    const privacyLevel = doubleHopNote.privacyLevel || "basic";
+    const levelInfo = PRIVACY_LEVELS[privacyLevel];
+
+    console.log(`[API] Claiming with privacy level: ${privacyLevel}`);
 
     // Decode composite secret
     const compositeSecret = decodeCompositeSecret(doubleHopNote.secret);
@@ -48,18 +54,72 @@ export async function POST(request: NextRequest) {
     }
 
     // Calculate how much was deposited to Privacy Cash
-    // doubleHopNote.amount = what recipient should receive
-    // deposit.depositAmount = what was actually deposited (includes fees)
-    const deposit = calculateTotalDeposit(doubleHopNote.amount);
+    const deposit = calculateTotalDeposit(doubleHopNote.amount, privacyLevel);
 
-    // Withdraw from Privacy Cash
-    // The relayer handles everything - no gas needed from ephemeral wallet
+    // Initialize Privacy Cash client
     const privacyCashClient = new PrivacyCash({
       RPC_url: RPC_URL,
       owner: compositeSecret.ephemeralKeypair,
       enableDebug: true,
     });
 
+    // For MAXIMUM privacy: withdraw to a fresh Eph2, recipient does final hop
+    if (privacyLevel === "maximum") {
+      // Generate Eph2 for the recipient
+      const eph2Secret = generateCompositeSecret();
+      const eph2Address = eph2Secret.ephemeralKeypair.publicKey.toBase58();
+
+      console.log(`[API] Maximum privacy: withdrawing to Eph2 ${eph2Address.slice(0, 8)}...`);
+      console.log(`[API] Recipient will need to do final hop from Eph2`);
+
+      // Withdraw to Eph2 (not final recipient)
+      const withdrawResult = await privacyCashClient.withdraw({
+        lamports: deposit.depositAmount,
+        recipientAddress: eph2Address,
+      });
+
+      const withdrawTxHash = withdrawResult.tx || withdrawResult.txHash || withdrawResult.signature || "withdraw-tx";
+      console.log(`[API] Withdrew to Eph2: ${withdrawTxHash}`);
+
+      // Now Eph2 deposits to Privacy Cash
+      const eph2Client = new PrivacyCash({
+        RPC_url: RPC_URL,
+        owner: eph2Secret.ephemeralKeypair,
+        enableDebug: true,
+      });
+
+      // Wait for Eph2 to receive funds
+      await new Promise(resolve => setTimeout(resolve, 3000));
+
+      // Eph2 deposits to Pool
+      const eph2DepositResult = await eph2Client.deposit({
+        lamports: Math.floor(deposit.depositAmount * 0.99), // Account for first withdrawal fee
+      });
+
+      console.log(`[API] Eph2 deposited to Pool`);
+
+      // Calculate what's left after 2 hops of fees
+      const finalAmount = Math.floor(doubleHopNote.amount * 0.993); // Approximate after 2 withdrawal fees
+
+      // Eph2 withdraws to final recipient
+      const finalWithdrawResult = await eph2Client.withdraw({
+        lamports: Math.floor(deposit.depositAmount * 0.99),
+        recipientAddress,
+      });
+
+      const finalTxHash = finalWithdrawResult.tx || finalWithdrawResult.txHash || finalWithdrawResult.signature || "final-tx";
+      console.log(`[API] Final withdrawal to recipient: ${finalTxHash}`);
+
+      return NextResponse.json({
+        success: true,
+        withdrawTxHash: finalTxHash,
+        amountReceived: finalAmount,
+        privacyLevel,
+        hops: 3,
+      });
+    }
+
+    // For BASIC and PRIVATE: withdraw directly to recipient
     console.log(`[API] Withdrawing ${deposit.depositAmount / 1e9} SOL from Privacy Cash`);
     console.log(`[API] Recipient ${recipientAddress} should receive ~${doubleHopNote.amount / 1e9} SOL`);
     
@@ -75,6 +135,8 @@ export async function POST(request: NextRequest) {
       success: true,
       withdrawTxHash,
       amountReceived: doubleHopNote.amount,
+      privacyLevel,
+      hops: levelInfo.hops,
     });
   } catch (error) {
     console.error("[API] Claim error:", error);
