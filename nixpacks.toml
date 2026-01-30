@@ -1,0 +1,11 @@
+# Railway deployment configuration
+# Privacy Cash SDK requires Node.js 22+
+
+[phases.setup]
+nixPkgs = ["nodejs_22"]
+
+[phases.build]
+cmds = ["npm install", "npm run build"]
+
+[start]
+cmd = "npm run start"

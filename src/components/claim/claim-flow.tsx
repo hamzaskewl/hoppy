@@ -168,9 +168,29 @@ export function ClaimFlow() {
         console.log("[Claim] Valid double hop note found!");
         console.log("[Claim] Amount:", lamportsToSol(note.amount), "SOL");
         console.log("[Claim] Ephemeral:", note.ephemeralAddress.slice(0, 8) + "...");
+        console.log("[Claim] Funds location:", note.fundsLocation);
 
-        // TODO: Check if already claimed by querying Privacy Cash balance
-        // For now, we'll try to claim and handle errors
+        // Check if already claimed by verifying funds still exist
+        const rpcUrl = process.env.NEXT_PUBLIC_SOLANA_RPC_URL || "https://api.devnet.solana.com";
+        const connection = new Connection(rpcUrl, "confirmed");
+        
+        if (note.fundsLocation === "ephemeral") {
+          // For ephemeral funds, check if the wallet still has balance
+          const ephemeralBalance = await connection.getBalance(new PublicKey(note.ephemeralAddress));
+          console.log("[Claim] Ephemeral balance:", ephemeralBalance / 1e9, "SOL");
+          
+          if (ephemeralBalance === 0) {
+            setState({
+              status: "already-claimed",
+              note,
+              withdrawTxHash: null,
+              amountReceived: null,
+              error: "This payment has already been claimed or expired",
+            });
+            return;
+          }
+        }
+        // For pool funds, we'll verify during claim attempt (SDK checks UTXOs)
 
         setState({
           status: "ready",
