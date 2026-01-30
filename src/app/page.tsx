@@ -28,8 +28,12 @@ export default function Home() {
       <NavHeader />
 
       {/* Hero Section */}
-      <div className="flex-1 flex flex-col items-center justify-center px-4 py-20">
-        <div className="max-w-4xl mx-auto text-center space-y-8">
+      <div
+        className="flex-1 flex flex-col items-center justify-center px-4 py-20 min-h-[90vh] relative bg-cover bg-center"
+        style={{ backgroundImage: "url('/landing-page-bg.jpg')" }}
+      >
+        <div className="absolute inset-0 bg-background/50 z-0" aria-hidden />
+        <div className="max-w-4xl mx-auto text-center space-y-8 relative z-10">
           {/* Logo */}
           <div className="flex items-center justify-center mb-8">
             <HoppyLogo size={72} />
