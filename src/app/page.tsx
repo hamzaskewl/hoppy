@@ -31,9 +31,8 @@ export default function Home() {
       <div className="flex-1 flex flex-col items-center justify-center px-4 py-20">
         <div className="max-w-4xl mx-auto text-center space-y-8">
           {/* Logo */}
-          <div className="flex items-center justify-center gap-6 mb-8">
-            <HoppyLogo size={126} />
-            <h1 className="text-7xl font-bold tracking-tight">hoppy</h1>
+          <div className="flex items-center justify-center mb-8">
+            <HoppyLogo size={72} />
           </div>
 
           {/* Tagline */}
