@@ -211,15 +211,14 @@ export function CardPurchaseFlow() {
                           const numValue = value === "" ? 0 : Number(value);
                           if (numValue >= 5 && numValue <= 10000) {
                             setAmount(numValue);
-                          } else if (value === "") {
-                            setAmount(0);
                           }
+                          // Allow empty input while typing
                         }
                       }}
                       onBlur={() => {
-                        // If empty or invalid, reset to last valid amount or 50
+                        // If empty or invalid, reset to 50
                         if (amountInput === "" || amount < 5 || amount > 10000) {
-                          const validAmount = amount >= 5 && amount <= 10000 ? amount : 50;
+                          const validAmount = 50;
                           setAmount(validAmount);
                           setAmountInput(validAmount.toString());
                         }
