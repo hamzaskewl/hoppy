@@ -118,19 +118,30 @@ export async function POST(request: NextRequest) {
         enableDebug: true,
       });
 
+      // Check actual ephemeral balance and subtract SDK overhead
+      const ephBalance = await connection.getBalance(compositeSecret.ephemeralKeypair.publicKey);
+      const SDK_OVERHEAD = 4_000_000; // ~0.004 SOL for tx fee + UTXO rent
+      const depositAmount = Math.max(0, ephBalance - SDK_OVERHEAD);
+      
+      if (depositAmount <= 0) {
+        throw new Error("Ephemeral balance too low to cover Privacy Cash overhead");
+      }
+      
+      console.log(`[API] Ephemeral balance: ${ephBalance / 1e9} SOL, depositing: ${depositAmount / 1e9} SOL`);
+      
       // First deposit to pool
       await privacyCashClient.deposit({
-        lamports: doubleHopNote.amount,
+        lamports: depositAmount,
       });
-      console.log(`[API] Deposited ${doubleHopNote.amount / 1e9} SOL to pool`);
+      console.log(`[API] Deposited ${depositAmount / 1e9} SOL to pool`);
 
-      // Then withdraw with ZK privacy
+      // Then withdraw with ZK privacy (withdraw what we deposited)
       const withdrawResult = await privacyCashClient.withdraw({
-        lamports: doubleHopNote.amount,
+        lamports: depositAmount,
         recipientAddress,
       });
 
-      const receiveInfo = calculateRecipientReceives(doubleHopNote.amount, "quick");
+      const receiveInfo = calculateRecipientReceives(depositAmount, "quick");
       console.log(`[API] Withdrew to recipient: ${withdrawResult.tx}`);
 
       return NextResponse.json({
@@ -209,22 +220,30 @@ export async function POST(request: NextRequest) {
         enableDebug: true,
       });
 
-      // Calculate what Eph2 received (after first withdrawal fee)
-      const hop1Result = calculateRecipientReceives(doubleHopNote.amount, "quick");
+      // Check actual Eph2 balance and subtract SDK overhead
+      const eph2Balance = await connection.getBalance(eph2Secret.ephemeralKeypair.publicKey);
+      const SDK_OVERHEAD = 4_000_000; // ~0.004 SOL for tx fee + UTXO rent
+      const eph2DepositAmount = Math.max(0, eph2Balance - SDK_OVERHEAD);
+      
+      if (eph2DepositAmount <= 0) {
+        throw new Error("Eph2 balance too low to cover Privacy Cash overhead");
+      }
+      
+      console.log(`[API] Eph2 balance: ${eph2Balance / 1e9} SOL, depositing: ${eph2DepositAmount / 1e9} SOL`);
       
       await eph2Client.deposit({
-        lamports: hop1Result.recipientReceives,
+        lamports: eph2DepositAmount,
       });
 
-      console.log(`[API] Eph2 deposited ${hop1Result.recipientReceives / 1e9} SOL to Pool`);
+      console.log(`[API] Eph2 deposited ${eph2DepositAmount / 1e9} SOL to Pool`);
 
-      // Final withdrawal: Pool → Recipient
+      // Final withdrawal: Pool → Recipient (withdraw what we actually deposited)
       const finalWithdraw = await eph2Client.withdraw({
-        lamports: hop1Result.recipientReceives,
+        lamports: eph2DepositAmount,
         recipientAddress,
       });
 
-      const finalReceive = calculateRecipientReceives(hop1Result.recipientReceives, "quick");
+      const finalReceive = calculateRecipientReceives(eph2DepositAmount, "quick");
       console.log(`[API] Final withdrawal: ${finalWithdraw.tx}`);
 
       return NextResponse.json({

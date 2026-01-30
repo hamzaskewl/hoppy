@@ -18,7 +18,7 @@ import {
   type RecipientPrivacy,
 } from "@/lib/privacy";
 import { formatSol, shortenAddress, lamportsToSol } from "@/lib/utils";
-import { PublicKey } from "@solana/web3.js";
+import { Connection, PublicKey, SystemProgram, Transaction } from "@solana/web3.js";
 
 type ClaimStatus = 
   | "parsing"      // Extracting note from URL
@@ -63,6 +63,8 @@ export function ClaimFlow() {
   const [recipientPrivacy, setRecipientPrivacy] = useState<RecipientPrivacy>("quick");
   const [pasteAddress, setPasteAddress] = useState<string>("");
   const [useCustomAddress, setUseCustomAddress] = useState(false);
+  const [isReclaiming, setIsReclaiming] = useState(false);
+  const [reclaimSuccess, setReclaimSuccess] = useState<string | null>(null);
   
   const hasStartedParsing = useRef(false);
   
@@ -86,9 +88,10 @@ export function ClaimFlow() {
   // Get user's wallet address (Solana only)
   const getUserWalletAddress = useCallback((): PublicKey | null => {
     // 1. Check linkedAccounts for Solana wallet by chainType
-    const solanaWallet = user?.linkedAccounts?.find((a: any) => 
-      a.type === 'wallet' && a.chainType === 'solana'
-    );
+    const solanaWallet = user?.linkedAccounts?.find((a) => {
+      const account = a as any;
+      return account.type === 'wallet' && account.chainType === 'solana';
+    }) as any;
     
     if (solanaWallet?.address) {
       try {
@@ -284,6 +287,70 @@ export function ClaimFlow() {
     await navigator.clipboard.writeText(hash);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
+  };
+
+  const handleCopyText = async (text: string) => {
+    await navigator.clipboard.writeText(text);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
+  const handleReclaimEphemeral = async () => {
+    if (!state.note) return;
+    setIsReclaiming(true);
+    setReclaimSuccess(null);
+    try {
+      // Only applicable when funds are still in the ephemeral wallet
+      if (state.note.fundsLocation !== "ephemeral") {
+        throw new Error("Funds are in the pool; reclaim by retrying claim.");
+      }
+      // Determine destination address (same logic as claim)
+      let recipientAddress: string;
+      if (useCustomAddress) {
+        if (!isValidPasteAddress) {
+          throw new Error("Invalid recipient address");
+        }
+        recipientAddress = pasteAddress;
+      } else {
+        const walletAddress = getUserWalletAddress();
+        if (!walletAddress) throw new Error("Connect a Solana wallet first");
+        recipientAddress = walletAddress.toBase58();
+      }
+
+      const compositeSecret = decodeCompositeSecret(state.note.secret);
+      if (!compositeSecret) throw new Error("Invalid claim secret");
+
+      const rpcUrl = process.env.NEXT_PUBLIC_SOLANA_RPC_URL || "https://api.devnet.solana.com";
+      const connection = new Connection(rpcUrl, "confirmed");
+      const balance = await connection.getBalance(compositeSecret.ephemeralKeypair.publicKey);
+      const feeReserve = 5000;
+      const toSend = Math.max(0, balance - feeReserve);
+      if (toSend <= 0) throw new Error("No SOL left in ephemeral wallet");
+
+      const tx = new Transaction().add(
+        SystemProgram.transfer({
+          fromPubkey: compositeSecret.ephemeralKeypair.publicKey,
+          toPubkey: new PublicKey(recipientAddress),
+          lamports: toSend,
+        })
+      );
+      const { blockhash } = await connection.getLatestBlockhash();
+      tx.recentBlockhash = blockhash;
+      tx.feePayer = compositeSecret.ephemeralKeypair.publicKey;
+      tx.sign(compositeSecret.ephemeralKeypair);
+      const sig = await connection.sendRawTransaction(tx.serialize(), { preflightCommitment: "confirmed" });
+      await connection.confirmTransaction(sig, "confirmed");
+      setReclaimSuccess("Reclaimed from ephemeral wallet. Check your balance.");
+      setTimeout(() => setReclaimSuccess(null), 8000);
+    } catch (e) {
+      setState((prev) => ({
+        ...prev,
+        status: "error",
+        error: e instanceof Error ? e.message : "Reclaim failed",
+      }));
+    } finally {
+      setIsReclaiming(false);
+    }
   };
 
   // Calculate fees for display
@@ -618,6 +685,33 @@ export function ClaimFlow() {
           >
             <CardContent className="py-8">
               <ShieldingAnimation status="error" message={state.error || undefined} />
+
+              {reclaimSuccess && (
+                <div className="mt-4 p-3 rounded-xl bg-green-500/10 border border-green-500/30 text-green-700 dark:text-green-400 text-sm">
+                  {reclaimSuccess}
+                </div>
+              )}
+
+              {state.note && (
+                <div className="mt-4 p-4 rounded-xl bg-amber-500/10 border border-amber-500/30 space-y-3">
+                  <p className="text-sm font-medium text-amber-700 dark:text-amber-400">
+                    Recovery options
+                  </p>
+                  <div className="flex flex-wrap gap-2">
+                    <Button variant="outline" onClick={() => handleCopyText(state.note!.secret)}>
+                      Copy recovery secret
+                    </Button>
+                    {state.note.fundsLocation === "ephemeral" && (
+                      <Button onClick={handleReclaimEphemeral} disabled={isReclaiming}>
+                        {isReclaiming ? "Reclaiming..." : "Reclaim from ephemeral"}
+                      </Button>
+                    )}
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    If funds are in the pool, retrying the claim is the safest recovery path.
+                  </p>
+                </div>
+              )}
               
               <div className="mt-6 flex gap-3 justify-center">
                 <Button

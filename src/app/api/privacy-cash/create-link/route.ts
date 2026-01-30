@@ -20,17 +20,21 @@ import {
 const RPC_URL = process.env.NEXT_PUBLIC_SOLANA_RPC_URL || "https://api.devnet.solana.com";
 const NETWORK = (process.env.NEXT_PUBLIC_SOLANA_NETWORK as "devnet" | "mainnet-beta") || "devnet";
 
+
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
     const { 
-      amount,  // Pool amount (what recipient can claim from)
+      amount: requestedAmount,  // Pool amount (what recipient can claim from)
       compositeSecret: secretEncoded, 
       ephemeralAddress, 
       fundingTxHash,
       senderPrivacy: senderPrivacyRaw,
       senderAddress, // For reclaim feature
     } = body;
+
+    // Mutable: may be adjusted if we need to leave rent reserve
+    let amount = requestedAmount as number;
 
     if (!amount || amount <= 0) {
       return NextResponse.json(
@@ -91,14 +95,14 @@ export async function POST(request: NextRequest) {
     console.log(`[API] Sender privacy: ${senderPrivacy}`);
     console.log(`[API] Pool amount: ${amount / 1e9} SOL`);
     
-    // Verify ephemeral wallet has received the funds
+    // Verify ephemeral wallet has received funds
     const ephemeralBalance = await connection.getBalance(compositeSecret.ephemeralKeypair.publicKey);
     
-    if (ephemeralBalance < amount) {
+    if (ephemeralBalance <= 0) {
       return NextResponse.json(
         { 
           success: false, 
-          error: `Insufficient balance in ephemeral wallet. Expected ${amount / 1e9} SOL, got ${ephemeralBalance / 1e9} SOL. Transaction may still be processing.` 
+          error: `Ephemeral wallet has no balance. Expected ~${amount / 1e9} SOL. Funding transaction may still be processing.` 
         },
         { status: 400 }
       );
@@ -112,8 +116,19 @@ export async function POST(request: NextRequest) {
     
     // 4. Conditionally deposit to Privacy Cash based on sender privacy
     if (senderPrivacy === "private") {
-      // Private sender: deposit to pool for ZK privacy
-      console.log(`[API] Private sender: depositing ${amount / 1e9} SOL to Privacy Cash pool`);
+      // SDK needs: ~0.002 SOL tx fee + ~0.00178 SOL for 2 UTXO accounts (rent)
+      // Total overhead: ~0.004 SOL (4M lamports) to be safe
+      const SDK_OVERHEAD = 4_000_000; // ~0.004 SOL
+      const depositAmount = Math.max(0, ephemeralBalance - SDK_OVERHEAD);
+      
+      if (depositAmount <= 0) {
+        return NextResponse.json(
+          { success: false, error: "Balance too low to cover Privacy Cash overhead" },
+          { status: 400 }
+        );
+      }
+      
+      console.log(`[API] Private sender: depositing ${depositAmount / 1e9} SOL (balance: ${ephemeralBalance / 1e9}, SDK overhead reserve: ${SDK_OVERHEAD / 1e9})`);
       
       const privacyCashClient = new PrivacyCash({
         RPC_url: RPC_URL,
@@ -121,12 +136,27 @@ export async function POST(request: NextRequest) {
         enableDebug: true,
       });
       
-      const depositResult = await privacyCashClient.deposit({
-        lamports: amount,
-      });
+      let depositResult;
+      try {
+        depositResult = await privacyCashClient.deposit({
+          lamports: depositAmount,
+        });
+      } catch (depositError: any) {
+        // If blockhash expired during the long UTXO scan, try one immediate retry
+        if (depositError.message?.includes("Blockhash not found") || depositError.message?.includes("expired")) {
+          console.warn("[API] Blockhash expired during UTXO scan, retrying deposit...");
+          depositResult = await privacyCashClient.deposit({
+            lamports: depositAmount,
+          });
+        } else {
+          throw depositError;
+        }
+      }
 
       depositTxHash = depositResult.tx;
       fundsLocation = "pool";
+      // Update amount to what was actually deposited
+      amount = depositAmount;
       console.log(`[API] Deposited to pool: ${depositTxHash}`);
     } else {
       // Basic sender: leave funds in ephemeral (no pool needed yet)
@@ -137,7 +167,7 @@ export async function POST(request: NextRequest) {
     // 5. Create the note
     const note: DoubleHopNote = {
       secret: compositeSecret.full,
-      amount, // Amount available for recipient
+      amount, // Actual amount available for recipient (may be slightly less due to rent reserve)
       network: NETWORK,
       createdAt: Date.now(),
       ephemeralAddress,

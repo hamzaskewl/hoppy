@@ -19,9 +19,18 @@ import {
   type SenderPrivacy,
 } from "@/lib/privacy";
 import { shortenAddress, solToLamports, lamportsToSol } from "@/lib/utils";
-import { Connection, Transaction, SystemProgram, PublicKey, LAMPORTS_PER_SOL } from "@solana/web3.js";
+import { Connection, Transaction, SystemProgram, PublicKey, LAMPORTS_PER_SOL, Keypair } from "@solana/web3.js";
+import bs58 from "bs58";
+
 
 type Step = "connect" | "amount" | "depositing" | "complete";
+
+/** Shown when funding succeeded but create-link API failed so user can reclaim SOL from ephemeral. */
+interface FailedDepositRecovery {
+  ephemeralSecretKeyBase58: string;
+  ephemeralAddress: string;
+  userWallet: string;
+}
 
 // ============================================================================
 // Encrypted Local Storage for Links
@@ -166,6 +175,9 @@ export function CreateLinkForm() {
   const [depositProgress, setDepositProgress] = useState<string>("");
   const [savedLinks, setSavedLinks] = useState<SavedLink[]>([]);
   const [showHistory, setShowHistory] = useState(false);
+  const [failedDepositRecovery, setFailedDepositRecovery] = useState<FailedDepositRecovery | null>(null);
+  const [isReclaiming, setIsReclaiming] = useState(false);
+  const [reclaimSuccess, setReclaimSuccess] = useState<string | null>(null);
 
   // Get Solana wallet address - look for chainType: 'solana'
   const getSolanaAddress = useCallback((): string | null => {
@@ -243,12 +255,10 @@ export function CreateLinkForm() {
         // Need to calculate: deposit X so that after 1 withdrawal, recipient gets baseRecipientAmount
         poolAmount = calculateDepositForRecipientAmount(baseRecipientAmount);
         
-        // For private sender, we also need to cover our deposit fee
-        // Private: deposit to pool costs withdrawal fee when withdrawing to ephemeral
-        // Actually, deposits are free - only withdrawals cost
-        // So sender pays poolAmount, deposits it, pool has poolAmount
-        senderPays = poolAmount;
-        senderFee = poolAmount - baseRecipientAmount;
+        // Private sender: SDK needs ~0.004 SOL for tx fee + UTXO rent
+        const SDK_OVERHEAD = 4_000_000; // lamports
+        senderPays = poolAmount + SDK_OVERHEAD;
+        senderFee = senderPays - baseRecipientAmount;
       } else {
         // Basic sender + sponsor: Sender→Eph, recipient claims from ephemeral
         // If recipient does quick claim (direct transfer from ephemeral), no fee
@@ -263,9 +273,10 @@ export function CreateLinkForm() {
       poolAmount = baseRecipientAmount;
       
       if (inPool) {
-        // Private sender, no sponsor: Same amount, recipient pays fees from it
-        senderPays = baseRecipientAmount;
-        senderFee = 0; // All fees come from recipient's portion
+        // Private sender, no sponsor: still pay SDK overhead (~0.004 SOL)
+        const SDK_OVERHEAD = 4_000_000;
+        senderPays = baseRecipientAmount + SDK_OVERHEAD;
+        senderFee = SDK_OVERHEAD;
       } else {
         // Basic sender, no sponsor
         senderPays = baseRecipientAmount;
@@ -274,18 +285,16 @@ export function CreateLinkForm() {
     }
     
     // Calculate what recipient gets based on pool amount
+    // Quick = 1 withdrawal (0.006 + 0.35%). Private = 2 withdrawals (fee applied twice).
     let recipientQuick, recipientPrivate;
-    
     if (inPool) {
-      // Funds in pool: recipient pays withdrawal fee
-      recipientQuick = calculateRecipientReceives(poolAmount, "quick");
-      recipientPrivate = calculateRecipientReceives(poolAmount, "private");
+      // Funds in pool: recipient pays withdrawal fee(s)
+      recipientQuick = calculateRecipientReceives(poolAmount, "quick");   // 1 hop → ~0.094 on 0.1 SOL
+      recipientPrivate = calculateRecipientReceives(poolAmount, "private"); // 2 hops → ~0.087 on 0.1 SOL
     } else {
-      // Funds in ephemeral
-      // Quick: direct transfer (no fee!)
-      // Private: deposit + withdraw (1 hop fee)
+      // Funds in ephemeral: quick = no fee; private = 1 hop fee
       recipientQuick = { recipientReceives: poolAmount, fee: 0 };
-      recipientPrivate = calculateRecipientReceives(poolAmount, "quick"); // 1 hop to make it private
+      recipientPrivate = calculateRecipientReceives(poolAmount, "quick");
     }
     
     return {
@@ -383,11 +392,20 @@ export function CreateLinkForm() {
       const ephemeralAddress = compositeSecret.ephemeralKeypair.publicKey.toBase58();
       
       console.log("[Create] Ephemeral wallet:", ephemeralAddress.slice(0, 8) + "...");
+      if (process.env.NODE_ENV === "development") {
+        const ephemeralSecretBase58 = bs58.encode(compositeSecret.ephemeralKeypair.secretKey);
+        console.log("[Create] Ephemeral secret key (recover SOL if deposit fails):", ephemeralSecretBase58);
+      }
 
       setDepositProgress("Preparing transaction...");
       
       // 2. Create funding transaction (sender → ephemeral)
-      // IMPORTANT: Send poolAmount (which includes fees if sponsoring)
+      // For private: add ~0.004 SOL for SDK overhead (tx fee + UTXO rent)
+      const SDK_OVERHEAD = 4_000_000; // ~0.004 SOL
+      const fundingAmount = senderPrivacy === "private" 
+        ? costBreakdown.poolAmount + SDK_OVERHEAD 
+        : costBreakdown.poolAmount;
+      
       const rpcUrl = process.env.NEXT_PUBLIC_SOLANA_RPC_URL || "https://api.devnet.solana.com";
       const connection = new Connection(rpcUrl, "confirmed");
       
@@ -395,7 +413,7 @@ export function CreateLinkForm() {
         SystemProgram.transfer({
           fromPubkey: new PublicKey(solanaAddress),
           toPubkey: compositeSecret.ephemeralKeypair.publicKey,
-          lamports: costBreakdown.poolAmount, // Pool amount (includes fees if sponsoring)
+          lamports: fundingAmount,
         })
       );
 
@@ -454,6 +472,13 @@ export function CreateLinkForm() {
       const result = await response.json();
 
       if (!result.success || !result.note) {
+        // Store recovery info so user can reclaim SOL from ephemeral if they want
+        const ephemeralSecretBase58 = bs58.encode(compositeSecret.ephemeralKeypair.secretKey);
+        setFailedDepositRecovery({
+          ephemeralSecretKeyBase58: ephemeralSecretBase58,
+          ephemeralAddress,
+          userWallet: solanaAddress,
+        });
         throw new Error(result.error || "Failed to create payment link");
       }
       
@@ -494,8 +519,20 @@ export function CreateLinkForm() {
       console.log("[Create] Double hop complete!");
       console.log("[Create] Claim URL:", url);
     } catch (err) {
-      console.error("[Create] Deposit error:", err);
-      setError(err instanceof Error ? err.message : "Deposit failed");
+      const message = err instanceof Error ? err.message : "Deposit failed";
+      const isUserRejection =
+        /rejected|denied|cancelled|canceled/i.test(message) ||
+        (err && typeof err === "object" && "code" in err && (err as { code: number }).code === 4001);
+      if (isUserRejection) {
+        // User clicked Reject in Phantom/wallet – not an error, just cancelled
+        setError("Transaction cancelled");
+        if (process.env.NODE_ENV === "development") {
+          console.log("[Create] User cancelled transaction");
+        }
+      } else {
+        console.error("[Create] Deposit error:", err);
+        setError(message);
+      }
       setStep("amount");
     } finally {
       setIsDepositing(false);
@@ -517,6 +554,51 @@ export function CreateLinkForm() {
     setDepositTxHash(null);
     setAmount("0.1");
     setError(null);
+    setFailedDepositRecovery(null);
+    setReclaimSuccess(null);
+  };
+
+  const feeCoverage = costBreakdown
+    ? Math.max(0, costBreakdown.senderFee)
+    : 0;
+
+  const handleReclaim = async () => {
+    if (!failedDepositRecovery) return;
+    setIsReclaiming(true);
+    setError(null);
+    try {
+      const rpcUrl = process.env.NEXT_PUBLIC_SOLANA_RPC_URL || "https://api.devnet.solana.com";
+      const connection = new Connection(rpcUrl, "confirmed");
+      const ephemeralKeypair = Keypair.fromSecretKey(bs58.decode(failedDepositRecovery.ephemeralSecretKeyBase58));
+      const balance = await connection.getBalance(ephemeralKeypair.publicKey);
+      const feeReserve = 5000; // leave for tx fee
+      const toSend = Math.max(0, balance - feeReserve);
+      if (toSend <= 0) {
+        setError("No SOL left in ephemeral wallet to reclaim.");
+        return;
+      }
+      const tx = new Transaction().add(
+        SystemProgram.transfer({
+          fromPubkey: ephemeralKeypair.publicKey,
+          toPubkey: new PublicKey(failedDepositRecovery.userWallet),
+          lamports: toSend,
+        })
+      );
+      const { blockhash } = await connection.getLatestBlockhash();
+      tx.recentBlockhash = blockhash;
+      tx.feePayer = ephemeralKeypair.publicKey;
+      tx.sign(ephemeralKeypair);
+      const sig = await connection.sendRawTransaction(tx.serialize(), { preflightCommitment: "confirmed" });
+      await connection.confirmTransaction(sig, "confirmed");
+      setError(null);
+      setFailedDepositRecovery(null);
+      setReclaimSuccess("Reclaimed! SOL sent back to your wallet.");
+      setTimeout(() => setReclaimSuccess(null), 8000);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Reclaim failed");
+    } finally {
+      setIsReclaiming(false);
+    }
   };
 
   if (!ready) {
@@ -604,6 +686,44 @@ export function CreateLinkForm() {
         {/* Step 2: Enter Amount - Two Column Layout */}
         {step === "amount" && (
           <div className="space-y-6">
+            {reclaimSuccess && (
+              <div className="p-3 rounded-xl bg-green-500/10 border-2 border-green-500/30 text-green-700 dark:text-green-400 text-sm">
+                {reclaimSuccess}
+              </div>
+            )}
+            {/* Recovery: deposit failed after funding – SOL is in ephemeral wallet */}
+            {failedDepositRecovery && (
+              <div className="p-4 rounded-xl bg-amber-500/10 border-2 border-amber-500/30 space-y-3">
+                <p className="text-sm font-medium text-amber-700 dark:text-amber-400">
+                  Deposit failed. Your SOL is still in the ephemeral wallet. Reclaim it below.
+                </p>
+                <div className="flex flex-wrap gap-2">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => handleCopy(failedDepositRecovery.ephemeralSecretKeyBase58)}
+                    className="border-amber-500/50"
+                  >
+                    {copied ? <Check className="w-4 h-4 mr-1" /> : <Copy className="w-4 h-4 mr-1" />}
+                    Copy ephemeral secret key
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    onClick={handleReclaim}
+                    disabled={isReclaiming}
+                    className="bg-amber-600 hover:bg-amber-700"
+                  >
+                    {isReclaiming ? "Reclaiming..." : "Reclaim to my wallet"}
+                  </Button>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  Or import the secret key in Phantom (Settings → Add / Import Wallet) to move the SOL manually.
+                </p>
+              </div>
+            )}
+
             <div className="grid md:grid-cols-[1.2fr,1fr] gap-6">
               {/* LEFT: Amount Input */}
               <div className="space-y-4">
@@ -718,10 +838,10 @@ export function CreateLinkForm() {
                         <span className="text-muted-foreground">Amount</span>
                         <span>{lamportsToSol(costBreakdown.baseRecipientAmount).toFixed(4)} SOL</span>
                       </div>
-                      {costBreakdown.senderFee > 0 && (
+                      {feeCoverage > 0 && (
                         <div className="flex justify-between">
-                          <span className="text-muted-foreground">Fee</span>
-                          <span className="text-honey-600 dark:text-honey-400">+{lamportsToSol(costBreakdown.senderFee).toFixed(4)}</span>
+                          <span className="text-muted-foreground">Recipient fee coverage</span>
+                          <span className="text-honey-600 dark:text-honey-400">+{lamportsToSol(feeCoverage).toFixed(4)}</span>
                         </div>
                       )}
                       <div className="border-t border-border pt-2 flex justify-between font-semibold">
@@ -786,18 +906,12 @@ export function CreateLinkForm() {
                   </div>
                 </div>
 
-                {/* Recipient gets - when cover fees, show quick (full amount); else show applicable */}
+                {/* Recipient gets - show max (quick claim amount). Claimer sees reduced amount when they choose quick vs private on claim page. */}
                 {costBreakdown && (
                   <div className="p-3 rounded-xl bg-hop-100/50 dark:bg-hop-900/20 border-2 border-hop-300 dark:border-hop-700">
-                    <p className="text-[10px] text-muted-foreground uppercase tracking-wide mb-1">Recipient gets</p>
+                    <p className="text-[10px] text-muted-foreground uppercase tracking-wide mb-1">Recipient gets (max)</p>
                     <p className="text-lg font-bold text-hop-700 dark:text-hop-300">
-                      {lamportsToSol(
-                        sponsorFees
-                          ? costBreakdown.recipientQuick
-                          : senderPrivacy === "private"
-                            ? costBreakdown.recipientPrivate
-                            : costBreakdown.recipientQuick
-                      ).toFixed(4)} SOL
+                      {lamportsToSol(costBreakdown.recipientQuick).toFixed(4)} SOL
                     </p>
                   </div>
                 )}

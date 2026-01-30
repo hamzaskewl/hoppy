@@ -1,6 +1,5 @@
 "use client";
 
-import { Children } from "react";
 import { PrivyProvider } from "@privy-io/react-auth";
 import { toSolanaWalletConnectors } from "@privy-io/react-auth/solana";
 
@@ -37,7 +36,7 @@ export function Providers({ children }: { children: React.ReactNode }) {
         },
       }}
       >
-        {Children.toArray(children)}
+        {children}
       </PrivyProvider>
     </div>
   );
