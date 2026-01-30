@@ -3,7 +3,7 @@
 import { PrivyProvider } from "@privy-io/react-auth";
 import { toSolanaWalletConnectors } from "@privy-io/react-auth/solana";
 
-// Create Solana wallet connectors (Phantom, Solflare, etc.)
+// Create Solana wallet connectors (Phantom, Solflare, etc.) ttt
 const solanaConnectors = toSolanaWalletConnectors({
   shouldAutoConnect: true,
 });
