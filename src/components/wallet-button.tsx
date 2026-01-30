@@ -29,9 +29,9 @@ export function WalletButton() {
   // Get Solana wallet address - look for chainType: 'solana'
   const getSolanaAddress = (): string | null => {
     // 1. Check linkedAccounts for Solana wallet by chainType
-    const solanaWallet = user?.linkedAccounts?.find((a: any) => 
-      a.type === 'wallet' && a.chainType === 'solana'
-    );
+    const solanaWallet = user?.linkedAccounts?.find((a) => 
+      (a as any).type === 'wallet' && (a as any).chainType === 'solana'
+    ) as { address?: string } | undefined;
     
     if (solanaWallet?.address) {
       return solanaWallet.address;
