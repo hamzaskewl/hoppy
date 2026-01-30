@@ -761,18 +761,19 @@ export function CreateLinkForm() {
                         // Allow empty, numbers, and single decimal point
                         if (v === "" || /^\d*\.?\d*$/.test(v)) {
                           if (currency === "SOL") {
-                            setAmount(v || "0");
+                            setAmount(v); // Allow empty
                           } else {
                             const usd = parseFloat(v) || 0;
                             if (solPrice && solPrice > 0) setAmount((usd / solPrice).toFixed(6));
-                            else setAmount("0");
+                            else setAmount(v); // Allow empty
                           }
                         }
                       }}
                       onBlur={(e) => {
                         const v = e.target.value;
-                        if (v === "" || v === "0" || parseFloat(v) === 0) {
-                          setAmount("0.1");
+                        if (v === "" || parseFloat(v) === 0) {
+                          // Leave empty or set to 0.1 only if completely empty
+                          setAmount(v === "" ? "" : "0.1");
                         } else {
                           // Remove leading zeros: 010 → 10
                           const num = parseFloat(v);
