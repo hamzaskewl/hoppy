@@ -31,7 +31,7 @@ export function Providers({ children }: { children: React.ReactNode }) {
         } as any,
         loginMethods: ["wallet", "email"],
         appearance: {
-          theme: "dark",
+          theme: "light",
           accentColor: "#22c55e",
         },
       }}
