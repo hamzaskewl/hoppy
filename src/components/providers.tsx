@@ -1,5 +1,6 @@
 "use client";
 
+import dynamic from "next/dynamic";
 import { PrivyProvider } from "@privy-io/react-auth";
 import { toSolanaWalletConnectors } from "@privy-io/react-auth/solana";
 
@@ -8,8 +9,8 @@ const solanaConnectors = toSolanaWalletConnectors({
   shouldAutoConnect: true,
 });
 
-export function Providers({ children }: { children: React.ReactNode }) {
-  const appId = process.env.NEXT_PUBLIC_PRIVY_APP_ID || "placeholder-app-id";
+function Providers({ children }: { children: React.ReactNode }) {
+  const appId = process.env.NEXT_PUBLIC_PRIVY_APP_ID || "clzne91y501b62a3w90qwfwq1";
 
   return (
     <div suppressHydrationWarning>
@@ -41,3 +42,9 @@ export function Providers({ children }: { children: React.ReactNode }) {
     </div>
   );
 }
+
+// Export client-only version to avoid SSR issues during build
+export const ClientProviders = dynamic(
+  () => Promise.resolve(Providers),
+  { ssr: false }
+);
