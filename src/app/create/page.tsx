@@ -1,5 +1,4 @@
 "use client";
-
 import dynamic from "next/dynamic";
 import { NavHeader } from "@/components/nav-header";
 

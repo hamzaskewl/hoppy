@@ -979,7 +979,7 @@ export function CreateLinkForm() {
               </p>
             </div>
 
-            {/* QR Code */}
+            {/* QR Code with Logo (Original) */}
             <div className="flex justify-center">
               <div className="p-4 bg-white rounded-2xl border-2 border-border">
                 <QRCodeSVG
@@ -987,6 +987,14 @@ export function CreateLinkForm() {
                   size={180}
                   level="H"
                   includeMargin={false}
+                  imageSettings={{
+                    src: "/hoppy-logo.png",
+                    x: undefined,
+                    y: undefined,
+                    height: 52,
+                    width: 52,
+                    excavate: true,
+                  }}
                 />
               </div>
             </div>
