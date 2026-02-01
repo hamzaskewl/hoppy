@@ -21,7 +21,6 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input";
 import { cn, solToLamports, lamportsToSol } from "@/lib/utils";
 import { Connection, Transaction, Keypair, PublicKey } from "@solana/web3.js";
-import { PrivacyCash } from "privacycash";
 
 type CardType = "visa" | "mastercard";
 type FlowStep = "configure" | "depositing" | "withdrawing" | "waiting" | "complete" | "error";
@@ -172,29 +171,31 @@ export function PrivateCardFlow() {
       // Wait for balance
       await new Promise(r => setTimeout(r, 2000));
       
-      // Deposit to Privacy Cash
-      const privacyCash = new PrivacyCash({
-        RPC_url: rpcUrl,
-        owner: ephemeralKeypair,
-        enableDebug: true,
-      });
-
-      const depositResult = await privacyCash.deposit({
-        lamports: depositAmount - 2_000_000, // Leave some for withdraw tx
-      });
-      
-      console.log("[PrivateCard] Deposited to pool:", depositResult.tx);
+      // Call server-side API to handle Privacy Cash deposit/withdraw
+      // (Privacy Cash SDK only works on server)
       setStep("withdrawing");
-
-      // 3. Withdraw to Starpay payment address (PRIVATE!)
-      setProgress("Withdrawing to card provider...");
+      setProgress("Processing private payment...");
       
-      const withdrawResult = await privacyCash.withdraw({
-        lamports: starpayAmountLamports,
-        recipientAddress: data.payment.address,
+      const privateDepositRes = await fetch("/api/card/private-deposit", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ephemeralSecretKey: btoa(String.fromCharCode(...ephemeralKeypair.secretKey)),
+          starpayAddress: data.payment.address,
+          amountLamports: starpayAmountLamports,
+        }),
       });
       
-      console.log("[PrivateCard] Withdrew to Starpay:", withdrawResult.tx);
+      const depositData = await privateDepositRes.json();
+      if (!privateDepositRes.ok) {
+        throw new Error(depositData.error || "Failed to process private payment");
+      }
+      
+      console.log("[PrivateCard] Deposited to pool:", depositData.depositTx);
+      console.log("[PrivateCard] Withdrew to Starpay:", depositData.withdrawTx);
+      
+      const depositResult = { tx: depositData.depositTx };
+      const withdrawResult = { tx: depositData.withdrawTx };
 
       // 4. Confirm payment with server
       await fetch("/api/card/confirm-payment", {
