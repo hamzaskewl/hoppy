@@ -60,10 +60,10 @@ export function PrivateCardFlow() {
   const [progress, setProgress] = useState("");
 
   // Get user's Solana wallet
-  const getSolanaWallet = useCallback(() => {
+  const getSolanaWallet = useCallback((): string | null => {
     const solanaWallet = user?.linkedAccounts?.find(
-      (a: any) => a.type === "wallet" && a.chainType === "solana"
-    );
+      (a) => a.type === "wallet" && (a as any).chainType === "solana"
+    ) as { address?: string } | undefined;
     if (solanaWallet?.address) return solanaWallet.address;
     
     const mainAddress = user?.wallet?.address;
