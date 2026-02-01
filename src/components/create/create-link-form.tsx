@@ -355,17 +355,14 @@ export function CreateLinkForm() {
         // Check for Phantom
         if ((window as any).phantom?.solana?.isPhantom) {
           solanaProvider = (window as any).phantom.solana;
-          console.log("[Create] Found Phantom wallet");
         }
         // Check for Solflare
         else if ((window as any).solflare?.isSolflare) {
           solanaProvider = (window as any).solflare;
-          console.log("[Create] Found Solflare wallet");
         }
         // Check for generic Solana provider
         else if ((window as any).solana) {
           solanaProvider = (window as any).solana;
-          console.log("[Create] Found generic Solana wallet");
         }
       }
       
@@ -377,17 +374,9 @@ export function CreateLinkForm() {
       if (solanaProvider.publicKey?.toBase58() !== solanaAddress) {
         // Try to connect if not connected
         if (!solanaProvider.isConnected) {
-          console.log("[Create] Wallet not connected, requesting connection...");
           await solanaProvider.connect();
         }
       }
-      
-      console.log("[Create] Using wallet:", solanaProvider.publicKey?.toBase58());
-
-      console.log("[Create] Starting deposit with privacy level:", senderPrivacy);
-      console.log("[Create] Pool amount:", lamportsToSol(costBreakdown.poolAmount), "SOL");
-      console.log("[Create] Sender pays:", lamportsToSol(costBreakdown.senderPays), "SOL");
-      console.log("[Create] Sponsor fees:", sponsorFees);
 
       setDepositProgress("Generating ephemeral wallet...");
       
@@ -395,11 +384,7 @@ export function CreateLinkForm() {
       const compositeSecret = generateCompositeSecret();
       const ephemeralAddress = compositeSecret.ephemeralKeypair.publicKey.toBase58();
       
-      console.log("[Create] Ephemeral wallet:", ephemeralAddress.slice(0, 8) + "...");
-      if (process.env.NODE_ENV === "development") {
-        const ephemeralSecretBase58 = bs58.encode(compositeSecret.ephemeralKeypair.secretKey);
-        console.log("[Create] Ephemeral secret key (recover SOL if deposit fails):", ephemeralSecretBase58);
-      }
+      // Ephemeral wallet created - private key stays in memory only
 
       setDepositProgress("Preparing transaction...");
       
@@ -489,15 +474,7 @@ export function CreateLinkForm() {
           userWallet: solanaAddress,
         });
         
-        // ALWAYS log recovery info to console
-        console.error("=== RECOVERY INFO (API CRASHED) ===");
-        console.error("Ephemeral Address:", ephemeralAddress);
-        console.error("Ephemeral Private Key (Base58):", ephemeralSecretBase58);
-        console.error("Your Wallet:", solanaAddress);
-        console.error("Import the private key into Phantom to recover funds");
-        console.error("===================================");
-        
-        throw new Error("API error - your funds may be in the ephemeral wallet. Check recovery section below or console.");
+        throw new Error("API error - your funds may be in the ephemeral wallet. Check recovery section below.");
       }
 
       if (!result.success || !result.note) {
@@ -509,20 +486,9 @@ export function CreateLinkForm() {
           userWallet: solanaAddress,
         });
         
-        // ALWAYS log recovery info to console for debugging
-        console.error("=== RECOVERY INFO (SAVE THIS) ===");
-        console.error("Ephemeral Address:", ephemeralAddress);
-        console.error("Ephemeral Private Key (Base58):", ephemeralSecretBase58);
-        console.error("Your Wallet:", solanaAddress);
-        console.error("Import the private key into Phantom to recover funds");
-        console.error("=================================");
-        
         // Check if API returned recovery info (funds may have been auto-swept)
         if (result.recoverySuccess) {
-          console.log("[Create] API auto-recovered funds:", result.recoverySweepTx);
           throw new Error("Transaction failed but funds were automatically returned to your wallet.");
-        } else if (result.ephemeralPrivateKey) {
-          console.log("[Create] Recovery key from API:", result.ephemeralPrivateKey);
         }
         
         throw new Error(result.error || "Failed to create payment link");

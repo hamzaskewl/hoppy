@@ -215,22 +215,16 @@ export function PrivateCardFlow({ disabled = false }: { disabled?: boolean }) {
           setStep("error");
           return;
         } else if (depositData.ephemeralPrivateKey) {
-          // Show recovery info in console
-          console.error("=== RECOVERY INFO (SAVE THIS) ===");
-          console.error("[PrivateCard] Ephemeral address:", depositData.ephemeralAddress);
-          console.error("[PrivateCard] Private key:", depositData.ephemeralPrivateKey);
-          console.error("Import this key into Phantom to recover funds");
-          console.error("=================================");
+          // Recovery info available but not logged for security
           setRecoveryInfo({
             success: false,
-            message: `Funds may be stuck in ephemeral wallet. Private key: ${depositData.ephemeralPrivateKey.slice(0, 20)}...`,
+            message: "Funds may be stuck. Please contact support with your transaction hash.",
           });
         }
         throw new Error(depositData.error || "Failed to process private payment");
       }
       
-      console.log("[PrivateCard] Deposited to pool:", depositData.depositTx);
-      console.log("[PrivateCard] Withdrew to Starpay:", depositData.withdrawTx);
+      // Transaction completed successfully
       
       const depositResult = { tx: depositData.depositTx };
       const withdrawResult = { tx: depositData.withdrawTx };

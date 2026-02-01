@@ -1,13 +1,20 @@
 import { ImageResponse } from 'next/og'
- 
-export const runtime = 'edge'
+import { readFile } from 'fs/promises'
+import { join } from 'path'
+
+export const runtime = 'nodejs'
 export const size = {
   width: 64,
   height: 64,
 }
 export const contentType = 'image/png'
- 
-export default function Icon() {
+
+export default async function Icon() {
+  // Read the logo file
+  const logoPath = join(process.cwd(), 'public', 'hoppy-logo.png')
+  const logoData = await readFile(logoPath)
+  const logoBase64 = `data:image/png;base64,${logoData.toString('base64')}`
+
   return new ImageResponse(
     (
       <div
@@ -19,18 +26,19 @@ export default function Icon() {
           justifyContent: 'center',
           borderRadius: '50%',
           background: 'linear-gradient(135deg, #87DD8D 0%, #22c55e 100%)',
+          overflow: 'hidden',
         }}
       >
-        <div
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img
+          src={logoBase64}
+          alt="hoppy"
+          width={56}
+          height={56}
           style={{
-            fontSize: 40,
-            fontWeight: 'bold',
-            color: 'white',
-            display: 'flex',
+            objectFit: 'contain',
           }}
-        >
-          🐰
-        </div>
+        />
       </div>
     ),
     {

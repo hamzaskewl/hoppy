@@ -39,12 +39,11 @@ export async function POST(request: NextRequest) {
     const secretKeyBytes = new Uint8Array(Buffer.from(ephemeralSecretKey, "base64"));
     ephemeralKeypair = Keypair.fromSecretKey(secretKeyBytes);
 
-    console.log("[PrivateDeposit] Ephemeral wallet:", ephemeralKeypair.publicKey.toBase58());
-    console.log("[PrivateDeposit] Return address:", senderAddress);
+    // Ephemeral wallet ready for deposit
 
     // Check ephemeral balance
     const balance = await connection.getBalance(ephemeralKeypair.publicKey);
-    console.log("[PrivateDeposit] Ephemeral balance:", balance / LAMPORTS_PER_SOL, "SOL");
+    // Balance check
 
     // Calculate exact amounts needed
     // Privacy Cash withdrawal fee: 0.006 SOL flat + 0.35% of withdrawal amount
@@ -65,24 +64,19 @@ export async function POST(request: NextRequest) {
     // Ephemeral needs: grossWithdrawal + MIN_TX_BUFFER (for SDK fees)
     const requiredBalance = grossWithdrawal + MIN_TX_BUFFER;
 
-    console.log("[PrivateDeposit] Starpay needs:", amountLamports / LAMPORTS_PER_SOL, "SOL");
-    console.log("[PrivateDeposit] Gross withdrawal (before fees):", grossWithdrawal / LAMPORTS_PER_SOL, "SOL");
-    console.log("[PrivateDeposit] Required balance:", requiredBalance / LAMPORTS_PER_SOL, "SOL");
-    console.log("[PrivateDeposit] Actual balance:", balance / LAMPORTS_PER_SOL, "SOL");
+    // Fee calculations complete
 
     if (balance < requiredBalance) {
       return NextResponse.json(
         { 
           error: `Insufficient balance. Have ${balance / LAMPORTS_PER_SOL} SOL, need ${requiredBalance / LAMPORTS_PER_SOL} SOL`,
           ephemeralAddress: ephemeralKeypair.publicKey.toBase58(),
-          ephemeralPrivateKey: bs58.encode(ephemeralKeypair.secretKey),
         },
         { status: 400 }
       );
     }
 
-    // Deposit ONLY grossWithdrawal to pool - the buffer stays for SDK fees
-    console.log("[PrivateDeposit] Depositing:", grossWithdrawal / LAMPORTS_PER_SOL, "SOL (keeping buffer for SDK fees)");
+    // Deposit to pool (buffer stays for SDK fees)
 
     // Initialize Privacy Cash
     const privacyCash = new PrivacyCash({
@@ -96,21 +90,19 @@ export async function POST(request: NextRequest) {
       lamports: grossWithdrawal,
     });
 
-    console.log("[PrivateDeposit] Deposit tx:", depositResult.tx);
+    // Deposit complete
 
     // Wait a bit for confirmation
     await new Promise(r => setTimeout(r, 2000));
 
-    // Withdraw GROSS amount to Starpay (after fees, they receive amountLamports)
-    console.log("[PrivateDeposit] Withdrawing", grossWithdrawal / LAMPORTS_PER_SOL, "SOL to Starpay:", starpayAddress);
+    // Withdraw to Starpay
     
     const withdrawResult = await privacyCash.withdraw({
       lamports: grossWithdrawal,
       recipientAddress: starpayAddress,
     });
 
-    console.log("[PrivateDeposit] Withdraw tx:", withdrawResult.tx);
-    console.log("[PrivateDeposit] Starpay should receive:", amountLamports / LAMPORTS_PER_SOL, "SOL (after fees)");
+    // Withdraw complete
 
     // Sweep remaining balance back to user
     let sweepTx: string | null = null;
@@ -121,8 +113,6 @@ export async function POST(request: NextRequest) {
         const sweepAmount = remainingBalance - TX_FEE;
         
         if (sweepAmount > 0) {
-          console.log("[PrivateDeposit] Sweeping", sweepAmount / LAMPORTS_PER_SOL, "SOL back to user");
-          
           const tx = new Transaction().add(
             SystemProgram.transfer({
               fromPubkey: ephemeralKeypair.publicKey,
@@ -132,10 +122,9 @@ export async function POST(request: NextRequest) {
           );
           
           sweepTx = await sendAndConfirmTransaction(connection, tx, [ephemeralKeypair]);
-          console.log("[PrivateDeposit] Sweep tx:", sweepTx);
         }
-      } catch (sweepErr) {
-        console.error("[PrivateDeposit] Sweep failed (non-critical):", sweepErr);
+      } catch {
+        // Sweep failed - non-critical
       }
     }
 
@@ -148,7 +137,7 @@ export async function POST(request: NextRequest) {
       withdrawnAmount: amountLamports,
     });
   } catch (error) {
-    console.error("[PrivateDeposit] Error:", error);
+    // Error during deposit
     
     // Return ephemeral key for recovery if we have it
     const errorResponse: any = { 
@@ -156,9 +145,8 @@ export async function POST(request: NextRequest) {
     };
     
     if (ephemeralKeypair) {
+      // Include ephemeral address for tracking (but NOT private key for security)
       errorResponse.ephemeralAddress = ephemeralKeypair.publicKey.toBase58();
-      errorResponse.ephemeralPrivateKey = bs58.encode(ephemeralKeypair.secretKey);
-      errorResponse.recoveryInstructions = "Import this private key into a wallet like Phantom to recover funds";
     }
     
     // Try to sweep funds back on error
@@ -170,7 +158,6 @@ export async function POST(request: NextRequest) {
         const TX_FEE = 5_000;
         
         if (balance > TX_FEE) {
-          console.log("[PrivateDeposit] Attempting error recovery sweep...");
           const tx = new Transaction().add(
             SystemProgram.transfer({
               fromPubkey: ephemeralKeypair.publicKey,
@@ -179,12 +166,11 @@ export async function POST(request: NextRequest) {
             })
           );
           const sweepTx = await sendAndConfirmTransaction(connection, tx, [ephemeralKeypair]);
-          console.log("[PrivateDeposit] Recovery sweep successful:", sweepTx);
           errorResponse.recoverySweepTx = sweepTx;
           errorResponse.recoverySuccess = true;
         }
       } catch (sweepErr) {
-        console.error("[PrivateDeposit] Recovery sweep failed:", sweepErr);
+        // Recovery sweep failed - funds may be stuck
         errorResponse.recoverySuccess = false;
       }
     }

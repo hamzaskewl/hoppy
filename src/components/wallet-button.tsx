@@ -4,27 +4,11 @@ import { usePrivy } from "@privy-io/react-auth";
 import { LogOut, User, Copy, Check } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { shortenAddress } from "@/lib/utils";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 
 export function WalletButton() {
   const { login, logout, authenticated, ready, user } = usePrivy();
   const [copied, setCopied] = useState(false);
-
-  // Debug: Log all wallet info when user changes
-  useEffect(() => {
-    if (user) {
-      console.log("[WalletButton] User object:", {
-        wallet: user.wallet,
-        linkedAccounts: user.linkedAccounts?.map((a: any) => ({
-          type: a.type,
-          address: a.address,
-          chainType: a.chainType,
-          chainId: a.chainId,
-          walletClientType: a.walletClientType,
-        })),
-      });
-    }
-  }, [user]);
 
   // Get Solana wallet address - look for chainType: 'solana'
   const getSolanaAddress = (): string | null => {

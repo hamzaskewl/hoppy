@@ -95,10 +95,9 @@ export function ClaimFlow() {
     
     if (solanaWallet?.address) {
       try {
-        console.log("[Claim] Found Solana wallet:", solanaWallet.address);
         return new PublicKey(solanaWallet.address);
-      } catch (error) {
-        console.error("[Claim] Invalid Solana address:", error);
+      } catch {
+        // Invalid Solana address
       }
     }
     
@@ -106,15 +105,13 @@ export function ClaimFlow() {
     const mainAddress = user?.wallet?.address;
     if (mainAddress && !mainAddress.startsWith('0x')) {
       try {
-        console.log("[Claim] Main wallet is Solana:", mainAddress);
         return new PublicKey(mainAddress);
-      } catch (error) {
-        console.error("[Claim] Invalid main wallet address:", error);
+      } catch {
+        // Invalid main wallet address
       }
     }
     
     // 3. No Solana wallet found
-    console.warn("[Claim] No Solana wallet found.");
     return null;
   }, [user]);
 
@@ -124,7 +121,6 @@ export function ClaimFlow() {
     hasStartedParsing.current = true;
 
     const parseNote = async () => {
-      console.log("[Claim] Parsing double hop note from URL...");
 
       try {
         const note = extractDoubleHopNoteFromUrl();
@@ -165,11 +161,6 @@ export function ClaimFlow() {
           return;
         }
 
-        console.log("[Claim] Valid double hop note found!");
-        console.log("[Claim] Amount:", lamportsToSol(note.amount), "SOL");
-        console.log("[Claim] Ephemeral:", note.ephemeralAddress.slice(0, 8) + "...");
-        console.log("[Claim] Funds location:", note.fundsLocation);
-
         // Check if already claimed by verifying funds still exist
         const rpcUrl = process.env.NEXT_PUBLIC_SOLANA_RPC_URL || "https://api.devnet.solana.com";
         const connection = new Connection(rpcUrl, "confirmed");
@@ -177,7 +168,6 @@ export function ClaimFlow() {
         if (note.fundsLocation === "ephemeral") {
           // For ephemeral funds, check if the wallet still has balance
           const ephemeralBalance = await connection.getBalance(new PublicKey(note.ephemeralAddress));
-          console.log("[Claim] Ephemeral balance:", ephemeralBalance / 1e9, "SOL");
           
           if (ephemeralBalance === 0) {
             setState({
@@ -243,10 +233,6 @@ export function ClaimFlow() {
     setClaimProgress("Initializing withdrawal...");
 
     try {
-      console.log("[Claim] Processing claim...");
-      console.log("[Claim] Recipient:", recipientAddress);
-      console.log("[Claim] Privacy level:", recipientPrivacy);
-
       setClaimProgress(recipientPrivacy === "private" 
         ? "Routing through privacy layer..." 
         : "Connecting to Privacy Cash...");
@@ -270,9 +256,6 @@ export function ClaimFlow() {
         throw new Error(result.error || "Claim failed");
       }
 
-      console.log("[Claim] Success! TxHash:", result.withdrawTxHash);
-      console.log("[Claim] Amount received:", result.amountReceived);
-
       setState((prev) => ({
         ...prev,
         status: "complete",
@@ -280,7 +263,6 @@ export function ClaimFlow() {
         amountReceived: result.amountReceived || null,
       }));
     } catch (error) {
-      console.error("[Claim] Claim error:", error);
       
       // Check for specific errors
       const errorMessage = error instanceof Error ? error.message : "Claim failed";

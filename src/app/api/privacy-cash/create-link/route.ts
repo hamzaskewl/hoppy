@@ -92,8 +92,7 @@ export async function POST(request: NextRequest) {
       retries++;
     }
 
-    console.log(`[API] Sender privacy: ${senderPrivacy}`);
-    console.log(`[API] Pool amount: ${amount / 1e9} SOL`);
+    // Processing sender request
     
     // Verify ephemeral wallet has received funds
     const ephemeralBalance = await connection.getBalance(compositeSecret.ephemeralKeypair.publicKey);
@@ -108,8 +107,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    console.log(`[API] Ephemeral wallet balance: ${ephemeralBalance / 1e9} SOL`);
-    console.log(`[API] Sender privacy: ${senderPrivacy}`);
+    // Balance verified
 
     let depositTxHash: string | undefined;
     let fundsLocation: "ephemeral" | "pool";
@@ -128,7 +126,7 @@ export async function POST(request: NextRequest) {
         );
       }
       
-      console.log(`[API] Private sender: depositing ${depositAmount / 1e9} SOL (balance: ${ephemeralBalance / 1e9}, tx buffer: ${MIN_TX_BUFFER / 1e9})`);
+      // Private sender: preparing deposit
       
       const privacyCashClient = new PrivacyCash({
         RPC_url: RPC_URL,
@@ -142,7 +140,6 @@ export async function POST(request: NextRequest) {
       // Retry up to 3 times for blockhash issues
       for (let attempt = 1; attempt <= 3; attempt++) {
         try {
-          console.log(`[API] Deposit attempt ${attempt}/3...`);
           depositResult = await privacyCashClient.deposit({
             lamports: depositAmount,
           });
@@ -155,7 +152,6 @@ export async function POST(request: NextRequest) {
             depositError.message?.includes("blockhash");
           
           if (isBlockhashError && attempt < 3) {
-            console.warn(`[API] Blockhash expired on attempt ${attempt}, waiting and retrying...`);
             await new Promise(r => setTimeout(r, 2000)); // Wait 2 seconds
             continue;
           }
@@ -171,7 +167,6 @@ export async function POST(request: NextRequest) {
       fundsLocation = "pool";
       // Update amount to what was actually deposited
       amount = depositAmount;
-      console.log(`[API] Deposited to pool: ${depositTxHash}`);
       
       // Sweep any remainder back to sender if possible
       // Note: To close the ephemeral account and recover rent, we need to transfer ALL funds
@@ -195,18 +190,13 @@ export async function POST(request: NextRequest) {
               })
             );
             await sendAndConfirmTransaction(connection, sweepTx, [compositeSecret.ephemeralKeypair], { commitment: "confirmed" });
-            console.log(`[API] Swept ${sweepAmount / 1e9} SOL back to sender`);
-          } else {
-            console.log(`[API] Remaining balance (${remainingBalance / 1e9} SOL) too low to sweep profitably`);
           }
-        } catch (sweepError) {
-          console.warn("[API] Failed to sweep remainder (non-critical):", sweepError);
+        } catch {
+          // Sweep failed - non-critical
         }
       }
     } else {
       // Basic sender: leave funds in ephemeral (no pool needed yet)
-      // Store actual ephemeral balance as the amount (will be swept on claim)
-      console.log(`[API] Basic sender: funds staying in ephemeral wallet (${ephemeralBalance / 1e9} SOL)`);
       fundsLocation = "ephemeral";
       amount = ephemeralBalance; // Use actual balance, not requested amount
     }
@@ -231,7 +221,7 @@ export async function POST(request: NextRequest) {
       depositTxHash,
     });
   } catch (error) {
-    console.error("[API] Create link error:", error);
+    // Error creating link
     
     // Build error response with recovery info
     const errorResponse: any = {
@@ -252,12 +242,10 @@ export async function POST(request: NextRequest) {
         secret = decodeCompositeSecret(body.compositeSecret);
         
         if (secret) {
-          // ALWAYS include recovery info in response
+          // Include ephemeral address for tracking (but NOT private key)
           errorResponse.ephemeralAddress = secret.ephemeralKeypair.publicKey.toBase58();
-          errorResponse.ephemeralPrivateKey = bs58.default.encode(secret.ephemeralKeypair.secretKey);
-          errorResponse.recoveryInstructions = "Import this private key into Phantom to recover funds from the ephemeral wallet";
           
-          // Try to sweep funds back to sender
+          // Try to sweep funds back to sender automatically
           if (body.senderAddress) {
             recoveryAttempted = true;
             try {
@@ -275,7 +263,7 @@ export async function POST(request: NextRequest) {
                   })
                 );
                 const sweepSig = await sendAndConfirmTransaction(conn, sweepTx, [secret.ephemeralKeypair], { commitment: "confirmed" });
-                console.log(`[API] Error recovery: swept ${(balance - TX_FEE) / 1e9} SOL back to sender`);
+                // Funds auto-recovered
                 errorResponse.recoverySweepTx = sweepSig;
                 errorResponse.recoverySuccess = true;
                 errorResponse.sweptAmount = balance - TX_FEE;
@@ -292,8 +280,8 @@ export async function POST(request: NextRequest) {
           }
         }
       }
-    } catch (parseErr) {
-      console.warn("[API] Could not parse request for recovery:", parseErr);
+    } catch {
+      // Could not parse request for recovery
     }
     
     return NextResponse.json(errorResponse, { status: 500 });

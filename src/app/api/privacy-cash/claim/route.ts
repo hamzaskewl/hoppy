@@ -42,9 +42,7 @@ export async function POST(request: NextRequest) {
     const doubleHopNote = note as DoubleHopNote;
     const privacyInfo = RECIPIENT_PRIVACY[recipientPrivacy];
 
-    console.log(`[API] Claiming with recipient privacy: ${recipientPrivacy}`);
-    console.log(`[API] Funds location: ${doubleHopNote.fundsLocation}`);
-    console.log(`[API] Sender privacy: ${doubleHopNote.senderPrivacy}`);
+    // Processing claim request
 
     // Decode composite secret
     const compositeSecret = decodeCompositeSecret(doubleHopNote.secret);
@@ -70,7 +68,7 @@ export async function POST(request: NextRequest) {
     const inPool = doubleHopNote.fundsLocation === "pool";
     const needsPrivacy = recipientPrivacy === "private";
 
-    console.log(`[API] Flow: funds=${inPool ? 'pool' : 'ephemeral'}, recipient=${recipientPrivacy}`);
+    // Routing claim flow
 
     // ------------------------------------------------------------------------
     // FLOW 1: Funds in EPHEMERAL + QUICK recipient
@@ -78,7 +76,7 @@ export async function POST(request: NextRequest) {
     // Sweep entire ephemeral balance minus tx fee
     // ------------------------------------------------------------------------
     if (!inPool && !needsPrivacy) {
-      console.log(`[API] Flow 1: Ephemeral → Recipient (direct transfer, full sweep)`);
+      // Flow 1: Direct transfer
       
       // Get actual ephemeral balance and sweep it all (minus tx fee)
       const ephemeralBalance = await connection.getBalance(compositeSecret.ephemeralKeypair.publicKey);
@@ -89,7 +87,7 @@ export async function POST(request: NextRequest) {
         throw new Error("Ephemeral wallet has insufficient balance for transfer");
       }
       
-      console.log(`[API] Sweeping ephemeral: ${ephemeralBalance / 1e9} SOL → ${transferAmount / 1e9} SOL (${TX_FEE} lamports for tx fee)`);
+      // Sweeping ephemeral to recipient
       
       const tx = new Transaction().add(
         SystemProgram.transfer({
@@ -106,7 +104,7 @@ export async function POST(request: NextRequest) {
         { commitment: "confirmed" }
       );
 
-      console.log(`[API] Direct transfer complete: ${txHash}`);
+      // Transfer complete
 
       return NextResponse.json({
         success: true,
@@ -122,7 +120,7 @@ export async function POST(request: NextRequest) {
     // Eph → Pool → Recipient
     // ------------------------------------------------------------------------
     if (!inPool && needsPrivacy) {
-      console.log(`[API] Flow 2: Ephemeral → Pool → Recipient`);
+      // Flow 2: Ephemeral → Pool → Recipient
 
       const privacyCashClient = new PrivacyCash({
         RPC_url: RPC_URL,
@@ -139,13 +137,10 @@ export async function POST(request: NextRequest) {
         throw new Error("Ephemeral balance too low to cover Privacy Cash overhead");
       }
       
-      console.log(`[API] Ephemeral balance: ${ephBalance / 1e9} SOL, depositing: ${depositAmount / 1e9} SOL`);
-      
       // First deposit to pool
       await privacyCashClient.deposit({
         lamports: depositAmount,
       });
-      console.log(`[API] Deposited ${depositAmount / 1e9} SOL to pool`);
 
       // Then withdraw with ZK privacy (withdraw what we deposited)
       const withdrawResult = await privacyCashClient.withdraw({
@@ -154,7 +149,6 @@ export async function POST(request: NextRequest) {
       });
 
       const receiveInfo = calculateRecipientReceives(depositAmount, "quick");
-      console.log(`[API] Withdrew to recipient: ${withdrawResult.tx}`);
 
       return NextResponse.json({
         success: true,
@@ -170,7 +164,7 @@ export async function POST(request: NextRequest) {
     // Pool → Recipient (simple withdrawal)
     // ------------------------------------------------------------------------
     if (inPool && !needsPrivacy) {
-      console.log(`[API] Flow 3: Pool → Recipient (ZK withdrawal)`);
+      // Flow 3: Pool → Recipient
 
       const privacyCashClient = new PrivacyCash({
         RPC_url: RPC_URL,
@@ -184,7 +178,6 @@ export async function POST(request: NextRequest) {
       });
 
       const receiveInfo = calculateRecipientReceives(doubleHopNote.amount, "quick");
-      console.log(`[API] Withdrew to recipient: ${withdrawResult.tx}`);
 
       return NextResponse.json({
         success: true,
@@ -200,7 +193,7 @@ export async function POST(request: NextRequest) {
     // Pool → Eph2 → Pool → Recipient (double ZK break)
     // ------------------------------------------------------------------------
     if (inPool && needsPrivacy) {
-      console.log(`[API] Flow 4: Pool → Eph2 → Pool → Recipient`);
+      // Flow 4: Double privacy hop
 
       const privacyCashClient = new PrivacyCash({
         RPC_url: RPC_URL,
@@ -212,7 +205,7 @@ export async function POST(request: NextRequest) {
       const eph2Secret = generateCompositeSecret();
       const eph2Address = eph2Secret.ephemeralKeypair.publicKey.toBase58();
 
-      console.log(`[API] Routing through Eph2: ${eph2Address.slice(0, 8)}...`);
+      // Routing through intermediate wallet
 
       // First withdrawal: Pool → Eph2
       await privacyCashClient.withdraw({
@@ -220,7 +213,7 @@ export async function POST(request: NextRequest) {
         recipientAddress: eph2Address,
       });
 
-      console.log(`[API] Withdrew to Eph2`);
+      // First hop complete
 
       // Wait for Eph2 to receive funds
       await new Promise(resolve => setTimeout(resolve, 3000));
@@ -242,13 +235,9 @@ export async function POST(request: NextRequest) {
         throw new Error("Eph2 balance too low to cover Privacy Cash overhead");
       }
       
-      console.log(`[API] Eph2 balance: ${eph2Balance / 1e9} SOL, depositing: ${eph2DepositAmount / 1e9} SOL`);
-      
       await eph2Client.deposit({
         lamports: eph2DepositAmount,
       });
-
-      console.log(`[API] Eph2 deposited ${eph2DepositAmount / 1e9} SOL to Pool`);
 
       // Final withdrawal: Pool → Recipient (withdraw what we actually deposited)
       const finalWithdraw = await eph2Client.withdraw({
@@ -271,7 +260,7 @@ export async function POST(request: NextRequest) {
     // Should never reach here
     throw new Error("Invalid flow combination");
   } catch (error) {
-    console.error("[API] Claim error:", error);
+    // Error during claim
     
     // Check for specific errors
     const errorMessage = error instanceof Error ? error.message : "Failed to claim";
