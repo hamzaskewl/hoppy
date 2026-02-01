@@ -56,8 +56,7 @@ export default function CreatePage() {
                   Send Private Payments
                 </h1>
                 <p className="text-sm text-muted-foreground">
-                  Deposit to a shielded pool and share a claim link. The recipient withdraws with no
-                  on-chain trace back to you.
+                  Create a claim link and share it. Enable privacy shielding to break the on-chain connection.
                 </p>
               </div>
             </div>

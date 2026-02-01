@@ -76,9 +76,9 @@ export default function HowItWorksPage() {
             </h3>
             <p className="text-muted-foreground">
               Traditional crypto payments are like writing a check - everyone can see who paid whom. 
-              Hoppy breaks that link by using <span className="font-medium text-foreground">temporary wallets</span> and a 
-              <span className="font-medium text-foreground"> shielded pool</span>. 
-              Your money goes in one door, and comes out another. There&apos;s no breadcrumb trail connecting the two.
+              Hoppy breaks that link by using <span className="font-medium text-foreground">temporary wallets</span> and 
+              <span className="font-medium text-foreground"> optional privacy shielding</span>. 
+              When enabled, your money goes in one door and comes out another - no breadcrumb trail.
             </p>
           </div>
         </div>

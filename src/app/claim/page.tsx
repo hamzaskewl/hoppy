@@ -25,7 +25,28 @@ function HoppyLogo({ size = 40 }: { size?: number }) {
 
 export default function ClaimPage() {
   return (
-    <div className="min-h-screen py-12 px-4 bg-background">
+    <div className="min-h-screen py-12 px-4 bg-background relative">
+      {/* Carrot background - light mode */}
+      <div
+        className="absolute inset-0 -z-10 dark:hidden"
+        style={{
+          backgroundImage: "url('/hoppy-carrot.png')",
+          backgroundRepeat: "repeat",
+          backgroundSize: "400px",
+          filter: "blur(4px)",
+          opacity: 0.7,
+        }}
+      />
+      {/* Dark background - dark mode */}
+      <div
+        className="absolute inset-0 -z-10 hidden dark:block"
+        style={{
+          backgroundImage: "url('/hoppy-bgblack.png')",
+          backgroundRepeat: "repeat",
+          filter: "blur(6px)",
+        }}
+      />
+
       {/* Header */}
       <header className="max-w-md mx-auto mb-8">
         <div className="flex items-center justify-between mb-6">
@@ -50,16 +71,6 @@ export default function ClaimPage() {
 
       {/* Main Content */}
       <ClaimFlow />
-
-      {/* Privacy Notice */}
-      <div className="max-w-md mx-auto mt-8 p-4 rounded-xl bg-card border-2 border-border">
-        <h3 className="font-semibold mb-2">How It Works</h3>
-        <p className="text-sm text-muted-foreground">
-          These funds are in a shielded pool. Your claim note proves ownership.
-          Connect your wallet and the funds will be sent directly to you.
-          Only you and the sender can see your destination address.
-        </p>
-      </div>
     </div>
   );
 }

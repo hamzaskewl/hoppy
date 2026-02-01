@@ -47,8 +47,8 @@ export default function Home() {
           </div>
 
           <p className="text-xl text-hop-700/80 dark:text-white/90 max-w-2xl mx-auto">
-            Send private payments on Solana. Deposit to a shielded pool, share the claim link,
-            and let the recipient withdraw with no on-chain trace back to you.
+            Send private payments on Solana. Share a claim link and let the recipient withdraw - 
+            with optional privacy shielding for maximum anonymity.
           </p>
 
           {/* CTA Buttons */}

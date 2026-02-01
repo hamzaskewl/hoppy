@@ -155,9 +155,9 @@ export function ShieldingAnimation({ status, message }: ShieldingAnimationProps)
           {status === "detecting" &&
             "Reading claim note and verifying..."}
           {status === "shielding" &&
-            "Moving funds into the privacy pool. This may take a moment..."}
+            "Processing your claim. This may take a moment..."}
           {status === "complete" &&
-            "Your funds are now in the shielded pool. Ready to withdraw privately."}
+            "Funds verified. Ready to withdraw."}
           {status === "error" && (message || "Something went wrong. Please try again.")}
         </p>
       </motion.div>
