@@ -75,15 +75,27 @@ export async function POST(request: NextRequest) {
     // ------------------------------------------------------------------------
     // FLOW 1: Funds in EPHEMERAL + QUICK recipient
     // Cheapest! Direct transfer, no pool needed
+    // Sweep entire ephemeral balance minus tx fee
     // ------------------------------------------------------------------------
     if (!inPool && !needsPrivacy) {
-      console.log(`[API] Flow 1: Ephemeral → Recipient (direct transfer)`);
+      console.log(`[API] Flow 1: Ephemeral → Recipient (direct transfer, full sweep)`);
+      
+      // Get actual ephemeral balance and sweep it all (minus tx fee)
+      const ephemeralBalance = await connection.getBalance(compositeSecret.ephemeralKeypair.publicKey);
+      const TX_FEE = 5000; // Standard tx fee in lamports
+      const transferAmount = Math.max(0, ephemeralBalance - TX_FEE);
+      
+      if (transferAmount <= 0) {
+        throw new Error("Ephemeral wallet has insufficient balance for transfer");
+      }
+      
+      console.log(`[API] Sweeping ephemeral: ${ephemeralBalance / 1e9} SOL → ${transferAmount / 1e9} SOL (${TX_FEE} lamports for tx fee)`);
       
       const tx = new Transaction().add(
         SystemProgram.transfer({
           fromPubkey: compositeSecret.ephemeralKeypair.publicKey,
           toPubkey: new (await import("@solana/web3.js")).PublicKey(recipientAddress),
-          lamports: doubleHopNote.amount,
+          lamports: transferAmount,
         })
       );
 
@@ -99,7 +111,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({
         success: true,
         withdrawTxHash: txHash,
-        amountReceived: doubleHopNote.amount,
+        amountReceived: transferAmount,
         recipientPrivacy,
         hops: 0,
       });
@@ -120,7 +132,7 @@ export async function POST(request: NextRequest) {
 
       // Check actual ephemeral balance and subtract SDK overhead
       const ephBalance = await connection.getBalance(compositeSecret.ephemeralKeypair.publicKey);
-      const SDK_OVERHEAD = 4_000_000; // ~0.004 SOL for tx fee + UTXO rent
+      const SDK_OVERHEAD = 2_000_000; // ~0.002 SOL for tx fee + UTXO rent
       const depositAmount = Math.max(0, ephBalance - SDK_OVERHEAD);
       
       if (depositAmount <= 0) {
@@ -222,7 +234,7 @@ export async function POST(request: NextRequest) {
 
       // Check actual Eph2 balance and subtract SDK overhead
       const eph2Balance = await connection.getBalance(eph2Secret.ephemeralKeypair.publicKey);
-      const SDK_OVERHEAD = 4_000_000; // ~0.004 SOL for tx fee + UTXO rent
+      const SDK_OVERHEAD = 2_000_000; // ~0.002 SOL for tx fee + UTXO rent
       const eph2DepositAmount = Math.max(0, eph2Balance - SDK_OVERHEAD);
       
       if (eph2DepositAmount <= 0) {

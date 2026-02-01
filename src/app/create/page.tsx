@@ -11,11 +11,20 @@ const CreateLinkForm = dynamic(
 export default function CreatePage() {
   return (
     <div className="min-h-screen flex flex-col relative">
-      {/* Blurred tiled background */}
+      {/* Blurred tiled background - light mode */}
       <div
-        className="absolute inset-0 -z-10"
+        className="absolute inset-0 -z-10 dark:hidden"
         style={{
           backgroundImage: "url('/hoppy-bg-tile.png')",
+          backgroundRepeat: "repeat",
+          filter: "blur(6px)",
+        }}
+      />
+      {/* Blurred tiled background - dark mode */}
+      <div
+        className="absolute inset-0 -z-10 hidden dark:block"
+        style={{
+          backgroundImage: "url('/hoppy-bgblack.png')",
           backgroundRepeat: "repeat",
           filter: "blur(6px)",
         }}

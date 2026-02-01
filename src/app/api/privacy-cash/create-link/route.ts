@@ -116,9 +116,9 @@ export async function POST(request: NextRequest) {
     
     // 4. Conditionally deposit to Privacy Cash based on sender privacy
     if (senderPrivacy === "private") {
-      // SDK needs: ~0.002 SOL tx fee + ~0.00178 SOL for 2 UTXO accounts (rent)
-      // Total overhead: ~0.004 SOL (4M lamports) to be safe
-      const SDK_OVERHEAD = 4_000_000; // ~0.004 SOL
+      // SDK needs: ~5000 lamports tx fee + ~0.00089 SOL per UTXO account rent (2 accounts)
+      // Minimum overhead: ~1.8M lamports, use 2M to be safe
+      const SDK_OVERHEAD = 2_000_000; // ~0.002 SOL
       const depositAmount = Math.max(0, ephemeralBalance - SDK_OVERHEAD);
       
       if (depositAmount <= 0) {
@@ -160,8 +160,10 @@ export async function POST(request: NextRequest) {
       console.log(`[API] Deposited to pool: ${depositTxHash}`);
     } else {
       // Basic sender: leave funds in ephemeral (no pool needed yet)
-      console.log(`[API] Basic sender: funds staying in ephemeral wallet`);
+      // Store actual ephemeral balance as the amount (will be swept on claim)
+      console.log(`[API] Basic sender: funds staying in ephemeral wallet (${ephemeralBalance / 1e9} SOL)`);
       fundsLocation = "ephemeral";
+      amount = ephemeralBalance; // Use actual balance, not requested amount
     }
 
     // 5. Create the note
