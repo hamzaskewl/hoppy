@@ -247,6 +247,9 @@ export function CreateLinkForm() {
     
     const inPool = senderPrivacy === "private";
     
+    // 3% buffer added to ALL transfers to ensure recipient gets enough after on-chain costs
+    const BUFFER_PERCENTAGE = 0.03;
+    
     if (sponsorFees) {
       // Sponsor fees: Calculate how much to deposit so recipient gets baseRecipientAmount
       // after doing a "quick" claim (1 withdrawal hop)
@@ -255,32 +258,33 @@ export function CreateLinkForm() {
         // Need to calculate: deposit X so that after 1 withdrawal, recipient gets baseRecipientAmount
         poolAmount = calculateDepositForRecipientAmount(baseRecipientAmount);
         
-        // Private sender: SDK needs minimal buffer for tx fees
+        // Private sender: SDK needs minimal buffer for tx fees + 3% buffer
         const MIN_TX_BUFFER = 3_000_000; // lamports (~0.003 SOL) - minimal buffer for tx fees
-        senderPays = poolAmount + MIN_TX_BUFFER;
+        const bufferAmount = Math.ceil(poolAmount * BUFFER_PERCENTAGE);
+        senderPays = poolAmount + MIN_TX_BUFFER + bufferAmount;
         senderFee = senderPays - baseRecipientAmount;
       } else {
         // Basic sender + sponsor: Sender→Eph, recipient claims from ephemeral
-        // If recipient does quick claim (direct transfer from ephemeral), no fee
-        // If recipient does private claim, they pay 1 hop fee
-        // For sponsoring quick claims: just send baseRecipientAmount
+        // Add 3% buffer to ensure enough funds arrive
         poolAmount = baseRecipientAmount;
-        senderPays = baseRecipientAmount;
-        senderFee = 0;
+        const bufferAmount = Math.ceil(poolAmount * BUFFER_PERCENTAGE);
+        senderPays = baseRecipientAmount + bufferAmount;
+        senderFee = bufferAmount;
       }
     } else {
       // Don't sponsor: Recipient pays fees from the amount
       poolAmount = baseRecipientAmount;
+      const bufferAmount = Math.ceil(poolAmount * BUFFER_PERCENTAGE);
       
       if (inPool) {
-        // Private sender, no sponsor: still pay minimal tx buffer
+        // Private sender, no sponsor: pay minimal tx buffer + 3% buffer
         const MIN_TX_BUFFER = 3_000_000;
-        senderPays = baseRecipientAmount + MIN_TX_BUFFER;
-        senderFee = MIN_TX_BUFFER;
+        senderPays = baseRecipientAmount + MIN_TX_BUFFER + bufferAmount;
+        senderFee = MIN_TX_BUFFER + bufferAmount;
       } else {
-        // Basic sender, no sponsor
-        senderPays = baseRecipientAmount;
-        senderFee = 0;
+        // Basic sender, no sponsor: just add 3% buffer
+        senderPays = baseRecipientAmount + bufferAmount;
+        senderFee = bufferAmount;
       }
     }
     
@@ -400,11 +404,14 @@ export function CreateLinkForm() {
       setDepositProgress("Preparing transaction...");
       
       // 2. Create funding transaction (sender → ephemeral)
-      // For private: add minimal buffer for tx fees
+      // Add 3% buffer to ALL transfers to ensure recipient gets enough after on-chain costs
+      const BUFFER_PERCENTAGE = 0.03; // 3% buffer
+      const bufferAmount = Math.ceil(costBreakdown.poolAmount * BUFFER_PERCENTAGE);
+      // For private: also add minimal buffer for tx fees
       const MIN_TX_BUFFER = 3_000_000; // ~0.003 SOL - minimal buffer for tx fees
       const fundingAmount = senderPrivacy === "private" 
-        ? costBreakdown.poolAmount + MIN_TX_BUFFER 
-        : costBreakdown.poolAmount;
+        ? costBreakdown.poolAmount + MIN_TX_BUFFER + bufferAmount
+        : costBreakdown.poolAmount + bufferAmount;
       
       const rpcUrl = process.env.NEXT_PUBLIC_SOLANA_RPC_URL || "https://api.devnet.solana.com";
       const connection = new Connection(rpcUrl, "confirmed");
