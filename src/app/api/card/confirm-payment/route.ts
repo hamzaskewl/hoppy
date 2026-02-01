@@ -23,7 +23,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const order = getOrder(orderId);
+    const order = await getOrder(orderId);
 
     if (!order) {
       return NextResponse.json(
@@ -40,7 +40,7 @@ export async function POST(request: NextRequest) {
     }
 
     // Update order with payment info
-    const updated = updateOrder(orderId, {
+    const updated = await updateOrder(orderId, {
       status: "paid",
       depositTxHash,
       withdrawTxHash,

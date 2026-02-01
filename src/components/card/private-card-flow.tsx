@@ -212,10 +212,22 @@ export function PrivateCardFlow() {
       setStep("waiting");
       setProgress("Waiting for card delivery...");
       
-    } catch (err) {
+    } catch (err: any) {
       console.error("Private card error:", err);
-      setError(err instanceof Error ? err.message : "Failed to purchase card");
-      setStep("error");
+      
+      // Handle user rejection gracefully
+      const errorMessage = err?.message || String(err);
+      if (
+        errorMessage.includes("User rejected") ||
+        errorMessage.includes("not been authorized") ||
+        errorMessage.includes("cancelled")
+      ) {
+        setError("Transaction cancelled. Please approve the transaction in your wallet to continue.");
+        setStep("configure"); // Go back to configure, not error
+      } else {
+        setError(errorMessage || "Failed to purchase card");
+        setStep("error");
+      }
     } finally {
       setIsLoading(false);
     }

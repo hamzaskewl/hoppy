@@ -17,7 +17,7 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    const order = getOrder(orderId);
+    const order = await getOrder(orderId);
 
     if (!order) {
       return NextResponse.json(

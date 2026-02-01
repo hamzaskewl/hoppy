@@ -92,7 +92,7 @@ export async function POST(request: NextRequest) {
       paymentAmountSol: starpayData.payment?.amountSol,
     };
 
-    createOrder(order);
+    await createOrder(order);
     console.log(`[GiftOrder] Order created: ${orderId}`);
 
     // Return order details for client

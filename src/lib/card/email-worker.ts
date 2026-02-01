@@ -146,7 +146,7 @@ async function processEmail(email: ParsedMail): Promise<boolean> {
   const claimLink = createClaimLink(orderId, encryptionKey);
   
   // Update order
-  const updated = updateOrder(orderId, {
+  const updated = await updateOrder(orderId, {
     status: "ready",
     encryptedCard,
     claimLink,

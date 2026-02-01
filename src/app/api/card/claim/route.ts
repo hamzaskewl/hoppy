@@ -20,7 +20,7 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    const order = getOrder(orderId);
+    const order = await getOrder(orderId);
 
     if (!order) {
       return NextResponse.json(
@@ -48,7 +48,7 @@ export async function GET(request: NextRequest) {
 
     // Mark as claimed
     if (order.status !== "claimed") {
-      updateOrder(orderId, { status: "claimed" });
+      await updateOrder(orderId, { status: "claimed" });
     }
 
     // Return encrypted card data

@@ -41,3 +41,4 @@ tradeHistory*
 next-env.d.ts
 
 *.md
+*.card-orders.json
