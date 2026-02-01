@@ -138,13 +138,16 @@ export function PrivateCardFlow() {
       const ephemeralKeypair = Keypair.generate();
       
       // Calculate deposit amount (Starpay amount + Privacy Cash fees + overhead)
+      // Privacy Cash withdrawal fee is DEDUCTED from withdrawal, so we need to send more
       const starpayAmountLamports = solToLamports(data.payment.amountSol);
       const PRIVACY_CASH_FEE = 6_000_000; // 0.006 SOL flat withdrawal fee
       const PRIVACY_CASH_PERCENT = 0.0035; // 0.35% withdrawal fee
       const SDK_OVERHEAD = 5_000_000; // SDK overhead for temp accounts (~0.005 SOL)
       const TX_FEES = 15_000; // Multiple transaction fees
-      const withdrawFee = Math.ceil(starpayAmountLamports * PRIVACY_CASH_PERCENT) + PRIVACY_CASH_FEE;
-      const depositAmount = starpayAmountLamports + withdrawFee + SDK_OVERHEAD + TX_FEES;
+      
+      // Gross withdrawal = (starpayAmount + flatFee) / (1 - percent) so Starpay gets exact amount after fees
+      const grossWithdrawal = Math.ceil((starpayAmountLamports + PRIVACY_CASH_FEE) / (1 - PRIVACY_CASH_PERCENT));
+      const depositAmount = grossWithdrawal + SDK_OVERHEAD + TX_FEES;
       
       // Fund ephemeral wallet
       const connection = new Connection(rpcUrl, "confirmed");
