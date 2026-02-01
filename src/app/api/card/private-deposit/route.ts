@@ -52,9 +52,8 @@ export async function POST(request: NextRequest) {
     const TX_FEE = 5_000;
     const WITHDRAWAL_FLAT_FEE = 6_000_000; // 0.006 SOL
     const WITHDRAWAL_PERCENT = 0.0035; // 0.35%
-    // Privacy Cash needs ~0.007-0.008 SOL for temp accounts during deposit/withdraw
-    // Using 8M lamports (0.008 SOL) as buffer to be safe
-    const SDK_OVERHEAD = 8_000_000;
+    // Minimal buffer for tx fees during deposit + withdraw
+    const MIN_TX_BUFFER = 5_000_000; // ~0.005 SOL for deposit+withdraw combo
     
     // Calculate how much to withdraw so Starpay receives exactly amountLamports after fees
     // If we withdraw W, Starpay gets: W - (FLAT_FEE + W * PERCENT) = W * (1 - PERCENT) - FLAT_FEE
@@ -63,7 +62,7 @@ export async function POST(request: NextRequest) {
     const grossWithdrawal = Math.ceil((amountLamports + WITHDRAWAL_FLAT_FEE) / (1 - WITHDRAWAL_PERCENT));
     
     // Deposit needs to cover the gross withdrawal amount + SDK overhead
-    const depositAmount = grossWithdrawal + SDK_OVERHEAD;
+    const depositAmount = grossWithdrawal + MIN_TX_BUFFER;
 
     console.log("[PrivateDeposit] Starpay needs:", amountLamports / LAMPORTS_PER_SOL, "SOL");
     console.log("[PrivateDeposit] Gross withdrawal (before fees):", grossWithdrawal / LAMPORTS_PER_SOL, "SOL");

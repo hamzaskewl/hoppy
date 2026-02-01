@@ -376,11 +376,20 @@ export function calculateRecipientReceives(
   const privacyInfo = RECIPIENT_PRIVACY[recipientPrivacy];
   const hops = privacyInfo.hops;
   
-  // Each hop costs withdrawal fee
+  // Minimal tx buffer consumed between hops (for intermediate wallet operations)
+  // This is deducted from funds when routing through intermediate wallets
+  const MIN_TX_BUFFER_BETWEEN_HOPS = 3_000_000; // ~0.003 SOL
+  
+  // Each hop costs withdrawal fee, plus SDK overhead between hops
   let remaining = poolAmountLamports;
   for (let i = 0; i < hops; i++) {
     const fees = calculateFees(remaining);
     remaining = fees.recipientReceives;
+    
+    // If not the last hop, also subtract tx buffer for intermediate wallet
+    if (i < hops - 1) {
+      remaining = Math.max(0, remaining - MIN_TX_BUFFER_BETWEEN_HOPS);
+    }
   }
   
   return {

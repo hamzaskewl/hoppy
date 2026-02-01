@@ -132,8 +132,8 @@ export async function POST(request: NextRequest) {
 
       // Check actual ephemeral balance and subtract SDK overhead
       const ephBalance = await connection.getBalance(compositeSecret.ephemeralKeypair.publicKey);
-      const SDK_OVERHEAD = 8_000_000; // ~0.008 SOL for tx fees + temp account rent
-      const depositAmount = Math.max(0, ephBalance - SDK_OVERHEAD);
+      const MIN_TX_BUFFER = 3_000_000; // ~0.003 SOL - minimal buffer for tx fees
+      const depositAmount = Math.max(0, ephBalance - MIN_TX_BUFFER);
       
       if (depositAmount <= 0) {
         throw new Error("Ephemeral balance too low to cover Privacy Cash overhead");
@@ -232,10 +232,11 @@ export async function POST(request: NextRequest) {
         enableDebug: true,
       });
 
-      // Check actual Eph2 balance and subtract SDK overhead
+      // Check actual Eph2 balance and deposit as much as possible
+      // Eph2 only needs to cover tx fees since it just received funds and will deposit+withdraw
       const eph2Balance = await connection.getBalance(eph2Secret.ephemeralKeypair.publicKey);
-      const SDK_OVERHEAD = 8_000_000; // ~0.008 SOL for tx fees + temp account rent
-      const eph2DepositAmount = Math.max(0, eph2Balance - SDK_OVERHEAD);
+      const MIN_TX_BUFFER = 3_000_000; // ~0.003 SOL - minimal buffer for tx fees
+      const eph2DepositAmount = Math.max(0, eph2Balance - MIN_TX_BUFFER);
       
       if (eph2DepositAmount <= 0) {
         throw new Error("Eph2 balance too low to cover Privacy Cash overhead");

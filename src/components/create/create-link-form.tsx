@@ -255,9 +255,9 @@ export function CreateLinkForm() {
         // Need to calculate: deposit X so that after 1 withdrawal, recipient gets baseRecipientAmount
         poolAmount = calculateDepositForRecipientAmount(baseRecipientAmount);
         
-        // Private sender: SDK needs ~0.004 SOL for tx fee + UTXO rent
-        const SDK_OVERHEAD = 8_000_000; // lamports (~0.008 SOL) - covers rent for temp accounts
-        senderPays = poolAmount + SDK_OVERHEAD;
+        // Private sender: SDK needs minimal buffer for tx fees
+        const MIN_TX_BUFFER = 3_000_000; // lamports (~0.003 SOL) - minimal buffer for tx fees
+        senderPays = poolAmount + MIN_TX_BUFFER;
         senderFee = senderPays - baseRecipientAmount;
       } else {
         // Basic sender + sponsor: Sender→Eph, recipient claims from ephemeral
@@ -273,10 +273,10 @@ export function CreateLinkForm() {
       poolAmount = baseRecipientAmount;
       
       if (inPool) {
-        // Private sender, no sponsor: still pay SDK overhead (~0.008 SOL)
-        const SDK_OVERHEAD = 8_000_000;
-        senderPays = baseRecipientAmount + SDK_OVERHEAD;
-        senderFee = SDK_OVERHEAD;
+        // Private sender, no sponsor: still pay minimal tx buffer
+        const MIN_TX_BUFFER = 3_000_000;
+        senderPays = baseRecipientAmount + MIN_TX_BUFFER;
+        senderFee = MIN_TX_BUFFER;
       } else {
         // Basic sender, no sponsor
         senderPays = baseRecipientAmount;
@@ -400,10 +400,10 @@ export function CreateLinkForm() {
       setDepositProgress("Preparing transaction...");
       
       // 2. Create funding transaction (sender → ephemeral)
-      // For private: add ~0.008 SOL for SDK overhead (tx fees + temp account rent)
-      const SDK_OVERHEAD = 8_000_000; // ~0.008 SOL - covers rent for temp accounts
+      // For private: add minimal buffer for tx fees
+      const MIN_TX_BUFFER = 3_000_000; // ~0.003 SOL - minimal buffer for tx fees
       const fundingAmount = senderPrivacy === "private" 
-        ? costBreakdown.poolAmount + SDK_OVERHEAD 
+        ? costBreakdown.poolAmount + MIN_TX_BUFFER 
         : costBreakdown.poolAmount;
       
       const rpcUrl = process.env.NEXT_PUBLIC_SOLANA_RPC_URL || "https://api.devnet.solana.com";

@@ -116,11 +116,10 @@ export async function POST(request: NextRequest) {
     
     // 4. Conditionally deposit to Privacy Cash based on sender privacy
     if (senderPrivacy === "private") {
-      // SDK needs: tx fees + rent-exempt minimums for temporary accounts created during deposit
-      // Privacy Cash creates multiple temp accounts that need ~0.00089 SOL each
-      // Using 5M lamports (~0.005 SOL) to reliably cover all cases
-      const SDK_OVERHEAD = 8_000_000; // ~0.008 SOL - covers rent for temp accounts during deposit
-      const depositAmount = Math.max(0, ephemeralBalance - SDK_OVERHEAD);
+      // SDK needs minimal buffer for tx fees (~0.002-0.003 SOL based on observed errors)
+      // We want to deposit as much as possible to maximize pool amount
+      const MIN_TX_BUFFER = 3_000_000; // ~0.003 SOL - minimal buffer for tx fees
+      const depositAmount = Math.max(0, ephemeralBalance - MIN_TX_BUFFER);
       
       if (depositAmount <= 0) {
         return NextResponse.json(
@@ -129,7 +128,7 @@ export async function POST(request: NextRequest) {
         );
       }
       
-      console.log(`[API] Private sender: depositing ${depositAmount / 1e9} SOL (balance: ${ephemeralBalance / 1e9}, SDK overhead reserve: ${SDK_OVERHEAD / 1e9})`);
+      console.log(`[API] Private sender: depositing ${depositAmount / 1e9} SOL (balance: ${ephemeralBalance / 1e9}, tx buffer: ${MIN_TX_BUFFER / 1e9})`);
       
       const privacyCashClient = new PrivacyCash({
         RPC_url: RPC_URL,
@@ -175,21 +174,30 @@ export async function POST(request: NextRequest) {
       console.log(`[API] Deposited to pool: ${depositTxHash}`);
       
       // Sweep any remainder back to sender if possible
+      // Note: To close the ephemeral account and recover rent, we need to transfer ALL funds
+      // The minimum rent-exempt balance is ~890,880 lamports
       if (senderAddress) {
         try {
           const remainingBalance = await connection.getBalance(compositeSecret.ephemeralKeypair.publicKey);
           const TX_FEE = 5000;
-          if (remainingBalance > TX_FEE + 1000) { // Only sweep if worth it (> ~$0.001)
+          const MIN_RENT_EXEMPT = 890880; // ~0.00089 SOL
+          
+          // Only sweep if we can send more than dust AND close the account
+          // To close account: send ALL balance - TX_FEE, account will be closed
+          if (remainingBalance > MIN_RENT_EXEMPT + TX_FEE) {
+            const sweepAmount = remainingBalance - TX_FEE;
             const { Transaction, SystemProgram, PublicKey, sendAndConfirmTransaction } = await import("@solana/web3.js");
             const sweepTx = new Transaction().add(
               SystemProgram.transfer({
                 fromPubkey: compositeSecret.ephemeralKeypair.publicKey,
                 toPubkey: new PublicKey(senderAddress),
-                lamports: remainingBalance - TX_FEE,
+                lamports: sweepAmount,
               })
             );
             await sendAndConfirmTransaction(connection, sweepTx, [compositeSecret.ephemeralKeypair], { commitment: "confirmed" });
-            console.log(`[API] Swept ${(remainingBalance - TX_FEE) / 1e9} SOL back to sender`);
+            console.log(`[API] Swept ${sweepAmount / 1e9} SOL back to sender`);
+          } else {
+            console.log(`[API] Remaining balance (${remainingBalance / 1e9} SOL) too low to sweep profitably`);
           }
         } catch (sweepError) {
           console.warn("[API] Failed to sweep remainder (non-critical):", sweepError);
