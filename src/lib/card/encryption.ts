@@ -77,7 +77,7 @@ export function decryptCardDetails(encrypted: EncryptedCard, keyBase64: string):
  * Create a claim link with the order ID and encryption key
  */
 export function createClaimLink(orderId: string, encryptionKey: string): string {
-  const baseUrl = process.env.NEXT_PUBLIC_APP_URL || "https://hoppy.app";
+  const baseUrl = process.env.NEXT_PUBLIC_APP_URL || "https://hoppy.cash";
   // Format: /card/claim#orderId.key
   return `${baseUrl}/card/claim#${orderId}.${encryptionKey}`;
 }

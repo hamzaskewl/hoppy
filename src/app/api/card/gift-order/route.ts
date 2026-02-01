@@ -7,7 +7,6 @@
  */
 
 import { NextRequest, NextResponse } from "next/server";
-import { v4 as uuidv4 } from "crypto";
 import { createOrder, GiftCardOrder } from "@/lib/card/storage";
 
 const STARPAY_API_URL = "https://www.starpay.cards/api/v1";
