@@ -397,7 +397,7 @@ export function ClaimFlow() {
                 Payment Ready to Claim
               </h3>
               <p className="text-sm text-muted-foreground text-center mb-4">
-                {lamportsToSol(state.note.amount).toFixed(4)} SOL available in pool
+                {lamportsToSol(state.note.amount).toFixed(4)} SOL available to claim
               </p>
 
               {/* Sender privacy indicator */}

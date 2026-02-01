@@ -1015,13 +1015,10 @@ export function CreateLinkForm() {
             <div className="p-4 rounded-xl bg-hop-100 dark:bg-hop-500/10 border-2 border-hop-400 text-center">
               <p className="text-sm text-muted-foreground">Recipient Will Receive (Quick Claim)</p>
               <p className="text-2xl font-bold text-hop-700 dark:text-hop-400">
-                ~{lamportsToSol(doubleHopNote.fundsLocation === "pool" 
-                  ? calculateRecipientReceives(doubleHopNote.amount, "quick").recipientReceives 
-                  : doubleHopNote.amount
-                ).toFixed(4)} SOL
+                ~{lamportsToSol(doubleHopNote.amount).toFixed(4)} SOL
               </p>
               <p className="text-xs text-muted-foreground mt-1">
-                Pool balance: {lamportsToSol(doubleHopNote.amount).toFixed(4)} SOL
+                Claimable balance: {lamportsToSol(doubleHopNote.amount).toFixed(4)} SOL
               </p>
             </div>
 

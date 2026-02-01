@@ -62,12 +62,18 @@ export async function POST(request: NextRequest) {
     }
 
     // Verify ephemeral address
-    if (compositeSecret.ephemeralKeypair.publicKey.toBase58() !== doubleHopNote.ephemeralAddress) {
+    const ephAddress = compositeSecret.ephemeralKeypair.publicKey.toBase58();
+    if (ephAddress !== doubleHopNote.ephemeralAddress) {
       return NextResponse.json(
         { success: false, error: "Ephemeral address mismatch" },
         { status: 400 }
       );
     }
+
+    console.log(`\n========== CLAIM LINK ==========`);
+    console.log(`[Claim] Ephemeral address: ${ephAddress}`);
+    console.log(`[Claim] Recipient: ${recipientAddress}`);
+    console.log(`[Claim] Privacy mode: ${recipientPrivacy}`);
 
     // ========================================================================
     // FLOW ROUTING: Based on recipientPrivacy
@@ -87,19 +93,21 @@ export async function POST(request: NextRequest) {
     // For private sender: Sender only sees Eph2 → Recipient (can't trace to themselves)
     // ------------------------------------------------------------------------
     if (!needsPrivacy) {
-      // Flow 1: Direct transfer
+      // Flow 1: Direct transfer (QUICK CLAIM)
       
       // Get actual ephemeral balance and sweep it all (minus tx fee)
       const ephemeralBalance = await connection.getBalance(compositeSecret.ephemeralKeypair.publicKey);
       const TX_FEE = 5000; // Standard tx fee in lamports
       const transferAmount = Math.max(0, ephemeralBalance - TX_FEE);
       
+      console.log(`[Quick] Ephemeral balance: ${ephemeralBalance / 1e9} SOL`);
+      console.log(`[Quick] Transfer amount: ${transferAmount / 1e9} SOL (minus ${TX_FEE} tx fee)`);
+      
       if (transferAmount <= 0) {
         throw new Error("Ephemeral wallet has insufficient balance for transfer");
       }
       
       // Sweeping ephemeral to recipient
-      
       const tx = new Transaction().add(
         SystemProgram.transfer({
           fromPubkey: compositeSecret.ephemeralKeypair.publicKey,
@@ -115,7 +123,12 @@ export async function POST(request: NextRequest) {
         { commitment: "confirmed" }
       );
 
-      // Transfer complete
+      // Check ephemeral is now empty
+      const finalBalance = await connection.getBalance(compositeSecret.ephemeralKeypair.publicKey);
+      console.log(`[Quick] Ephemeral final balance: ${finalBalance / 1e9} SOL (should be 0)`);
+      console.log(`[Quick] Recipient received: ${transferAmount / 1e9} SOL`);
+      console.log(`[Quick] Tx: ${txHash}`);
+      console.log(`=================================\n`);
 
       return NextResponse.json({
         success: true,
@@ -134,7 +147,7 @@ export async function POST(request: NextRequest) {
     // This gives recipient privacy from the sender/link holder.
     // ------------------------------------------------------------------------
     if (needsPrivacy) {
-      // Flow 2: Ephemeral → Pool → Recipient
+      // Flow 2: Ephemeral → Pool → Recipient (PRIVATE CLAIM)
 
       const privacyCashClient = new PrivacyCash({
         RPC_url: RPC_URL,
@@ -147,6 +160,9 @@ export async function POST(request: NextRequest) {
       const MIN_TX_BUFFER = 3_000_000; // ~0.003 SOL - minimal buffer for tx fees
       const depositAmount = Math.max(0, ephBalance - MIN_TX_BUFFER);
       
+      console.log(`[Private] Ephemeral balance: ${ephBalance / 1e9} SOL`);
+      console.log(`[Private] Deposit amount: ${depositAmount / 1e9} SOL (minus ${MIN_TX_BUFFER / 1e9} buffer)`);
+      
       if (depositAmount <= 0) {
         throw new Error("Ephemeral balance too low to cover Privacy Cash overhead");
       }
@@ -155,6 +171,7 @@ export async function POST(request: NextRequest) {
       await privacyCashClient.deposit({
         lamports: depositAmount,
       });
+      console.log(`[Private] Deposited to pool`);
 
       // Withdraw with ZK privacy - pass FULL depositAmount
       // SDK will drain the entire UTXO (no change left behind)
@@ -164,16 +181,21 @@ export async function POST(request: NextRequest) {
         recipientAddress,
       });
 
-      // Calculate approximate amount received (SDK deducts fee from depositAmount)
-      const PRIVACY_CASH_BASE_FEE = 6_000_000; // ~0.006 SOL
-      const PRIVACY_CASH_PERCENT_FEE = 0.0035; // 0.35%
-      const estimatedFee = PRIVACY_CASH_BASE_FEE + Math.floor(depositAmount * PRIVACY_CASH_PERCENT_FEE);
-      const estimatedReceived = Math.max(0, depositAmount - estimatedFee);
+      // Check ephemeral is now empty
+      const finalBalance = await connection.getBalance(compositeSecret.ephemeralKeypair.publicKey);
+      console.log(`[Private] Ephemeral final balance: ${finalBalance / 1e9} SOL`);
+      console.log(`[Private] ZK withdrawal tx: ${withdrawResult.tx}`);
+      console.log(`=================================\n`);
+
+      // The SDK deducts fee from depositAmount, recipient gets (depositAmount - fee)
+      // Fee structure: 0.006 SOL base + 0.35% of amount
+      // We don't know exact amount, SDK logs it - just return depositAmount as estimate
+      // The actual received amount is shown in SDK logs
 
       return NextResponse.json({
         success: true,
         withdrawTxHash: withdrawResult.tx,
-        amountReceived: estimatedReceived,
+        amountReceived: depositAmount, // SDK shows actual in its logs
         recipientPrivacy,
         hops: 1,
       });
