@@ -209,6 +209,36 @@ export async function POST(request: NextRequest) {
     });
   } catch (error) {
     console.error("[API] Create link error:", error);
+    
+    // Try to sweep any remaining funds back to sender on failure
+    // This requires we have the composite secret and sender address
+    const body = await request.clone().json().catch(() => ({}));
+    if (body.compositeSecret && body.senderAddress) {
+      try {
+        const { decodeCompositeSecret } = await import("@/lib/privacy/privacy-cash-adapter");
+        const secret = decodeCompositeSecret(body.compositeSecret);
+        if (secret) {
+          const conn = new Connection(RPC_URL, "confirmed");
+          const balance = await conn.getBalance(secret.ephemeralKeypair.publicKey);
+          const TX_FEE = 5000;
+          if (balance > TX_FEE + 1000) {
+            const { Transaction, SystemProgram, PublicKey, sendAndConfirmTransaction } = await import("@solana/web3.js");
+            const sweepTx = new Transaction().add(
+              SystemProgram.transfer({
+                fromPubkey: secret.ephemeralKeypair.publicKey,
+                toPubkey: new PublicKey(body.senderAddress),
+                lamports: balance - TX_FEE,
+              })
+            );
+            await sendAndConfirmTransaction(conn, sweepTx, [secret.ephemeralKeypair], { commitment: "confirmed" });
+            console.log(`[API] Error recovery: swept ${(balance - TX_FEE) / 1e9} SOL back to sender`);
+          }
+        }
+      } catch (sweepErr) {
+        console.warn("[API] Error recovery sweep failed:", sweepErr);
+      }
+    }
+    
     return NextResponse.json(
       {
         success: false,
