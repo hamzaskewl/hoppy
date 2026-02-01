@@ -256,7 +256,7 @@ export function CreateLinkForm() {
         poolAmount = calculateDepositForRecipientAmount(baseRecipientAmount);
         
         // Private sender: SDK needs ~0.004 SOL for tx fee + UTXO rent
-        const SDK_OVERHEAD = 5_000_000; // lamports (~0.005 SOL) - covers rent for temp accounts
+        const SDK_OVERHEAD = 8_000_000; // lamports (~0.008 SOL) - covers rent for temp accounts
         senderPays = poolAmount + SDK_OVERHEAD;
         senderFee = senderPays - baseRecipientAmount;
       } else {
@@ -273,8 +273,8 @@ export function CreateLinkForm() {
       poolAmount = baseRecipientAmount;
       
       if (inPool) {
-        // Private sender, no sponsor: still pay SDK overhead (~0.002 SOL)
-        const SDK_OVERHEAD = 5_000_000;
+        // Private sender, no sponsor: still pay SDK overhead (~0.008 SOL)
+        const SDK_OVERHEAD = 8_000_000;
         senderPays = baseRecipientAmount + SDK_OVERHEAD;
         senderFee = SDK_OVERHEAD;
       } else {
@@ -400,8 +400,8 @@ export function CreateLinkForm() {
       setDepositProgress("Preparing transaction...");
       
       // 2. Create funding transaction (sender → ephemeral)
-      // For private: add ~0.005 SOL for SDK overhead (tx fees + temp account rent)
-      const SDK_OVERHEAD = 5_000_000; // ~0.005 SOL - covers rent for temp accounts
+      // For private: add ~0.008 SOL for SDK overhead (tx fees + temp account rent)
+      const SDK_OVERHEAD = 8_000_000; // ~0.008 SOL - covers rent for temp accounts
       const fundingAmount = senderPrivacy === "private" 
         ? costBreakdown.poolAmount + SDK_OVERHEAD 
         : costBreakdown.poolAmount;
@@ -481,7 +481,16 @@ export function CreateLinkForm() {
           ephemeralAddress,
           userWallet: solanaAddress,
         });
-        throw new Error("API error - your funds may be in the ephemeral wallet. Check recovery section below.");
+        
+        // ALWAYS log recovery info to console
+        console.error("=== RECOVERY INFO (API CRASHED) ===");
+        console.error("Ephemeral Address:", ephemeralAddress);
+        console.error("Ephemeral Private Key (Base58):", ephemeralSecretBase58);
+        console.error("Your Wallet:", solanaAddress);
+        console.error("Import the private key into Phantom to recover funds");
+        console.error("===================================");
+        
+        throw new Error("API error - your funds may be in the ephemeral wallet. Check recovery section below or console.");
       }
 
       if (!result.success || !result.note) {
@@ -492,6 +501,14 @@ export function CreateLinkForm() {
           ephemeralAddress,
           userWallet: solanaAddress,
         });
+        
+        // ALWAYS log recovery info to console for debugging
+        console.error("=== RECOVERY INFO (SAVE THIS) ===");
+        console.error("Ephemeral Address:", ephemeralAddress);
+        console.error("Ephemeral Private Key (Base58):", ephemeralSecretBase58);
+        console.error("Your Wallet:", solanaAddress);
+        console.error("Import the private key into Phantom to recover funds");
+        console.error("=================================");
         
         // Check if API returned recovery info (funds may have been auto-swept)
         if (result.recoverySuccess) {

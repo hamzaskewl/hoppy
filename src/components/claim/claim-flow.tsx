@@ -706,32 +706,10 @@ export function ClaimFlow() {
             <CardContent className="py-8">
               <ShieldingAnimation status="error" message={state.error || undefined} />
 
-              {reclaimSuccess && (
-                <div className="mt-4 p-3 rounded-xl bg-green-500/10 border border-green-500/30 text-green-700 dark:text-green-400 text-sm">
-                  {reclaimSuccess}
-                </div>
-              )}
-
-              {state.note && (
-                <div className="mt-4 p-4 rounded-xl bg-amber-500/10 border border-amber-500/30 space-y-3">
-                  <p className="text-sm font-medium text-amber-700 dark:text-amber-400">
-                    Recovery options
-                  </p>
-                  <div className="flex flex-wrap gap-2">
-                    <Button variant="outline" onClick={() => handleCopyText(state.note!.secret)}>
-                      Copy recovery secret
-                    </Button>
-                    {state.note.fundsLocation === "ephemeral" && (
-                      <Button onClick={handleReclaimEphemeral} disabled={isReclaiming}>
-                        {isReclaiming ? "Reclaiming..." : "Reclaim from ephemeral"}
-                      </Button>
-                    )}
-                  </div>
-                  <p className="text-xs text-muted-foreground">
-                    If funds are in the pool, retrying the claim is the safest recovery path.
-                  </p>
-                </div>
-              )}
+              {/* NOTE: Recovery options removed for security - only sender has recovery access */}
+              <p className="mt-4 text-sm text-muted-foreground text-center">
+                If you received this link and it&apos;s not working, please contact the sender.
+              </p>
               
               <div className="mt-6 flex gap-3 justify-center">
                 <Button

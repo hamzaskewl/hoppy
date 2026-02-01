@@ -119,7 +119,7 @@ export async function POST(request: NextRequest) {
       // SDK needs: tx fees + rent-exempt minimums for temporary accounts created during deposit
       // Privacy Cash creates multiple temp accounts that need ~0.00089 SOL each
       // Using 5M lamports (~0.005 SOL) to reliably cover all cases
-      const SDK_OVERHEAD = 5_000_000; // ~0.005 SOL - leaves ~$0.50-1.00 behind but always works
+      const SDK_OVERHEAD = 8_000_000; // ~0.008 SOL - covers rent for temp accounts during deposit
       const depositAmount = Math.max(0, ephemeralBalance - SDK_OVERHEAD);
       
       if (depositAmount <= 0) {

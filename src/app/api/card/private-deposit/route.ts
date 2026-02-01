@@ -52,7 +52,9 @@ export async function POST(request: NextRequest) {
     const TX_FEE = 5_000;
     const WITHDRAWAL_FLAT_FEE = 6_000_000; // 0.006 SOL
     const WITHDRAWAL_PERCENT = 0.0035; // 0.35%
-    const SDK_OVERHEAD = 5_000_000; // For temp accounts during deposit
+    // Privacy Cash needs ~0.007-0.008 SOL for temp accounts during deposit/withdraw
+    // Using 8M lamports (0.008 SOL) as buffer to be safe
+    const SDK_OVERHEAD = 8_000_000;
     
     // Calculate how much to withdraw so Starpay receives exactly amountLamports after fees
     // If we withdraw W, Starpay gets: W - (FLAT_FEE + W * PERCENT) = W * (1 - PERCENT) - FLAT_FEE

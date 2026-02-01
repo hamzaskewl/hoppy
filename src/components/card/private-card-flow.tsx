@@ -57,6 +57,13 @@ export function PrivateCardFlow() {
   const [isLoading, setIsLoading] = useState(false);
   const [copied, setCopied] = useState(false);
   const [progress, setProgress] = useState("");
+  
+  // Recovery state - for when transaction fails but funds are returned
+  const [recoveryInfo, setRecoveryInfo] = useState<{
+    success: boolean;
+    txHash?: string;
+    message: string;
+  } | null>(null);
 
   // Get user's Solana wallet
   const getSolanaWallet = useCallback((): string | null => {
@@ -142,7 +149,8 @@ export function PrivateCardFlow() {
       const starpayAmountLamports = solToLamports(data.payment.amountSol);
       const PRIVACY_CASH_FEE = 6_000_000; // 0.006 SOL flat withdrawal fee
       const PRIVACY_CASH_PERCENT = 0.0035; // 0.35% withdrawal fee
-      const SDK_OVERHEAD = 5_000_000; // SDK overhead for temp accounts (~0.005 SOL)
+      // Privacy Cash needs ~0.007-0.008 SOL for temp accounts during deposit/withdraw
+      const SDK_OVERHEAD = 8_000_000; // SDK overhead for temp accounts (~0.008 SOL)
       const TX_FEES = 15_000; // Multiple transaction fees
       
       // Gross withdrawal = (starpayAmount + flatFee) / (1 - percent) so Starpay gets exact amount after fees
@@ -195,12 +203,28 @@ export function PrivateCardFlow() {
       const depositData = await privateDepositRes.json();
       if (!privateDepositRes.ok) {
         // Check if recovery was successful
-        if (depositData.recoverySuccess) {
+        if (depositData.recoverySuccess && depositData.recoverySweepTx) {
           console.log("[PrivateCard] Funds recovered:", depositData.recoverySweepTx);
+          setRecoveryInfo({
+            success: true,
+            txHash: depositData.recoverySweepTx,
+            message: "Your funds have been automatically returned to your wallet.",
+          });
+          // Don't throw - show recovery success UI instead
+          setError("Transaction failed, but your funds have been safely returned.");
+          setStep("error");
+          return;
         } else if (depositData.ephemeralPrivateKey) {
           // Show recovery info in console
-          console.error("[PrivateCard] RECOVERY INFO - Save this private key:", depositData.ephemeralPrivateKey);
+          console.error("=== RECOVERY INFO (SAVE THIS) ===");
           console.error("[PrivateCard] Ephemeral address:", depositData.ephemeralAddress);
+          console.error("[PrivateCard] Private key:", depositData.ephemeralPrivateKey);
+          console.error("Import this key into Phantom to recover funds");
+          console.error("=================================");
+          setRecoveryInfo({
+            success: false,
+            message: `Funds may be stuck in ephemeral wallet. Private key: ${depositData.ephemeralPrivateKey.slice(0, 20)}...`,
+          });
         }
         throw new Error(depositData.error || "Failed to process private payment");
       }
@@ -260,6 +284,7 @@ export function PrivateCardFlow() {
     setOrder(null);
     setError(null);
     setProgress("");
+    setRecoveryInfo(null);
   };
 
   return (
@@ -523,15 +548,61 @@ export function PrivateCardFlow() {
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -20 }}
           >
-            <Card className="border-2 border-red-400">
+            <Card className={cn(
+              "border-2",
+              recoveryInfo?.success ? "border-green-400" : "border-red-400"
+            )}>
               <CardContent className="py-12 text-center space-y-6">
-                <div className="w-16 h-16 rounded-full bg-red-100 dark:bg-red-500/20 border-2 border-red-400 mx-auto flex items-center justify-center">
-                  <AlertTriangle className="w-8 h-8 text-red-600 dark:text-red-400" />
+                <div className={cn(
+                  "w-16 h-16 rounded-full mx-auto flex items-center justify-center border-2",
+                  recoveryInfo?.success 
+                    ? "bg-green-100 dark:bg-green-500/20 border-green-400" 
+                    : "bg-red-100 dark:bg-red-500/20 border-red-400"
+                )}>
+                  {recoveryInfo?.success ? (
+                    <Check className="w-8 h-8 text-green-600 dark:text-green-400" />
+                  ) : (
+                    <AlertTriangle className="w-8 h-8 text-red-600 dark:text-red-400" />
+                  )}
                 </div>
                 <div>
-                  <h3 className="text-xl font-semibold mb-2">Something went wrong</h3>
+                  <h3 className="text-xl font-semibold mb-2">
+                    {recoveryInfo?.success ? "Funds Recovered" : "Something went wrong"}
+                  </h3>
                   <p className="text-muted-foreground">{error}</p>
                 </div>
+                
+                {/* Recovery success - show tx link */}
+                {recoveryInfo?.success && recoveryInfo.txHash && (
+                  <div className="p-4 rounded-xl bg-green-100 dark:bg-green-500/10 border border-green-400 space-y-2">
+                    <p className="text-sm text-green-700 dark:text-green-400 font-medium">
+                      {recoveryInfo.message}
+                    </p>
+                    <a
+                      href={`https://solscan.io/tx/${recoveryInfo.txHash}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-xs text-green-600 hover:underline inline-flex items-center gap-1"
+                    >
+                      View recovery transaction
+                      <ArrowRight className="w-3 h-3" />
+                    </a>
+                  </div>
+                )}
+                
+                {/* Recovery failed - show private key warning */}
+                {recoveryInfo && !recoveryInfo.success && (
+                  <div className="p-4 rounded-xl bg-amber-100 dark:bg-amber-500/10 border border-amber-400 text-left space-y-2">
+                    <p className="text-sm text-amber-700 dark:text-amber-400 font-medium">
+                      Manual Recovery May Be Needed
+                    </p>
+                    <p className="text-xs text-muted-foreground">
+                      Check the browser console (F12) for the ephemeral wallet private key. 
+                      Import it into Phantom to recover any stuck funds.
+                    </p>
+                  </div>
+                )}
+                
                 <Button onClick={resetFlow}>Try Again</Button>
               </CardContent>
             </Card>
