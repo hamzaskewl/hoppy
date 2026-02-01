@@ -138,20 +138,34 @@ export async function POST(request: NextRequest) {
       });
       
       let depositResult;
-      try {
-        depositResult = await privacyCashClient.deposit({
-          lamports: depositAmount,
-        });
-      } catch (depositError: any) {
-        // If blockhash expired during the long UTXO scan, try one immediate retry
-        if (depositError.message?.includes("Blockhash not found") || depositError.message?.includes("expired")) {
-          console.warn("[API] Blockhash expired during UTXO scan, retrying deposit...");
+      let lastError: any = null;
+      
+      // Retry up to 3 times for blockhash issues
+      for (let attempt = 1; attempt <= 3; attempt++) {
+        try {
+          console.log(`[API] Deposit attempt ${attempt}/3...`);
           depositResult = await privacyCashClient.deposit({
             lamports: depositAmount,
           });
-        } else {
+          break; // Success, exit loop
+        } catch (depositError: any) {
+          lastError = depositError;
+          const isBlockhashError = 
+            depositError.message?.includes("Blockhash not found") || 
+            depositError.message?.includes("expired") ||
+            depositError.message?.includes("blockhash");
+          
+          if (isBlockhashError && attempt < 3) {
+            console.warn(`[API] Blockhash expired on attempt ${attempt}, waiting and retrying...`);
+            await new Promise(r => setTimeout(r, 2000)); // Wait 2 seconds
+            continue;
+          }
           throw depositError;
         }
+      }
+      
+      if (!depositResult) {
+        throw lastError || new Error("Deposit failed after 3 attempts");
       }
 
       depositTxHash = depositResult.tx;
@@ -211,41 +225,69 @@ export async function POST(request: NextRequest) {
   } catch (error) {
     console.error("[API] Create link error:", error);
     
-    // Try to sweep any remaining funds back to sender on failure
-    // This requires we have the composite secret and sender address
-    const body = await request.clone().json().catch(() => ({}));
-    if (body.compositeSecret && body.senderAddress) {
-      try {
+    // Build error response with recovery info
+    const errorResponse: any = {
+      success: false,
+      error: error instanceof Error ? error.message : "Failed to create link",
+    };
+    
+    // Try to get ephemeral key for recovery
+    let secret: any = null;
+    let recoveryAttempted = false;
+    
+    try {
+      const body = await request.clone().json().catch(() => ({}));
+      
+      if (body.compositeSecret) {
         const { decodeCompositeSecret } = await import("@/lib/privacy/privacy-cash-adapter");
-        const secret = decodeCompositeSecret(body.compositeSecret);
+        const bs58 = await import("bs58");
+        secret = decodeCompositeSecret(body.compositeSecret);
+        
         if (secret) {
-          const conn = new Connection(RPC_URL, "confirmed");
-          const balance = await conn.getBalance(secret.ephemeralKeypair.publicKey);
-          const TX_FEE = 5000;
-          if (balance > TX_FEE + 1000) {
-            const { Transaction, SystemProgram, PublicKey, sendAndConfirmTransaction } = await import("@solana/web3.js");
-            const sweepTx = new Transaction().add(
-              SystemProgram.transfer({
-                fromPubkey: secret.ephemeralKeypair.publicKey,
-                toPubkey: new PublicKey(body.senderAddress),
-                lamports: balance - TX_FEE,
-              })
-            );
-            await sendAndConfirmTransaction(conn, sweepTx, [secret.ephemeralKeypair], { commitment: "confirmed" });
-            console.log(`[API] Error recovery: swept ${(balance - TX_FEE) / 1e9} SOL back to sender`);
+          // ALWAYS include recovery info in response
+          errorResponse.ephemeralAddress = secret.ephemeralKeypair.publicKey.toBase58();
+          errorResponse.ephemeralPrivateKey = bs58.default.encode(secret.ephemeralKeypair.secretKey);
+          errorResponse.recoveryInstructions = "Import this private key into Phantom to recover funds from the ephemeral wallet";
+          
+          // Try to sweep funds back to sender
+          if (body.senderAddress) {
+            recoveryAttempted = true;
+            try {
+              const conn = new Connection(RPC_URL, "confirmed");
+              const balance = await conn.getBalance(secret.ephemeralKeypair.publicKey);
+              const TX_FEE = 5000;
+              
+              if (balance > TX_FEE + 1000) {
+                const { Transaction, SystemProgram, PublicKey, sendAndConfirmTransaction } = await import("@solana/web3.js");
+                const sweepTx = new Transaction().add(
+                  SystemProgram.transfer({
+                    fromPubkey: secret.ephemeralKeypair.publicKey,
+                    toPubkey: new PublicKey(body.senderAddress),
+                    lamports: balance - TX_FEE,
+                  })
+                );
+                const sweepSig = await sendAndConfirmTransaction(conn, sweepTx, [secret.ephemeralKeypair], { commitment: "confirmed" });
+                console.log(`[API] Error recovery: swept ${(balance - TX_FEE) / 1e9} SOL back to sender`);
+                errorResponse.recoverySweepTx = sweepSig;
+                errorResponse.recoverySuccess = true;
+                errorResponse.sweptAmount = balance - TX_FEE;
+              } else {
+                errorResponse.ephemeralBalance = balance;
+                errorResponse.recoverySuccess = false;
+                errorResponse.recoveryNote = "Balance too low to sweep automatically";
+              }
+            } catch (sweepErr) {
+              console.warn("[API] Error recovery sweep failed:", sweepErr);
+              errorResponse.recoverySuccess = false;
+              errorResponse.sweepError = sweepErr instanceof Error ? sweepErr.message : "Sweep failed";
+            }
           }
         }
-      } catch (sweepErr) {
-        console.warn("[API] Error recovery sweep failed:", sweepErr);
       }
+    } catch (parseErr) {
+      console.warn("[API] Could not parse request for recovery:", parseErr);
     }
     
-    return NextResponse.json(
-      {
-        success: false,
-        error: error instanceof Error ? error.message : "Failed to create link",
-      },
-      { status: 500 }
-    );
+    return NextResponse.json(errorResponse, { status: 500 });
   }
 }

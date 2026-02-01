@@ -469,7 +469,20 @@ export function CreateLinkForm() {
         }),
       });
 
-      const result = await response.json();
+      let result;
+      try {
+        result = await response.json();
+      } catch (jsonErr) {
+        console.error("[Create] Failed to parse API response:", jsonErr);
+        // Store recovery info since API crashed
+        const ephemeralSecretBase58 = bs58.encode(compositeSecret.ephemeralKeypair.secretKey);
+        setFailedDepositRecovery({
+          ephemeralSecretKeyBase58: ephemeralSecretBase58,
+          ephemeralAddress,
+          userWallet: solanaAddress,
+        });
+        throw new Error("API error - your funds may be in the ephemeral wallet. Check recovery section below.");
+      }
 
       if (!result.success || !result.note) {
         // Store recovery info so user can reclaim SOL from ephemeral if they want
@@ -479,6 +492,15 @@ export function CreateLinkForm() {
           ephemeralAddress,
           userWallet: solanaAddress,
         });
+        
+        // Check if API returned recovery info (funds may have been auto-swept)
+        if (result.recoverySuccess) {
+          console.log("[Create] API auto-recovered funds:", result.recoverySweepTx);
+          throw new Error("Transaction failed but funds were automatically returned to your wallet.");
+        } else if (result.ephemeralPrivateKey) {
+          console.log("[Create] Recovery key from API:", result.ephemeralPrivateKey);
+        }
+        
         throw new Error(result.error || "Failed to create payment link");
       }
       
