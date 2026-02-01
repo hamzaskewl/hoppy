@@ -158,6 +158,28 @@ export async function POST(request: NextRequest) {
       // Update amount to what was actually deposited
       amount = depositAmount;
       console.log(`[API] Deposited to pool: ${depositTxHash}`);
+      
+      // Sweep any remainder back to sender if possible
+      if (senderAddress) {
+        try {
+          const remainingBalance = await connection.getBalance(compositeSecret.ephemeralKeypair.publicKey);
+          const TX_FEE = 5000;
+          if (remainingBalance > TX_FEE + 1000) { // Only sweep if worth it (> ~$0.001)
+            const { Transaction, SystemProgram, PublicKey, sendAndConfirmTransaction } = await import("@solana/web3.js");
+            const sweepTx = new Transaction().add(
+              SystemProgram.transfer({
+                fromPubkey: compositeSecret.ephemeralKeypair.publicKey,
+                toPubkey: new PublicKey(senderAddress),
+                lamports: remainingBalance - TX_FEE,
+              })
+            );
+            await sendAndConfirmTransaction(connection, sweepTx, [compositeSecret.ephemeralKeypair], { commitment: "confirmed" });
+            console.log(`[API] Swept ${(remainingBalance - TX_FEE) / 1e9} SOL back to sender`);
+          }
+        } catch (sweepError) {
+          console.warn("[API] Failed to sweep remainder (non-critical):", sweepError);
+        }
+      }
     } else {
       // Basic sender: leave funds in ephemeral (no pool needed yet)
       // Store actual ephemeral balance as the amount (will be swept on claim)
