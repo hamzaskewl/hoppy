@@ -143,20 +143,10 @@ export async function POST(request: NextRequest) {
       const MIN_TX_BUFFER = 3_000_000; // ~0.003 SOL
       const depositAmount = Math.max(0, ephemeralBalance - MIN_TX_BUFFER);
       
-      if (depositAmount <= 0) {
-        return NextResponse.json(
-          { success: false, error: "Balance too low to cover Privacy Cash overhead" },
-          { status: 400 }
-        );
-      }
+      // Privacy Cash fee: ~0.006 SOL base + 0.35% = minimum ~0.007 SOL for small amounts
+      const MIN_AMOUNT_FOR_PRIVATE = 10_000_000; // 0.01 SOL minimum
       
-      // Privacy Cash fee structure: 0.006 SOL base + 0.35% of amount
-      const PRIVACY_CASH_BASE_FEE = 6_000_000; // 0.006 SOL in lamports
-      const PRIVACY_CASH_PERCENT_FEE = 0.0035; // 0.35%
-      const withdrawalFee = PRIVACY_CASH_BASE_FEE + Math.floor(depositAmount * PRIVACY_CASH_PERCENT_FEE);
-      
-      // Ensure we have enough for the withdrawal fee
-      if (depositAmount <= withdrawalFee + 1_000_000) {
+      if (depositAmount <= MIN_AMOUNT_FOR_PRIVATE) {
         return NextResponse.json(
           { success: false, error: "Amount too small - need at least 0.01 SOL for private transfer" },
           { status: 400 }
@@ -210,13 +200,17 @@ export async function POST(request: NextRequest) {
       // Step 4: ZK Withdrawal from Pool → Eph2
       // This is what breaks the on-chain link!
       // On-chain, it will show: Pool → Eph2 (no trace to Eph1 or Sender)
-      const withdrawAmount = depositAmount - withdrawalFee;
+      // 
+      // IMPORTANT: Pass the FULL depositAmount to withdraw. The SDK will:
+      // 1. Drain the entire UTXO (no change left behind)
+      // 2. Deduct its fee automatically
+      // 3. Send (depositAmount - fee) to Eph2
       
       let withdrawResult;
       for (let attempt = 1; attempt <= 3; attempt++) {
         try {
           withdrawResult = await eph1Client.withdraw({
-            lamports: withdrawAmount,
+            lamports: depositAmount, // Full amount - SDK handles fee deduction
             recipientAddress: eph2Address,
           });
           break;
@@ -242,8 +236,13 @@ export async function POST(request: NextRequest) {
       withdrawTxHash = withdrawResult.tx;
       
       // Funds are now in Eph2 (funded by the pool via ZK - untraceable!)
+      // Get actual Eph2 balance to know what recipient can claim
+      // Wait a moment for the withdrawal to be confirmed
+      await new Promise(r => setTimeout(r, 2000));
+      const eph2Balance = await connection.getBalance(eph2Secret.ephemeralKeypair.publicKey);
+      
       fundsLocation = "ephemeral";
-      amount = withdrawAmount; // What Eph2 actually received
+      amount = eph2Balance; // Actual amount Eph2 received (after SDK fee deduction)
       
       // Use Eph2's secret for the link (NOT Eph1!)
       finalSecret = eph2Secret.full;

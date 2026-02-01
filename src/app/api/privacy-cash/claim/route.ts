@@ -23,7 +23,6 @@ import { Connection, Transaction, SystemProgram, sendAndConfirmTransaction } fro
 import { PrivacyCash } from "privacycash";
 import {
   decodeCompositeSecret,
-  calculateRecipientReceives,
   type DoubleHopNote,
   type RecipientPrivacy,
 } from "@/lib/privacy/privacy-cash-adapter";
@@ -152,23 +151,29 @@ export async function POST(request: NextRequest) {
         throw new Error("Ephemeral balance too low to cover Privacy Cash overhead");
       }
       
-      // First deposit to pool
+      // First deposit to pool (free, no fee)
       await privacyCashClient.deposit({
         lamports: depositAmount,
       });
 
-      // Then withdraw with ZK privacy (withdraw what we deposited)
+      // Withdraw with ZK privacy - pass FULL depositAmount
+      // SDK will drain the entire UTXO (no change left behind)
+      // and deduct its fee automatically (~0.006 SOL + 0.35%)
       const withdrawResult = await privacyCashClient.withdraw({
         lamports: depositAmount,
         recipientAddress,
       });
 
-      const receiveInfo = calculateRecipientReceives(depositAmount, "quick");
+      // Calculate approximate amount received (SDK deducts fee from depositAmount)
+      const PRIVACY_CASH_BASE_FEE = 6_000_000; // ~0.006 SOL
+      const PRIVACY_CASH_PERCENT_FEE = 0.0035; // 0.35%
+      const estimatedFee = PRIVACY_CASH_BASE_FEE + Math.floor(depositAmount * PRIVACY_CASH_PERCENT_FEE);
+      const estimatedReceived = Math.max(0, depositAmount - estimatedFee);
 
       return NextResponse.json({
         success: true,
         withdrawTxHash: withdrawResult.tx,
-        amountReceived: receiveInfo.recipientReceives,
+        amountReceived: estimatedReceived,
         recipientPrivacy,
         hops: 1,
       });
