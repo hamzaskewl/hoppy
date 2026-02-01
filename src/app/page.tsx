@@ -70,12 +70,12 @@ export default function Home() {
       </div>
 
       {/* Carrot Banner - Decorative divider */}
-      <div className="relative w-full h-32 md:h-40 overflow-hidden">
+      <div className="relative w-full h-32 md:h-40 overflow-hidden z-10 bg-[#c9a97c]">
         <Image
           src="/carrotbanner.png"
           alt=""
           fill
-          className="object-cover object-top"
+          className="object-cover object-center"
           priority
         />
       </div>
@@ -104,43 +104,25 @@ export default function Home() {
         </div>
       </div>
 
-      {/* Virtual Cards Section - With hoppy bunny image */}
-      <div className="py-12 px-4 bg-secondary">
-        <div className="max-w-3xl mx-auto">
-          <div className="flex items-center gap-6 md:gap-8">
-            {/* Hoppy CC Image - Circular */}
-            <div className="flex-shrink-0">
-              <div className="w-24 h-24 md:w-32 md:h-32 rounded-full overflow-hidden border-4 border-hop-400 shadow-lg bg-[#1a1a1a]">
-                <Image
-                  src="/hoppycc.png"
-                  alt="Hoppy with credit card"
-                  width={128}
-                  height={128}
-                  className="object-cover w-full h-full"
-                />
-              </div>
-            </div>
-            
-            {/* Text Content */}
-            <div className="flex-1 space-y-3">
-              <div className="inline-flex items-center gap-2 px-2 py-0.5 rounded-full bg-honey-200 dark:bg-honey-900/30 text-xs text-honey-700 dark:text-honey-400 font-medium">
-                Powered by Starpay
-              </div>
-              <h2 className="text-xl md:text-2xl font-semibold">
-                Private Virtual Cards
-              </h2>
-              <p className="text-sm text-muted-foreground">
-                Instant virtual Visa/Mastercard. Pay with SOL through Privacy Cash - no KYC, no trace.
-              </p>
-              <Link
-                href="/card"
-                className="inline-flex items-center justify-center gap-2 px-4 py-2 rounded-xl bg-honey-500 hover:bg-honey-600 text-white font-semibold text-sm transition-all hover:scale-105 border-2 border-honey-600"
-              >
-                <CreditCard className="w-4 h-4" />
-                Get a Virtual Card
-              </Link>
-            </div>
+      {/* Virtual Cards Section - Simple */}
+      <div className="py-16 px-4 bg-secondary">
+        <div className="max-w-3xl mx-auto text-center space-y-6">
+          <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-honey-200 dark:bg-honey-900/30 text-xs text-honey-700 dark:text-honey-400 font-medium">
+            Powered by Starpay
           </div>
+          <h2 className="text-2xl md:text-3xl font-semibold">
+            Private Virtual Cards
+          </h2>
+          <p className="text-muted-foreground max-w-md mx-auto">
+            Instant virtual Visa/Mastercard. Pay with SOL, no KYC required.
+          </p>
+          <Link
+            href="/card"
+            className="inline-flex items-center justify-center gap-2 px-6 py-3 rounded-xl bg-honey-500 hover:bg-honey-600 text-white font-semibold transition-all hover:scale-105 border-2 border-honey-600"
+          >
+            <CreditCard className="w-4 h-4" />
+            Get a Virtual Card
+          </Link>
         </div>
       </div>
 
