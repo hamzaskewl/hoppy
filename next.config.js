@@ -1,6 +1,6 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  serverExternalPackages: ['privacycash', '@solana/web3.js', '@lightprotocol/hasher.rs'],
+  serverExternalPackages: ['privacycash', '@solana/web3.js', '@lightprotocol/hasher.rs', 'imapflow', 'mailparser'],
   webpack: (config, { isServer }) => {
     config.resolve.fallback = {
       ...config.resolve.fallback,
