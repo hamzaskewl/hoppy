@@ -5,7 +5,7 @@ import dynamic from "next/dynamic";
 import Image from "next/image";
 import { NavHeader } from "@/components/nav-header";
 import { CardPurchaseFlow } from "@/components/card/card-purchase-flow";
-import { Shield, Mail } from "lucide-react";
+import { Shield, Mail, AlertTriangle } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 // Dynamic import for Privacy Cash component (server-side libs)
@@ -45,6 +45,21 @@ export default function CardPage() {
 
       <main className="flex-1 py-12 px-4">
         <div className="max-w-7xl mx-auto">
+          {/* Paused Warning Banner */}
+          <div className="max-w-2xl mx-auto mb-6">
+            <div className="rounded-xl bg-amber-50 dark:bg-amber-400/50 border border-amber-300 dark:border-amber-400 p-4 flex items-start gap-3">
+              <AlertTriangle className="w-5 h-5 text-amber-600 dark:text-amber-900 flex-shrink-0 mt-0.5" />
+              <div className="text-sm">
+                <p className="font-semibold text-amber-800 dark:text-gray-900">
+                  Virtual Cards Temporarily Paused
+                </p>
+                <p className="text-amber-700 dark:text-gray-800 mt-1">
+                  Starpay has stopped issuing cards during the hackathon and we&apos;ve paused our implementation. We&apos;ll bring this feature back once Starpay resumes their services. Check back soon!
+                </p>
+              </div>
+            </div>
+          </div>
+
           {/* Header - card style with hoppy image */}
           <div className="rounded-2xl bg-card border-2 border-border p-6 md:p-8 shadow-lg mb-8 max-w-2xl mx-auto">
             <div className="flex items-center gap-6 md:gap-8">
@@ -106,7 +121,7 @@ export default function CardPage() {
           {/* Layout: Centered flow */}
           <div className="flex justify-center">
             <div className="w-full max-w-xl">
-              {mode === "private" ? <PrivateCardFlow /> : <CardPurchaseFlow />}
+              {mode === "private" ? <PrivateCardFlow disabled /> : <CardPurchaseFlow disabled />}
             </div>
           </div>
         </div>

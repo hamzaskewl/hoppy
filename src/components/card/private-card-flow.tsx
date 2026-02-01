@@ -42,7 +42,7 @@ interface OrderData {
   claimLink?: string;
 }
 
-export function PrivateCardFlow() {
+export function PrivateCardFlow({ disabled = false }: { disabled?: boolean }) {
   const { authenticated, login, user } = usePrivy();
 
   // Form state
@@ -412,8 +412,8 @@ export function PrivateCardFlow() {
                 )}
 
                 <Button
-                  onClick={handleCreateOrder}
-                  disabled={isLoading || amount < 5}
+                  onClick={disabled ? undefined : handleCreateOrder}
+                  disabled={isLoading || amount < 5 || (disabled && authenticated)}
                   className="w-full py-6 text-lg"
                 >
                   {isLoading ? (
@@ -423,6 +423,8 @@ export function PrivateCardFlow() {
                     </>
                   ) : !authenticated ? (
                     "Connect Wallet"
+                  ) : disabled ? (
+                    "Temporarily Unavailable"
                   ) : (
                     <>
                       Get Private Card

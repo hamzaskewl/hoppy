@@ -44,7 +44,7 @@ interface OrderData {
 
 type FlowStep = "configure" | "payment" | "processing" | "complete" | "error";
 
-export function CardPurchaseFlow() {
+export function CardPurchaseFlow({ disabled = false }: { disabled?: boolean }) {
   const { authenticated, login } = usePrivy();
 
   // Form state
@@ -270,8 +270,8 @@ export function CardPurchaseFlow() {
                 )}
 
                 <Button
-                  onClick={handleCreateOrder}
-                  disabled={isLoading || amount < 5 || amount > 10000}
+                  onClick={disabled ? undefined : handleCreateOrder}
+                  disabled={isLoading || amount < 5 || amount > 10000 || disabled}
                   className="w-full py-6 text-lg"
                 >
                   {isLoading ? (
@@ -279,6 +279,8 @@ export function CardPurchaseFlow() {
                       <Loader2 className="w-5 h-5 mr-2 animate-spin" />
                       Creating order...
                     </>
+                  ) : disabled ? (
+                    "Temporarily Unavailable"
                   ) : (
                     <>
                       Continue to Payment
