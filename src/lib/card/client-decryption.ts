@@ -29,10 +29,14 @@ export async function decryptCardDetailsClient(
   // Convert base64url key to ArrayBuffer
   const keyBytes = base64urlToBytes(keyBase64url);
   
-  // Import the key (use .buffer to get ArrayBuffer)
+  // Create a fresh ArrayBuffer copy (avoids SharedArrayBuffer issues)
+  const keyBuffer = new ArrayBuffer(keyBytes.length);
+  new Uint8Array(keyBuffer).set(keyBytes);
+  
+  // Import the key
   const cryptoKey = await crypto.subtle.importKey(
     "raw",
-    keyBytes.buffer.slice(keyBytes.byteOffset, keyBytes.byteOffset + keyBytes.byteLength),
+    keyBuffer,
     { name: "AES-GCM" },
     false,
     ["decrypt"]
@@ -43,19 +47,24 @@ export async function decryptCardDetailsClient(
   const ciphertext = base64ToBytes(encrypted.data);
   const authTag = base64ToBytes(encrypted.tag);
   
+  // Create fresh ArrayBuffer for IV
+  const ivBuffer = new ArrayBuffer(iv.length);
+  new Uint8Array(ivBuffer).set(iv);
+  
   // Combine ciphertext and auth tag (Web Crypto expects them together)
   const combined = new Uint8Array(ciphertext.length + authTag.length);
   combined.set(ciphertext, 0);
   combined.set(authTag, ciphertext.length);
   
-  // Decrypt (use ArrayBuffer slices)
+  // Create fresh ArrayBuffer for combined data
+  const combinedBuffer = new ArrayBuffer(combined.length);
+  new Uint8Array(combinedBuffer).set(combined);
+  
+  // Decrypt
   const decrypted = await crypto.subtle.decrypt(
-    { 
-      name: "AES-GCM", 
-      iv: iv.buffer.slice(iv.byteOffset, iv.byteOffset + iv.byteLength) 
-    },
+    { name: "AES-GCM", iv: ivBuffer },
     cryptoKey,
-    combined.buffer.slice(combined.byteOffset, combined.byteOffset + combined.byteLength)
+    combinedBuffer
   );
   
   // Decode to string
