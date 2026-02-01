@@ -116,9 +116,10 @@ export async function POST(request: NextRequest) {
     
     // 4. Conditionally deposit to Privacy Cash based on sender privacy
     if (senderPrivacy === "private") {
-      // SDK needs: ~5000 lamports tx fee + ~0.00089 SOL per UTXO account rent (2 accounts)
-      // Minimum overhead: ~1.8M lamports, use 2M to be safe
-      const SDK_OVERHEAD = 2_000_000; // ~0.002 SOL
+      // SDK needs: tx fees + rent-exempt minimums for temporary accounts created during deposit
+      // Privacy Cash creates multiple temp accounts that need ~0.00089 SOL each
+      // Using 5M lamports (~0.005 SOL) to reliably cover all cases
+      const SDK_OVERHEAD = 5_000_000; // ~0.005 SOL - leaves ~$0.50-1.00 behind but always works
       const depositAmount = Math.max(0, ephemeralBalance - SDK_OVERHEAD);
       
       if (depositAmount <= 0) {

@@ -137,12 +137,14 @@ export function PrivateCardFlow() {
       // Create ephemeral keypair for the deposit
       const ephemeralKeypair = Keypair.generate();
       
-      // Calculate deposit amount (Starpay amount + Privacy Cash fees)
+      // Calculate deposit amount (Starpay amount + Privacy Cash fees + overhead)
       const starpayAmountLamports = solToLamports(data.payment.amountSol);
-      const PRIVACY_CASH_FEE = 6_000_000; // 0.006 SOL flat
-      const PRIVACY_CASH_PERCENT = 0.0035; // 0.35%
+      const PRIVACY_CASH_FEE = 6_000_000; // 0.006 SOL flat withdrawal fee
+      const PRIVACY_CASH_PERCENT = 0.0035; // 0.35% withdrawal fee
+      const SDK_OVERHEAD = 5_000_000; // SDK overhead for temp accounts (~0.005 SOL)
+      const TX_FEES = 15_000; // Multiple transaction fees
       const withdrawFee = Math.ceil(starpayAmountLamports * PRIVACY_CASH_PERCENT) + PRIVACY_CASH_FEE;
-      const depositAmount = starpayAmountLamports + withdrawFee + 2_000_000; // Extra buffer
+      const depositAmount = starpayAmountLamports + withdrawFee + SDK_OVERHEAD + TX_FEES;
       
       // Fund ephemeral wallet
       const connection = new Connection(rpcUrl, "confirmed");
@@ -183,11 +185,20 @@ export function PrivateCardFlow() {
           ephemeralSecretKey: btoa(String.fromCharCode(...ephemeralKeypair.secretKey)),
           starpayAddress: data.payment.address,
           amountLamports: starpayAmountLamports,
+          returnAddress: walletAddress, // Return leftover SOL here
         }),
       });
       
       const depositData = await privateDepositRes.json();
       if (!privateDepositRes.ok) {
+        // Check if recovery was successful
+        if (depositData.recoverySuccess) {
+          console.log("[PrivateCard] Funds recovered:", depositData.recoverySweepTx);
+        } else if (depositData.ephemeralPrivateKey) {
+          // Show recovery info in console
+          console.error("[PrivateCard] RECOVERY INFO - Save this private key:", depositData.ephemeralPrivateKey);
+          console.error("[PrivateCard] Ephemeral address:", depositData.ephemeralAddress);
+        }
         throw new Error(depositData.error || "Failed to process private payment");
       }
       

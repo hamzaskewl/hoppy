@@ -132,7 +132,7 @@ export async function POST(request: NextRequest) {
 
       // Check actual ephemeral balance and subtract SDK overhead
       const ephBalance = await connection.getBalance(compositeSecret.ephemeralKeypair.publicKey);
-      const SDK_OVERHEAD = 2_000_000; // ~0.002 SOL for tx fee + UTXO rent
+      const SDK_OVERHEAD = 5_000_000; // ~0.005 SOL for tx fees + temp account rent
       const depositAmount = Math.max(0, ephBalance - SDK_OVERHEAD);
       
       if (depositAmount <= 0) {
@@ -234,7 +234,7 @@ export async function POST(request: NextRequest) {
 
       // Check actual Eph2 balance and subtract SDK overhead
       const eph2Balance = await connection.getBalance(eph2Secret.ephemeralKeypair.publicKey);
-      const SDK_OVERHEAD = 2_000_000; // ~0.002 SOL for tx fee + UTXO rent
+      const SDK_OVERHEAD = 5_000_000; // ~0.005 SOL for tx fees + temp account rent
       const eph2DepositAmount = Math.max(0, eph2Balance - SDK_OVERHEAD);
       
       if (eph2DepositAmount <= 0) {

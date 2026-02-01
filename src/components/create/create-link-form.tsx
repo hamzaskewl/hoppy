@@ -256,7 +256,7 @@ export function CreateLinkForm() {
         poolAmount = calculateDepositForRecipientAmount(baseRecipientAmount);
         
         // Private sender: SDK needs ~0.004 SOL for tx fee + UTXO rent
-        const SDK_OVERHEAD = 2_000_000; // lamports (~0.002 SOL)
+        const SDK_OVERHEAD = 5_000_000; // lamports (~0.005 SOL) - covers rent for temp accounts
         senderPays = poolAmount + SDK_OVERHEAD;
         senderFee = senderPays - baseRecipientAmount;
       } else {
@@ -274,7 +274,7 @@ export function CreateLinkForm() {
       
       if (inPool) {
         // Private sender, no sponsor: still pay SDK overhead (~0.002 SOL)
-        const SDK_OVERHEAD = 2_000_000;
+        const SDK_OVERHEAD = 5_000_000;
         senderPays = baseRecipientAmount + SDK_OVERHEAD;
         senderFee = SDK_OVERHEAD;
       } else {
@@ -400,8 +400,8 @@ export function CreateLinkForm() {
       setDepositProgress("Preparing transaction...");
       
       // 2. Create funding transaction (sender → ephemeral)
-      // For private: add ~0.002 SOL for SDK overhead (tx fee + UTXO rent)
-      const SDK_OVERHEAD = 2_000_000; // ~0.002 SOL
+      // For private: add ~0.005 SOL for SDK overhead (tx fees + temp account rent)
+      const SDK_OVERHEAD = 5_000_000; // ~0.005 SOL - covers rent for temp accounts
       const fundingAmount = senderPrivacy === "private" 
         ? costBreakdown.poolAmount + SDK_OVERHEAD 
         : costBreakdown.poolAmount;
