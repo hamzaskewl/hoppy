@@ -71,90 +71,44 @@ export default function Home() {
         </div>
       </div>
 
-      {/* Why Hoppy Section */}
-      <div className="py-16 px-4 bg-card border-y-2 border-border">
-        <div className="max-w-4xl mx-auto text-center">
-          <h2 className="text-2xl font-semibold mb-3">Why use Hoppy?</h2>
-          <p className="text-muted-foreground mb-10">Because your money, your business.</p>
-          <div className="grid md:grid-cols-4 gap-8">
-            <div className="space-y-3">
-              <div className="w-12 h-12 rounded-xl bg-hop-500/10 text-hop-600 dark:text-hop-400 flex items-center justify-center mx-auto">
-                <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
-                </svg>
-              </div>
-              <p className="font-semibold">Actually Private</p>
-              <p className="text-sm text-muted-foreground">No one can trace your payment back to you. Like, actually.</p>
-            </div>
-            <div className="space-y-3">
-              <div className="w-12 h-12 rounded-xl bg-hop-500/10 text-hop-600 dark:text-hop-400 flex items-center justify-center mx-auto">
-                <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
-                </svg>
-              </div>
-              <p className="font-semibold">Zero KYC</p>
-              <p className="text-sm text-muted-foreground">No selfies, no ID uploads. Just connect and send.</p>
-            </div>
-            <div className="space-y-3">
-              <div className="w-12 h-12 rounded-xl bg-hop-500/10 text-hop-600 dark:text-hop-400 flex items-center justify-center mx-auto">
-                <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
-                </svg>
-              </div>
-              <p className="font-semibold">Stupid Fast</p>
-              <p className="text-sm text-muted-foreground">Solana speed. Blink and it&apos;s done.</p>
-            </div>
-            <div className="space-y-3">
-              <div className="w-12 h-12 rounded-xl bg-hop-500/10 text-hop-600 dark:text-hop-400 flex items-center justify-center mx-auto">
-                <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                </svg>
-              </div>
-              <p className="font-semibold">Cheap AF</p>
-              <p className="text-sm text-muted-foreground">Pennies per transaction. Keep your stack.</p>
-            </div>
-          </div>
-        </div>
-      </div>
-
       {/* Powered By Section */}
       <div className="py-24 bg-card/50 border-y-2 border-border relative overflow-hidden">
-        {/* Background decorative tophats - visible on edges */}
+        {/* Background decorative tophats - low opacity, behind everything */}
         {/* Left side */}
-        <div className="absolute top-[8%] left-4 w-24 h-24 opacity-15 rotate-[-10deg]">
+        <div className="absolute top-[8%] left-4 w-24 h-24 opacity-30 rotate-[-10deg] -z-0">
           <Image src="/tophat.png" alt="" fill className="object-contain" />
         </div>
-        <div className="absolute top-[38%] left-6 w-20 h-20 opacity-12 rotate-[15deg]">
+        <div className="absolute top-[38%] left-6 w-20 h-20 opacity-30 rotate-[15deg] -z-0">
           <Image src="/tophat.png" alt="" fill className="object-contain" />
         </div>
-        <div className="absolute top-[68%] left-3 w-22 h-22 opacity-15 rotate-[-5deg]">
+        <div className="absolute top-[68%] left-3 w-22 h-22 opacity-30 rotate-[-5deg] -z-0">
           <Image src="/tophat.png" alt="" fill className="object-contain" />
         </div>
         
         {/* Right side */}
-        <div className="absolute top-[12%] right-4 w-22 h-22 opacity-12 rotate-[12deg]">
+        <div className="absolute top-[12%] right-4 w-22 h-22 opacity-30 rotate-[12deg] -z-0">
           <Image src="/tophat.png" alt="" fill className="object-contain" />
         </div>
-        <div className="absolute top-[42%] right-6 w-20 h-20 opacity-15 rotate-[-8deg]">
+        <div className="absolute top-[42%] right-6 w-20 h-20 opacity-30 rotate-[-8deg] -z-0">
           <Image src="/tophat.png" alt="" fill className="object-contain" />
         </div>
-        <div className="absolute top-[72%] right-3 w-24 h-24 opacity-12 rotate-[18deg]">
+        <div className="absolute top-[72%] right-3 w-24 h-24 opacity-30 rotate-[18deg] -z-0">
           <Image src="/tophat.png" alt="" fill className="object-contain" />
         </div>
         
         {/* Top corners */}
-        <div className="absolute top-4 left-[12%] w-20 h-20 opacity-12 rotate-[8deg]">
+        <div className="absolute top-4 left-[12%] w-20 h-20 opacity-30 rotate-[8deg] -z-0">
           <Image src="/tophat.png" alt="" fill className="object-contain" />
         </div>
-        <div className="absolute top-6 right-[12%] w-22 h-22 opacity-15 rotate-[-12deg]">
+        <div className="absolute top-6 right-[12%] w-22 h-22 opacity-30 rotate-[-12deg] -z-0">
           <Image src="/tophat.png" alt="" fill className="object-contain" />
         </div>
         
         {/* Bottom corners */}
-        <div className="absolute bottom-4 left-[10%] w-22 h-22 opacity-15 rotate-[-15deg]">
+        <div className="absolute bottom-4 left-[10%] w-22 h-22 opacity-30 rotate-[-15deg] -z-0">
           <Image src="/tophat.png" alt="" fill className="object-contain" />
         </div>
-        <div className="absolute bottom-6 right-[10%] w-20 h-20 opacity-12 rotate-[10deg]">
+        <div className="absolute bottom-6 right-[10%] w-20 h-20 opacity-30 rotate-[10deg] -z-0">
           <Image src="/tophat.png" alt="" fill className="object-contain" />
         </div>
 
