@@ -61,17 +61,19 @@ export async function POST(request: NextRequest) {
     // W = (amountLamports + FLAT_FEE) / (1 - PERCENT)
     const grossWithdrawal = Math.ceil((amountLamports + WITHDRAWAL_FLAT_FEE) / (1 - WITHDRAWAL_PERCENT));
     
-    // Deposit needs to cover the gross withdrawal amount + SDK overhead
-    const depositAmount = grossWithdrawal + MIN_TX_BUFFER;
+    // We deposit grossWithdrawal to pool, SDK uses the buffer for its internal fees
+    // Ephemeral needs: grossWithdrawal + MIN_TX_BUFFER (for SDK fees)
+    const requiredBalance = grossWithdrawal + MIN_TX_BUFFER;
 
     console.log("[PrivateDeposit] Starpay needs:", amountLamports / LAMPORTS_PER_SOL, "SOL");
     console.log("[PrivateDeposit] Gross withdrawal (before fees):", grossWithdrawal / LAMPORTS_PER_SOL, "SOL");
-    console.log("[PrivateDeposit] Deposit amount:", depositAmount / LAMPORTS_PER_SOL, "SOL");
+    console.log("[PrivateDeposit] Required balance:", requiredBalance / LAMPORTS_PER_SOL, "SOL");
+    console.log("[PrivateDeposit] Actual balance:", balance / LAMPORTS_PER_SOL, "SOL");
 
-    if (balance < depositAmount + TX_FEE * 2) {
+    if (balance < requiredBalance) {
       return NextResponse.json(
         { 
-          error: `Insufficient balance. Have ${balance / LAMPORTS_PER_SOL} SOL, need ${(depositAmount + TX_FEE * 2) / LAMPORTS_PER_SOL} SOL`,
+          error: `Insufficient balance. Have ${balance / LAMPORTS_PER_SOL} SOL, need ${requiredBalance / LAMPORTS_PER_SOL} SOL`,
           ephemeralAddress: ephemeralKeypair.publicKey.toBase58(),
           ephemeralPrivateKey: bs58.encode(ephemeralKeypair.secretKey),
         },
@@ -79,7 +81,8 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    console.log("[PrivateDeposit] Depositing:", depositAmount / LAMPORTS_PER_SOL, "SOL");
+    // Deposit ONLY grossWithdrawal to pool - the buffer stays for SDK fees
+    console.log("[PrivateDeposit] Depositing:", grossWithdrawal / LAMPORTS_PER_SOL, "SOL (keeping buffer for SDK fees)");
 
     // Initialize Privacy Cash
     const privacyCash = new PrivacyCash({
@@ -88,9 +91,9 @@ export async function POST(request: NextRequest) {
       enableDebug: true,
     });
 
-    // Deposit to pool
+    // Deposit grossWithdrawal to pool (buffer stays in wallet for SDK fees)
     const depositResult = await privacyCash.deposit({
-      lamports: depositAmount,
+      lamports: grossWithdrawal,
     });
 
     console.log("[PrivateDeposit] Deposit tx:", depositResult.tx);
@@ -141,7 +144,7 @@ export async function POST(request: NextRequest) {
       depositTx: depositResult.tx,
       withdrawTx: withdrawResult.tx,
       sweepTx,
-      depositedAmount: depositAmount,
+      depositedAmount: grossWithdrawal,
       withdrawnAmount: amountLamports,
     });
   } catch (error) {
