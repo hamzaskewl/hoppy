@@ -1,9 +1,21 @@
 /**
  * API Route: Claim Privacy Cash Link
  * 
+ * PRIVACY MODEL:
+ * 
+ * The link contains an ephemeral wallet's secret:
+ * - Basic sender: Eph1 (sender traceable by recipient)
+ * - Private sender: Eph2 (sender hidden - Eph2 was funded via ZK withdrawal)
+ * 
  * Recipient chooses their privacy level:
- * - Quick: Pool → Recipient (1 hop, sender can see)
- * - Private: Pool → Eph2 → Pool → Recipient (2 hops, hidden from everyone)
+ * - Quick: Eph → Recipient (direct transfer, sender can see recipient)
+ * - Private: Eph → Pool → Recipient (ZK withdrawal, recipient hidden from sender)
+ * 
+ * PRIVACY GUARANTEES:
+ * - Private sender + Quick recipient: Sender hidden, recipient visible to sender
+ * - Private sender + Private recipient: FULL PRIVACY - no one can link anyone
+ * - Basic sender + Private recipient: Sender visible to recipient, recipient hidden
+ * - Basic sender + Quick recipient: No privacy (cheapest option)
  */
 
 import { NextRequest, NextResponse } from "next/server";
@@ -62,18 +74,24 @@ export async function POST(request: NextRequest) {
     }
 
     // ========================================================================
-    // FLOW ROUTING: 4 possible combinations
+    // FLOW ROUTING: Based on fundsLocation and recipientPrivacy
+    // 
+    // NEW LINKS (after fix): fundsLocation is always "ephemeral"
+    // - Basic sender: Eph1 funded directly by sender (traceable)
+    // - Private sender: Eph2 funded by ZK withdrawal from pool (untraceable)
+    // 
+    // OLD LINKS (backwards compat): fundsLocation might be "pool"
     // ========================================================================
     
     const inPool = doubleHopNote.fundsLocation === "pool";
     const needsPrivacy = recipientPrivacy === "private";
 
-    // Routing claim flow
-
     // ------------------------------------------------------------------------
     // FLOW 1: Funds in EPHEMERAL + QUICK recipient
-    // Cheapest! Direct transfer, no pool needed
-    // Sweep entire ephemeral balance minus tx fee
+    // 
+    // Cheapest! Direct transfer from ephemeral to recipient.
+    // Sender can see who claimed (by looking up ephemeral's outgoing tx).
+    // For private sender: Sender only sees Eph2 → Recipient (can't trace to themselves)
     // ------------------------------------------------------------------------
     if (!inPool && !needsPrivacy) {
       // Flow 1: Direct transfer
@@ -117,7 +135,10 @@ export async function POST(request: NextRequest) {
 
     // ------------------------------------------------------------------------
     // FLOW 2: Funds in EPHEMERAL + PRIVATE recipient  
-    // Eph → Pool → Recipient
+    // 
+    // Eph → Pool → Recipient (ZK withdrawal hides recipient)
+    // Sender sees: Eph → Pool (cannot see final destination)
+    // This gives recipient privacy from the sender/link holder.
     // ------------------------------------------------------------------------
     if (!inPool && needsPrivacy) {
       // Flow 2: Ephemeral → Pool → Recipient
@@ -160,8 +181,11 @@ export async function POST(request: NextRequest) {
     }
 
     // ------------------------------------------------------------------------
-    // FLOW 3: Funds in POOL + QUICK recipient
-    // Pool → Recipient (simple withdrawal)
+    // FLOW 3: Funds in POOL + QUICK recipient (LEGACY - backwards compat)
+    // 
+    // Pool → Recipient (simple ZK withdrawal)
+    // Only for old links where funds were left in pool.
+    // New links always have funds in ephemeral.
     // ------------------------------------------------------------------------
     if (inPool && !needsPrivacy) {
       // Flow 3: Pool → Recipient
@@ -189,8 +213,11 @@ export async function POST(request: NextRequest) {
     }
 
     // ------------------------------------------------------------------------
-    // FLOW 4: Funds in POOL + PRIVATE recipient
-    // Pool → Eph2 → Pool → Recipient (double ZK break)
+    // FLOW 4: Funds in POOL + PRIVATE recipient (LEGACY - backwards compat)
+    // 
+    // Pool → Eph2 → Pool → Recipient (extra hop for recipient privacy)
+    // Only for old links where funds were left in pool.
+    // Provides recipient privacy even for legacy pool-based links.
     // ------------------------------------------------------------------------
     if (inPool && needsPrivacy) {
       // Flow 4: Double privacy hop

@@ -1,11 +1,19 @@
 /**
  * API Route: Create Privacy Cash Link
  * 
- * Sender chooses their privacy level:
- * - Basic: Sender → Eph → Pool (cheapest, sender traceable)
- * - Private: Sender → Pool → Eph → Pool (sender hidden via ZK)
+ * TRUE SENDER PRIVACY IMPLEMENTATION:
  * 
- * Recipient chooses their privacy level when claiming.
+ * - Basic: Sender → Eph1 (direct transfer, sender traceable to Eph1)
+ *   Link contains: Eph1 keypair
+ *   Recipient sees: who funded Eph1 (sender visible)
+ * 
+ * - Private: Sender → Eph1 → Pool → Eph2 (ZK withdrawal breaks link!)
+ *   Link contains: Eph2 keypair (NOT Eph1!)
+ *   Recipient sees: Pool → Eph2 (cannot trace to sender)
+ *   Eph1 is never revealed to recipient
+ * 
+ * The key difference: for "private" mode, we generate a FRESH ephemeral (Eph2)
+ * after the ZK withdrawal, and ONLY Eph2 goes in the link.
  */
 
 import { NextRequest, NextResponse } from "next/server";
@@ -13,6 +21,7 @@ import { Connection } from "@solana/web3.js";
 import { PrivacyCash } from "privacycash";
 import {
   decodeCompositeSecret,
+  generateCompositeSecret,
   type DoubleHopNote,
   type SenderPrivacy,
 } from "@/lib/privacy/privacy-cash-adapter";
@@ -110,13 +119,28 @@ export async function POST(request: NextRequest) {
     // Balance verified
 
     let depositTxHash: string | undefined;
+    let withdrawTxHash: string | undefined;
     let fundsLocation: "ephemeral" | "pool";
     
-    // 4. Conditionally deposit to Privacy Cash based on sender privacy
+    // These will hold the final secret/address for the link
+    // For basic: Eph1 (sender traceable)
+    // For private: Eph2 (sender hidden via ZK)
+    let finalSecret: string;
+    let finalEphemeralAddress: string;
+    
+    // 4. Conditionally process based on sender privacy
     if (senderPrivacy === "private") {
-      // SDK needs minimal buffer for tx fees (~0.002-0.003 SOL based on observed errors)
-      // We want to deposit as much as possible to maximize pool amount
-      const MIN_TX_BUFFER = 3_000_000; // ~0.003 SOL - minimal buffer for tx fees
+      // ================================================================
+      // PRIVATE SENDER FLOW: Sender → Eph1 → Pool → Eph2
+      // 
+      // 1. Eph1 deposits to Privacy Cash pool
+      // 2. Generate fresh Eph2 (this is what goes in the link!)
+      // 3. Eph1 withdraws from pool → Eph2 (ZK breaks the link!)
+      // 4. Link contains Eph2 - recipient cannot trace back to sender
+      // ================================================================
+      
+      // SDK needs minimal buffer for tx fees (~0.003 SOL)
+      const MIN_TX_BUFFER = 3_000_000; // ~0.003 SOL
       const depositAmount = Math.max(0, ephemeralBalance - MIN_TX_BUFFER);
       
       if (depositAmount <= 0) {
@@ -126,24 +150,36 @@ export async function POST(request: NextRequest) {
         );
       }
       
-      // Private sender: preparing deposit
+      // Privacy Cash fee structure: 0.006 SOL base + 0.35% of amount
+      const PRIVACY_CASH_BASE_FEE = 6_000_000; // 0.006 SOL in lamports
+      const PRIVACY_CASH_PERCENT_FEE = 0.0035; // 0.35%
+      const withdrawalFee = PRIVACY_CASH_BASE_FEE + Math.floor(depositAmount * PRIVACY_CASH_PERCENT_FEE);
       
-      const privacyCashClient = new PrivacyCash({
+      // Ensure we have enough for the withdrawal fee
+      if (depositAmount <= withdrawalFee + 1_000_000) {
+        return NextResponse.json(
+          { success: false, error: "Amount too small - need at least 0.01 SOL for private transfer" },
+          { status: 400 }
+        );
+      }
+      
+      // Step 1: Create Privacy Cash client with Eph1 (sender's ephemeral)
+      const eph1Client = new PrivacyCash({
         RPC_url: RPC_URL,
-        owner: compositeSecret.ephemeralKeypair,
+        owner: compositeSecret.ephemeralKeypair, // Eph1
         enableDebug: true,
       });
       
+      // Step 2: Deposit Eph1 → Pool
       let depositResult;
       let lastError: any = null;
       
-      // Retry up to 3 times for blockhash issues
       for (let attempt = 1; attempt <= 3; attempt++) {
         try {
-          depositResult = await privacyCashClient.deposit({
+          depositResult = await eph1Client.deposit({
             lamports: depositAmount,
           });
-          break; // Success, exit loop
+          break;
         } catch (depositError: any) {
           lastError = depositError;
           const isBlockhashError = 
@@ -152,7 +188,7 @@ export async function POST(request: NextRequest) {
             depositError.message?.includes("blockhash");
           
           if (isBlockhashError && attempt < 3) {
-            await new Promise(r => setTimeout(r, 2000)); // Wait 2 seconds
+            await new Promise(r => setTimeout(r, 2000));
             continue;
           }
           throw depositError;
@@ -162,53 +198,103 @@ export async function POST(request: NextRequest) {
       if (!depositResult) {
         throw lastError || new Error("Deposit failed after 3 attempts");
       }
-
-      depositTxHash = depositResult.tx;
-      fundsLocation = "pool";
-      // Update amount to what was actually deposited
-      amount = depositAmount;
       
-      // Sweep any remainder back to sender if possible
-      // Note: To close the ephemeral account and recover rent, we need to transfer ALL funds
-      // The minimum rent-exempt balance is ~890,880 lamports
+      depositTxHash = depositResult.tx;
+      
+      // Step 3: Generate fresh Eph2 - THIS IS THE KEY TO PRIVACY!
+      // Eph2 is a completely new keypair that will appear in the link
+      // Recipient will only ever see Eph2, never Eph1
+      const eph2Secret = generateCompositeSecret();
+      const eph2Address = eph2Secret.ephemeralKeypair.publicKey.toBase58();
+      
+      // Step 4: ZK Withdrawal from Pool → Eph2
+      // This is what breaks the on-chain link!
+      // On-chain, it will show: Pool → Eph2 (no trace to Eph1 or Sender)
+      const withdrawAmount = depositAmount - withdrawalFee;
+      
+      let withdrawResult;
+      for (let attempt = 1; attempt <= 3; attempt++) {
+        try {
+          withdrawResult = await eph1Client.withdraw({
+            lamports: withdrawAmount,
+            recipientAddress: eph2Address,
+          });
+          break;
+        } catch (withdrawError: any) {
+          lastError = withdrawError;
+          const isBlockhashError = 
+            withdrawError.message?.includes("Blockhash not found") || 
+            withdrawError.message?.includes("expired") ||
+            withdrawError.message?.includes("blockhash");
+          
+          if (isBlockhashError && attempt < 3) {
+            await new Promise(r => setTimeout(r, 2000));
+            continue;
+          }
+          throw withdrawError;
+        }
+      }
+      
+      if (!withdrawResult) {
+        throw lastError || new Error("ZK withdrawal to Eph2 failed after 3 attempts");
+      }
+      
+      withdrawTxHash = withdrawResult.tx;
+      
+      // Funds are now in Eph2 (funded by the pool via ZK - untraceable!)
+      fundsLocation = "ephemeral";
+      amount = withdrawAmount; // What Eph2 actually received
+      
+      // Use Eph2's secret for the link (NOT Eph1!)
+      finalSecret = eph2Secret.full;
+      finalEphemeralAddress = eph2Address;
+      
+      // Step 5: Sweep any remaining Eph1 balance back to sender
       if (senderAddress) {
         try {
           const remainingBalance = await connection.getBalance(compositeSecret.ephemeralKeypair.publicKey);
           const TX_FEE = 5000;
-          const MIN_RENT_EXEMPT = 890880; // ~0.00089 SOL
           
-          // Only sweep if we can send more than dust AND close the account
-          // To close account: send ALL balance - TX_FEE, account will be closed
-          if (remainingBalance > MIN_RENT_EXEMPT + TX_FEE) {
-            const sweepAmount = remainingBalance - TX_FEE;
+          if (remainingBalance > TX_FEE + 10000) {
             const { Transaction, SystemProgram, PublicKey, sendAndConfirmTransaction } = await import("@solana/web3.js");
             const sweepTx = new Transaction().add(
               SystemProgram.transfer({
                 fromPubkey: compositeSecret.ephemeralKeypair.publicKey,
                 toPubkey: new PublicKey(senderAddress),
-                lamports: sweepAmount,
+                lamports: remainingBalance - TX_FEE,
               })
             );
             await sendAndConfirmTransaction(connection, sweepTx, [compositeSecret.ephemeralKeypair], { commitment: "confirmed" });
           }
         } catch {
-          // Sweep failed - non-critical
+          // Sweep failed - non-critical, just dust left in Eph1
         }
       }
     } else {
-      // Basic sender: leave funds in ephemeral (no pool needed yet)
+      // ================================================================
+      // BASIC SENDER FLOW: Sender → Eph1
+      // 
+      // Funds stay in Eph1, link contains Eph1's secret
+      // Recipient CAN trace back to sender by looking up Eph1's funding tx
+      // This is cheaper but not private for sender
+      // ================================================================
+      
       fundsLocation = "ephemeral";
-      amount = ephemeralBalance; // Use actual balance, not requested amount
+      amount = ephemeralBalance;
+      
+      // Use Eph1's secret for the link
+      finalSecret = compositeSecret.full;
+      finalEphemeralAddress = ephemeralAddress;
     }
 
-    // 5. Create the note
+    // 5. Create the note with the correct secret (Eph1 for basic, Eph2 for private)
     const note: DoubleHopNote = {
-      secret: compositeSecret.full,
-      amount, // Actual amount available for recipient (may be slightly less due to rent reserve)
+      secret: finalSecret,
+      amount,
       network: NETWORK,
       createdAt: Date.now(),
-      ephemeralAddress,
-      status: fundsLocation === "pool" ? "deposited" : "funded",
+      ephemeralAddress: finalEphemeralAddress,
+      status: "funded", // Funds are always in an ephemeral wallet now
       senderPrivacy,
       senderAddress: senderPrivacy === "basic" ? senderAddress : undefined, // Only store for reclaim if basic
       fundsLocation,
@@ -219,6 +305,7 @@ export async function POST(request: NextRequest) {
       note,
       fundingTxHash,
       depositTxHash,
+      withdrawTxHash, // ZK withdrawal to Eph2 (only for private sender)
     });
   } catch (error) {
     // Error creating link
