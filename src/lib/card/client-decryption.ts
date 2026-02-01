@@ -29,10 +29,10 @@ export async function decryptCardDetailsClient(
   // Convert base64url key to ArrayBuffer
   const keyBytes = base64urlToBytes(keyBase64url);
   
-  // Import the key
+  // Import the key (use .buffer to get ArrayBuffer)
   const cryptoKey = await crypto.subtle.importKey(
     "raw",
-    keyBytes,
+    keyBytes.buffer.slice(keyBytes.byteOffset, keyBytes.byteOffset + keyBytes.byteLength),
     { name: "AES-GCM" },
     false,
     ["decrypt"]
@@ -48,11 +48,14 @@ export async function decryptCardDetailsClient(
   combined.set(ciphertext, 0);
   combined.set(authTag, ciphertext.length);
   
-  // Decrypt
+  // Decrypt (use ArrayBuffer slices)
   const decrypted = await crypto.subtle.decrypt(
-    { name: "AES-GCM", iv },
+    { 
+      name: "AES-GCM", 
+      iv: iv.buffer.slice(iv.byteOffset, iv.byteOffset + iv.byteLength) 
+    },
     cryptoKey,
-    combined
+    combined.buffer.slice(combined.byteOffset, combined.byteOffset + combined.byteLength)
   );
   
   // Decode to string

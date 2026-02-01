@@ -30,6 +30,11 @@ const IMAP_CONFIG = {
     user: process.env.IMAP_USER || "",
     pass: process.env.IMAP_PASSWORD || "",
   },
+  // Allow self-signed certificates (for development/testing with proxies/antivirus)
+  tls: {
+    rejectUnauthorized: process.env.NODE_ENV === "production",
+  },
+  logger: false, // Disable verbose logging
 };
 
 // Email address pattern: cards+{orderId}@hoppy.app
@@ -180,7 +185,14 @@ export async function pollEmails(): Promise<number> {
   } catch (e) {
     console.error("[Email] IMAP error:", e);
   } finally {
-    await client.logout();
+    try {
+      // Only logout if client is connected
+      if (client.usable) {
+        await client.logout();
+      }
+    } catch (e) {
+      // Ignore logout errors
+    }
   }
   
   return processed;
