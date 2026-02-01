@@ -34,7 +34,7 @@ const IMAP_CONFIG = {
   tls: {
     rejectUnauthorized: process.env.NODE_ENV === "production",
   },
-  logger: false, // Disable verbose logging
+  logger: false as const, // Disable verbose logging
 };
 
 // Email address pattern: cards+{orderId}@hoppy.app
@@ -91,8 +91,25 @@ function extractOrderIdFromEmail(toAddresses: string[]): string | null {
  * Process a single email
  */
 async function processEmail(email: ParsedMail): Promise<boolean> {
-  const to = email.to?.value?.map(v => v.address || "") || [];
-  const from = email.from?.value?.[0]?.address || "";
+  // Handle both single AddressObject and AddressObject[] for 'to'
+  const toField = email.to;
+  const toAddresses: string[] = [];
+  if (toField) {
+    const toArray = Array.isArray(toField) ? toField : [toField];
+    for (const addr of toArray) {
+      if (addr.value) {
+        for (const v of addr.value) {
+          if (v.address) toAddresses.push(v.address);
+        }
+      }
+    }
+  }
+  const to = toAddresses;
+  
+  // Handle from field
+  const fromField = email.from;
+  const fromArray = Array.isArray(fromField) ? fromField : (fromField ? [fromField] : []);
+  const from = fromArray[0]?.value?.[0]?.address || "";
   const subject = email.subject || "";
   
   console.log(`[Email] Processing: "${subject}" from ${from}`);
@@ -168,6 +185,10 @@ export async function pollEmails(): Promise<number> {
     
     for await (const msg of messages) {
       try {
+        if (!msg.source) {
+          console.log("[Email] Message has no source, skipping");
+          continue;
+        }
         const parsed = await simpleParser(msg.source);
         const success = await processEmail(parsed);
         
