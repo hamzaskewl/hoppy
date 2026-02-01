@@ -588,10 +588,10 @@ export function ClaimFlow() {
                 {claimProgress || "Processing withdrawal from Privacy Cash..."}
               </p>
               
-              <div className="mt-4 p-3 rounded-lg bg-amber-500/10 border border-amber-500/20">
+              <div className="mt-4 p-3 rounded-lg bg-amber-50 dark:bg-amber-500/10 border border-amber-300 dark:border-amber-500/20">
                 <div className="flex items-start gap-2">
-                  <AlertTriangle className="w-4 h-4 text-amber-500 mt-0.5 flex-shrink-0" />
-                  <p className="text-xs text-amber-200/80">
+                  <AlertTriangle className="w-4 h-4 text-amber-600 dark:text-amber-500 mt-0.5 flex-shrink-0" />
+                  <p className="text-xs text-amber-800 dark:text-amber-200/80 font-medium">
                     Processing your private claim. Do not close this page.
                   </p>
                 </div>

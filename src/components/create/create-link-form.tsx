@@ -1000,10 +1000,10 @@ export function CreateLinkForm() {
               {depositProgress || "Processing..."}
             </p>
             
-            <div className="mt-4 p-3 rounded-lg bg-honey-100 dark:bg-amber-500/10 border-2 border-honey-400 dark:border-amber-500/30">
+            <div className="mt-4 p-3 rounded-lg bg-amber-50 dark:bg-amber-500/10 border-2 border-amber-300 dark:border-amber-500/30">
               <div className="flex items-start gap-2 justify-center">
-                <AlertTriangle className="w-4 h-4 text-honey-600 dark:text-amber-500 mt-0.5 flex-shrink-0" />
-                <p className="text-xs text-honey-700 dark:text-amber-200/80 font-medium">
+                <AlertTriangle className="w-4 h-4 text-amber-600 dark:text-amber-500 mt-0.5 flex-shrink-0" />
+                <p className="text-xs text-amber-800 dark:text-amber-200/80 font-medium">
                   Do not close this page. This may take a minute.
                 </p>
               </div>

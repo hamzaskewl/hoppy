@@ -43,7 +43,7 @@ export default function HowItWorksPage() {
                 </p>
                 <p>
                   Once deposited, you get a <span className="font-medium text-foreground">secret claim link</span>. 
-                  That&apos;s it! Share this link however you want - text, email, carrier pigeon. Only someone with this link can grab the funds.
+                  Share it via text, email, or any messaging app. Only someone with this link can claim the funds.
                 </p>
               </div>
             </div>
@@ -78,7 +78,7 @@ export default function HowItWorksPage() {
               Traditional crypto payments are like writing a check - everyone can see who paid whom. 
               Hoppy breaks that link by using <span className="font-medium text-foreground">temporary wallets</span> and 
               <span className="font-medium text-foreground"> optional privacy shielding</span>. 
-              When enabled, your money goes in one door and comes out another - no breadcrumb trail.
+              When enabled, your funds move through separate wallets so there's no direct connection between sender and recipient on-chain.
             </p>
           </div>
         </div>
