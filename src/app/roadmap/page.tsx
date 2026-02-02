@@ -155,10 +155,10 @@ export default function RoadmapPage() {
           </motion.div>
 
           {/* Kanban Board */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
             
             {/* In Progress Column */}
-            <div>
+            <div className="bg-card/95 backdrop-blur-md rounded-2xl border-2 border-hop-500 p-5 shadow-xl">
               <ColumnHeader icon={Zap} title="In Progress" variant="active" />
               <div className="space-y-4">
                 <RoadmapCard 
@@ -190,7 +190,7 @@ export default function RoadmapPage() {
             </div>
 
             {/* Up Next Column */}
-            <div>
+            <div className="bg-card/95 backdrop-blur-md rounded-2xl border-2 border-border p-5 shadow-xl">
               <ColumnHeader icon={Clock} title="Up Next" variant="default" />
               <div className="space-y-4">
                 <RoadmapCard 
@@ -222,7 +222,7 @@ export default function RoadmapPage() {
             </div>
 
             {/* Future Column */}
-            <div>
+            <div className="bg-card/95 backdrop-blur-md rounded-2xl border-2 border-border p-5 shadow-xl">
               <ColumnHeader icon={Sparkles} title="Future" variant="default" />
               <div className="space-y-4">
                 <RoadmapCard 
