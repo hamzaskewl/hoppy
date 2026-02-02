@@ -126,31 +126,54 @@ export default function RoadmapPage() {
 
       <main className="flex-1 py-12 px-4">
         <div className="max-w-6xl mx-auto">
-          {/* Header with dark mode border */}
+          {/* Header with decorative tophats */}
           <motion.div
             ref={headerRef}
             initial={{ opacity: 0, y: 20 }}
             animate={headerInView ? { opacity: 1, y: 0 } : { opacity: 0, y: 20 }}
             transition={{ duration: 0.6 }}
-            className="text-center mb-16 bg-card/90 dark:bg-card/95 backdrop-blur-md rounded-2xl border-2 border-border dark:border-hop-500/50 p-8 shadow-lg"
+            className="relative text-center mb-16 bg-card/90 dark:bg-card/95 backdrop-blur-md rounded-2xl border-2 border-border dark:border-hop-500/50 p-8 shadow-lg overflow-hidden"
           >
-            <div className="inline-flex items-center gap-3 mb-4">
-              <div className="w-16 h-16 rounded-full overflow-hidden border-3 border-hop-400 shadow-lg">
-                <Image
-                  src="/hoppy-logo.png"
-                  alt="hoppy"
-                  width={64}
-                  height={64}
-                  className="object-cover"
-                />
-              </div>
+            {/* Decorative tophats - low opacity background */}
+            <div className="absolute top-2 left-4 w-16 h-16 opacity-20 rotate-[-15deg]">
+              <Image src="/tophat.png" alt="" fill className="object-contain" />
             </div>
-            <h1 className="text-4xl md:text-5xl font-bold mb-4 text-foreground">
-              Roadmap
-            </h1>
-            <p className="text-lg text-muted-foreground max-w-2xl mx-auto">
-              What we&apos;re building and where we&apos;re headed
-            </p>
+            <div className="absolute top-2 right-4 w-14 h-14 opacity-20 rotate-[12deg]">
+              <Image src="/tophat.png" alt="" fill className="object-contain" />
+            </div>
+            <div className="absolute bottom-2 left-8 w-12 h-12 opacity-20 rotate-[8deg]">
+              <Image src="/tophat.png" alt="" fill className="object-contain" />
+            </div>
+            <div className="absolute bottom-2 right-8 w-14 h-14 opacity-20 rotate-[-10deg]">
+              <Image src="/tophat.png" alt="" fill className="object-contain" />
+            </div>
+            <div className="absolute top-1/2 -translate-y-1/2 left-2 w-10 h-10 opacity-15 rotate-[20deg]">
+              <Image src="/tophat.png" alt="" fill className="object-contain" />
+            </div>
+            <div className="absolute top-1/2 -translate-y-1/2 right-2 w-10 h-10 opacity-15 rotate-[-18deg]">
+              <Image src="/tophat.png" alt="" fill className="object-contain" />
+            </div>
+
+            {/* Content */}
+            <div className="relative z-10">
+              <div className="inline-flex items-center gap-3 mb-4">
+                <div className="w-16 h-16 rounded-full overflow-hidden border-3 border-hop-400 shadow-lg">
+                  <Image
+                    src="/hoppy-logo.png"
+                    alt="hoppy"
+                    width={64}
+                    height={64}
+                    className="object-cover"
+                  />
+                </div>
+              </div>
+              <h1 className="text-4xl md:text-5xl font-bold mb-4 text-foreground">
+                Roadmap
+              </h1>
+              <p className="text-lg text-muted-foreground max-w-2xl mx-auto">
+                What we&apos;re building and where we&apos;re headed
+              </p>
+            </div>
           </motion.div>
 
           {/* Kanban Board */}

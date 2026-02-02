@@ -23,6 +23,7 @@ Sending crypto shouldn't require the recipient to have a wallet set up, share th
 - [Demo](#demo)
 - [Features](#features)
 - [How It Works](#how-it-works)
+  - [Double Hop Privacy](#how-double-hop-privacy-works)
 - [Quick Start](#quick-start)
 - [Project Structure](#project-structure)
 - [Security Model](#security-model)
@@ -113,6 +114,44 @@ You deposit funds into a shielded pool and get a claim link. Share that link wit
 |-------|--------------|----------------------|
 | **Quick Claim** | Direct withdrawal, cheaper | Sender can see if they check |
 | **Private Claim** | Extra routing hop, more private | Nobody, not even sender |
+
+### How Double Hop Privacy Works
+
+For maximum privacy, hoppy uses a **double hop** architecture that severs any connection between sender and recipient:
+
+```
+┌──────────────┐      ┌──────────────┐      ┌──────────────┐      ┌──────────────┐
+│    SENDER    │ ──▶  │   TEMP 1     │ ──▶  │   SHIELDED   │ ──▶  │   TEMP 2     │ ──▶  RECIPIENT
+│   (wallet)   │      │ (ephemeral)  │      │     POOL     │      │ (in link)    │      (wallet)
+└──────────────┘      └──────────────┘      └──────────────┘      └──────────────┘
+       │                     │                     │                     │
+       │                     │                     │                     │
+   Known to             Severs link           ZK compression       Keypair embedded
+   sender only          from sender           hides everything     in claim URL
+```
+
+**Step 1: Sender Deposit**
+- Sender creates a deposit, funds route through **Temp Wallet 1** (an ephemeral wallet)
+- Temp 1 deposits into the shielded pool and is discarded
+- This severs the on-chain link between sender and the pool deposit
+
+**Step 2: Claim Link Generation**
+- A new keypair is generated for **Temp Wallet 2**
+- The private key for Temp 2 is embedded in the claim link URL (the "cryptographic secret")
+- Only the link holder can control Temp 2
+
+**Step 3: Recipient Claims (Private Mode)**
+- Recipient opens the link and gains control of Temp 2 via the embedded keypair
+- Temp 2 withdraws from the shielded pool to the recipient's actual wallet
+- Since the recipient controls Temp 2, they can route funds however they want
+
+**Why This Works:**
+- Sender → Temp 1: visible, but Temp 1 is burned immediately
+- Temp 1 → Pool: deposit is hidden via ZK compression
+- Pool → Temp 2: withdrawal is unlinkable to the deposit
+- Temp 2 → Recipient: recipient controls this hop, sender never sees it
+
+The result: **complete unlinkability**. Even if someone watches the entire blockchain, they cannot connect the sender's wallet to the recipient's wallet.
 
 ---
 
