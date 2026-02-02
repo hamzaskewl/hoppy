@@ -134,23 +134,26 @@ export default function RoadmapPage() {
             transition={{ duration: 0.6 }}
             className="relative text-center mb-16 bg-card/90 dark:bg-card/95 backdrop-blur-md rounded-2xl border-2 border-border dark:border-hop-500/50 p-8 shadow-lg overflow-hidden"
           >
-            {/* Decorative tophats - low opacity background */}
-            <div className="absolute top-2 left-4 w-16 h-16 opacity-20 rotate-[-15deg]">
+            {/* Decorative tophats - random scattered placement */}
+            {/* Left side - 3 random */}
+            <div className="absolute top-3 left-6 w-14 h-14 opacity-20 rotate-[-12deg]">
               <Image src="/tophat.png" alt="" fill className="object-contain" />
             </div>
-            <div className="absolute top-2 right-4 w-14 h-14 opacity-20 rotate-[12deg]">
+            <div className="absolute top-[45%] left-2 w-11 h-11 opacity-15 rotate-[22deg]">
               <Image src="/tophat.png" alt="" fill className="object-contain" />
             </div>
-            <div className="absolute bottom-2 left-8 w-12 h-12 opacity-20 rotate-[8deg]">
+            <div className="absolute bottom-4 left-10 w-12 h-12 opacity-18 rotate-[-5deg]">
               <Image src="/tophat.png" alt="" fill className="object-contain" />
             </div>
-            <div className="absolute bottom-2 right-8 w-14 h-14 opacity-20 rotate-[-10deg]">
+            
+            {/* Right side - 3 random */}
+            <div className="absolute top-5 right-3 w-12 h-12 opacity-18 rotate-[15deg]">
               <Image src="/tophat.png" alt="" fill className="object-contain" />
             </div>
-            <div className="absolute top-1/2 -translate-y-1/2 left-2 w-10 h-10 opacity-15 rotate-[20deg]">
+            <div className="absolute top-[60%] right-6 w-10 h-10 opacity-15 rotate-[-20deg]">
               <Image src="/tophat.png" alt="" fill className="object-contain" />
             </div>
-            <div className="absolute top-1/2 -translate-y-1/2 right-2 w-10 h-10 opacity-15 rotate-[-18deg]">
+            <div className="absolute bottom-2 right-14 w-13 h-13 opacity-20 rotate-[8deg]">
               <Image src="/tophat.png" alt="" fill className="object-contain" />
             </div>
 
