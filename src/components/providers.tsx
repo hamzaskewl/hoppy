@@ -3,7 +3,7 @@
 import { PrivyProvider } from "@privy-io/react-auth";
 import { toSolanaWalletConnectors } from "@privy-io/react-auth/solana";
 
-// Create Solana wallet connectors (Phantom, Solflare, etc.) ttt
+// Create Solana wallet connectors with Phantom first
 const solanaConnectors = toSolanaWalletConnectors({
   shouldAutoConnect: true,
 });
@@ -29,11 +29,14 @@ export function Providers({ children }: { children: React.ReactNode }) {
             createOnLogin: "users-without-wallets",
           },
         } as any,
+        // Login methods - wallet first, then email
         loginMethods: ["wallet", "email"],
         appearance: {
           theme: "light",
           accentColor: "#22c55e",
-        },
+          // Show Phantom first in the wallet list
+          walletList: ["phantom", "detected_solana_wallets"],
+        } as any,
       }}
       >
         {children}

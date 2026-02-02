@@ -4,7 +4,7 @@ import { useRef } from "react";
 import Link from "next/link";
 import Image from "next/image";
 import { motion, useInView } from "framer-motion";
-import { Zap, Clock, Sparkles, ArrowLeft } from "lucide-react";
+import { Zap, Clock, Sparkles } from "lucide-react";
 import { NavHeader } from "@/components/nav-header";
 
 // Animated Card Component
@@ -52,10 +52,30 @@ function ColumnHeader({
 }: { 
   icon: React.ElementType; 
   title: string; 
-  variant: "active" | "default";
+  variant: "active" | "upcoming" | "future";
 }) {
   const ref = useRef(null);
   const isInView = useInView(ref, { once: true });
+
+  const styles = {
+    active: {
+      border: "border-hop-500",
+      iconBg: "bg-hop-500 text-white",
+      text: "text-hop-600 dark:text-hop-400",
+    },
+    upcoming: {
+      border: "border-amber-500",
+      iconBg: "bg-amber-500 text-white",
+      text: "text-amber-600 dark:text-amber-400",
+    },
+    future: {
+      border: "border-purple-500",
+      iconBg: "bg-purple-500 text-white",
+      text: "text-purple-600 dark:text-purple-400",
+    },
+  };
+
+  const style = styles[variant];
 
   return (
     <motion.div
@@ -63,24 +83,12 @@ function ColumnHeader({
       initial={{ opacity: 0, scale: 0.9 }}
       animate={isInView ? { opacity: 1, scale: 1 } : { opacity: 0, scale: 0.9 }}
       transition={{ duration: 0.4 }}
-      className={`flex items-center gap-3 mb-6 pb-4 border-b-2 ${
-        variant === "active" 
-          ? "border-hop-500" 
-          : "border-border"
-      }`}
+      className={`flex items-center gap-3 mb-6 pb-4 border-b-2 ${style.border}`}
     >
-      <div className={`p-2.5 rounded-xl ${
-        variant === "active" 
-          ? "bg-hop-500 text-white" 
-          : "bg-muted text-muted-foreground"
-      }`}>
+      <div className={`p-2.5 rounded-xl ${style.iconBg}`}>
         <Icon className="w-5 h-5" />
       </div>
-      <h3 className={`text-lg font-bold ${
-        variant === "active" 
-          ? "text-hop-600 dark:text-hop-400" 
-          : "text-muted-foreground"
-      }`}>
+      <h3 className={`text-lg font-bold ${style.text}`}>
         {title}
       </h3>
     </motion.div>
@@ -118,22 +126,13 @@ export default function RoadmapPage() {
 
       <main className="flex-1 py-12 px-4">
         <div className="max-w-6xl mx-auto">
-          {/* Back Link */}
-          <Link
-            href="/"
-            className="inline-flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground transition-colors mb-8"
-          >
-            <ArrowLeft className="w-4 h-4" />
-            Back to Home
-          </Link>
-
-          {/* Header */}
+          {/* Header with dark mode border */}
           <motion.div
             ref={headerRef}
             initial={{ opacity: 0, y: 20 }}
             animate={headerInView ? { opacity: 1, y: 0 } : { opacity: 0, y: 20 }}
             transition={{ duration: 0.6 }}
-            className="text-center mb-16"
+            className="text-center mb-16 bg-card/90 dark:bg-card/95 backdrop-blur-md rounded-2xl border-2 border-border dark:border-hop-500/50 p-8 shadow-lg"
           >
             <div className="inline-flex items-center gap-3 mb-4">
               <div className="w-16 h-16 rounded-full overflow-hidden border-3 border-hop-400 shadow-lg">
@@ -190,8 +189,8 @@ export default function RoadmapPage() {
             </div>
 
             {/* Up Next Column */}
-            <div className="bg-card/95 backdrop-blur-md rounded-2xl border-2 border-border p-5 shadow-xl">
-              <ColumnHeader icon={Clock} title="Up Next" variant="default" />
+            <div className="bg-card/95 backdrop-blur-md rounded-2xl border-2 border-amber-500/50 p-5 shadow-xl">
+              <ColumnHeader icon={Clock} title="Up Next" variant="upcoming" />
               <div className="space-y-4">
                 <RoadmapCard 
                   title="Split Claims" 
@@ -222,8 +221,8 @@ export default function RoadmapPage() {
             </div>
 
             {/* Future Column */}
-            <div className="bg-card/95 backdrop-blur-md rounded-2xl border-2 border-border p-5 shadow-xl">
-              <ColumnHeader icon={Sparkles} title="Future" variant="default" />
+            <div className="bg-card/95 backdrop-blur-md rounded-2xl border-2 border-purple-500/50 p-5 shadow-xl">
+              <ColumnHeader icon={Sparkles} title="Future" variant="future" />
               <div className="space-y-4">
                 <RoadmapCard 
                   title="x402 Protocol" 

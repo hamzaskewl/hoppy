@@ -87,33 +87,25 @@ You deposit funds into a shielded pool and get a claim link. Share that link wit
 
 ## How It Works
 
+<p align="center">
+  <img src="public/howitworks.svg" alt="How hoppy works" width="100%" />
+</p>
+
 ### Sending a Payment
 
-```
 1. Connect your wallet (or sign in with email)
-         ↓
 2. Enter the amount you want to send
-         ↓
 3. Funds are deposited into a shielded pool
-         ↓
 4. You receive a claim link with a cryptographic secret
-         ↓
 5. Share the link however you want (text, email, QR)
-```
 
 ### Claiming Funds
 
-```
 1. Recipient opens the claim link
-         ↓
 2. Connects any wallet (or creates one with email)
-         ↓
 3. Chooses privacy level (Quick or Private)
-         ↓
-4. Clicks "Claim" - funds arrive in their wallet
-         ↓
-5. No SOL needed - relayer pays transaction fees
-```
+4. Clicks "Claim" and funds arrive in their wallet
+5. No SOL needed for gas (relayer pays transaction fees)
 
 ### Privacy Levels
 
@@ -155,6 +147,8 @@ NEXT_PUBLIC_SOLANA_RPC_URL=https://mainnet.helius-rpc.com/?api-key=YOUR_KEY
 # Network
 NEXT_PUBLIC_SOLANA_NETWORK=mainnet-beta
 ```
+
+> See `.env.example` for the full list of environment variables including database, email polling, and gift card configuration.
 
 ### Run Locally
 
