@@ -32,9 +32,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    console.log("[PollEmails] Starting email poll...");
     const processed = await pollEmails();
-    console.log(`[PollEmails] Processed ${processed} emails`);
 
     return NextResponse.json({
       success: true,

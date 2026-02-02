@@ -224,24 +224,19 @@ export default function RoadmapPage() {
                   index={0}
                 />
                 <RoadmapCard 
-                  title="Stealth Addresses" 
-                  description="One-time recipient addresses for extra privacy"
-                  index={1}
-                />
-                <RoadmapCard 
                   title="Recall Payments" 
                   description="Cancel unclaimed payments, get your funds back"
-                  index={2}
+                  index={1}
                 />
                 <RoadmapCard 
                   title="Viewing Keys" 
                   description="Optional compliance without breaking privacy"
-                  index={3}
+                  index={2}
                 />
                 <RoadmapCard 
                   title="Conditional Release" 
                   description="Release funds when specific conditions are met"
-                  index={4}
+                  index={3}
                 />
               </div>
             </div>
@@ -261,14 +256,9 @@ export default function RoadmapPage() {
                   index={1}
                 />
                 <RoadmapCard 
-                  title="EVM Support" 
-                  description="Ethereum, Base, Arbitrum, Polygon"
-                  index={2}
-                />
-                <RoadmapCard 
                   title="Cross-Chain Swaps" 
-                  description="Swap + shield in one transaction"
-                  index={3}
+                  description="Swap + shield across EVM and Solana"
+                  index={2}
                 />
               </div>
             </div>

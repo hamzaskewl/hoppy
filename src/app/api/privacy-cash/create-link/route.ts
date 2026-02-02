@@ -118,9 +118,6 @@ export async function POST(request: NextRequest) {
 
     // Balance verified
     const eph1Address = compositeSecret.ephemeralKeypair.publicKey.toBase58();
-    console.log(`\n========== CREATE LINK ==========`);
-    console.log(`[Eph1] Address: ${eph1Address}`);
-    console.log(`[Eph1] Balance: ${ephemeralBalance / 1e9} SOL (${ephemeralBalance} lamports)`);
 
     let depositTxHash: string | undefined;
     let withdrawTxHash: string | undefined;
@@ -194,15 +191,12 @@ export async function POST(request: NextRequest) {
       }
       
       depositTxHash = depositResult.tx;
-      console.log(`[Eph1] Deposited ${depositAmount / 1e9} SOL to pool`);
-      console.log(`[Eph1] Deposit tx: ${depositTxHash}`);
       
       // Step 3: Generate fresh Eph2 - THIS IS THE KEY TO PRIVACY!
       // Eph2 is a completely new keypair that will appear in the link
       // Recipient will only ever see Eph2, never Eph1
       const eph2Secret = generateCompositeSecret();
       const eph2Address = eph2Secret.ephemeralKeypair.publicKey.toBase58();
-      console.log(`[Eph2] Generated fresh address: ${eph2Address}`);
       
       // Step 4: ZK Withdrawal from Pool → Eph2
       // This is what breaks the on-chain link!
@@ -241,7 +235,6 @@ export async function POST(request: NextRequest) {
       }
       
       withdrawTxHash = withdrawResult.tx;
-      console.log(`[Pool→Eph2] ZK withdrawal tx: ${withdrawTxHash}`);
       
       // Funds are now in Eph2 (funded by the pool via ZK - untraceable!)
       // Get actual Eph2 balance to know what recipient can claim
@@ -251,12 +244,9 @@ export async function POST(request: NextRequest) {
       
       // Calculate actual fee paid
       const actualFee = depositAmount - eph2Balance;
-      console.log(`[Eph2] Received: ${eph2Balance / 1e9} SOL (${eph2Balance} lamports)`);
-      console.log(`[Fee] Withdrawal fee: ${actualFee / 1e9} SOL (${actualFee} lamports)`);
       
       // Check Eph1 final balance
       const eph1FinalBalance = await connection.getBalance(compositeSecret.ephemeralKeypair.publicKey);
-      console.log(`[Eph1] Final balance: ${eph1FinalBalance / 1e9} SOL (should be ~0 or dust)`);
       
       fundsLocation = "ephemeral";
       amount = eph2Balance; // Actual amount Eph2 received (after SDK fee deduction)
@@ -264,10 +254,6 @@ export async function POST(request: NextRequest) {
       // Use Eph2's secret for the link (NOT Eph1!)
       finalSecret = eph2Secret.full;
       finalEphemeralAddress = eph2Address;
-      
-      console.log(`[Link] Contains Eph2: ${eph2Address}`);
-      console.log(`[Link] Claimable amount: ${amount / 1e9} SOL`);
-      console.log(`=================================\n`);
       
       // Step 5: Sweep any remaining Eph1 balance back to sender
       if (senderAddress) {
@@ -305,11 +291,6 @@ export async function POST(request: NextRequest) {
       // Use Eph1's secret for the link
       finalSecret = compositeSecret.full;
       finalEphemeralAddress = ephemeralAddress;
-      
-      console.log(`[Basic] No pool hop - funds stay in Eph1`);
-      console.log(`[Link] Contains Eph1: ${eph1Address}`);
-      console.log(`[Link] Claimable amount: ${amount / 1e9} SOL`);
-      console.log(`=================================\n`);
     }
 
     // 5. Create the note with the correct secret (Eph1 for basic, Eph2 for private)

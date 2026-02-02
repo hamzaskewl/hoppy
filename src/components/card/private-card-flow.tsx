@@ -178,8 +178,6 @@ export function PrivateCardFlow({ disabled = false }: { disabled?: boolean }) {
       const signedFundingTx = await solanaProvider.signTransaction(fundingTx);
       const fundingTxHash = await connection.sendRawTransaction(signedFundingTx.serialize());
       await connection.confirmTransaction(fundingTxHash, "confirmed");
-      
-      console.log("[PrivateCard] Funded ephemeral:", fundingTxHash);
 
       // Wait for balance
       await new Promise(r => setTimeout(r, 2000));
@@ -204,7 +202,6 @@ export function PrivateCardFlow({ disabled = false }: { disabled?: boolean }) {
       if (!privateDepositRes.ok) {
         // Check if recovery was successful
         if (depositData.recoverySuccess && depositData.recoverySweepTx) {
-          console.log("[PrivateCard] Funds recovered:", depositData.recoverySweepTx);
           setRecoveryInfo({
             success: true,
             txHash: depositData.recoverySweepTx,

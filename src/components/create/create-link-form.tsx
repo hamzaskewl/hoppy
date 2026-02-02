@@ -124,9 +124,8 @@ async function saveLink(link: SavedLink, walletAddress: string): Promise<void> {
     
     const encrypted = await encryptData(JSON.stringify(trimmedLinks), walletAddress);
     localStorage.setItem(STORAGE_KEY, encrypted);
-    console.log("[Storage] Link saved successfully");
-  } catch (error) {
-    console.error("[Storage] Failed to save link:", error);
+  } catch {
+    // Storage save failed silently
   }
 }
 
@@ -431,7 +430,6 @@ export function CreateLinkForm() {
         throw new Error("Wallet does not support transaction signing");
       }
       
-      console.log("[Create] Funding transaction sent:", fundingTxHash);
       
       setDepositProgress("Waiting for transaction confirmation...");
       
@@ -442,7 +440,6 @@ export function CreateLinkForm() {
         throw new Error(`Transaction failed: ${JSON.stringify(confirmation.value.err)}`);
       }
       
-      console.log("[Create] Transaction confirmed!");
       
       setDepositProgress("Depositing to Privacy Cash...");
       
@@ -508,9 +505,8 @@ export function CreateLinkForm() {
         await navigator.clipboard.writeText(url);
         setCopied(true);
         setTimeout(() => setCopied(false), 3000);
-        console.log("[Create] Link auto-copied to clipboard");
-      } catch (copyErr) {
-        console.error("[Create] Failed to auto-copy:", copyErr);
+      } catch {
+        // Clipboard copy failed silently
       }
       
       // Save to encrypted local storage
@@ -528,9 +524,6 @@ export function CreateLinkForm() {
       setSavedLinks(updatedLinks);
       
       setStep("complete");
-
-      console.log("[Create] Double hop complete!");
-      console.log("[Create] Claim URL:", url);
     } catch (err) {
       const message = err instanceof Error ? err.message : "Deposit failed";
       const isUserRejection =
@@ -539,9 +532,6 @@ export function CreateLinkForm() {
       if (isUserRejection) {
         // User clicked Reject in Phantom/wallet – not an error, just cancelled
         setError("Transaction cancelled");
-        if (process.env.NODE_ENV === "development") {
-          console.log("[Create] User cancelled transaction");
-        }
       } else {
         console.error("[Create] Deposit error:", err);
         setError(message);

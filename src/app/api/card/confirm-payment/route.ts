@@ -46,10 +46,6 @@ export async function POST(request: NextRequest) {
       withdrawTxHash,
     });
 
-    console.log(`[ConfirmPayment] Order ${orderId} marked as paid`);
-    console.log(`[ConfirmPayment] Deposit: ${depositTxHash}`);
-    console.log(`[ConfirmPayment] Withdraw: ${withdrawTxHash}`);
-
     return NextResponse.json({
       success: true,
       orderId: updated?.orderId,

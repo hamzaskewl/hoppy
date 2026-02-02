@@ -100,7 +100,7 @@ When using **Private Mode**, hoppy routes funds through the shielded pool twice,
 1. Sender deposits funds into a temporary wallet
 2. That wallet sends funds through the shielded pool
 3. Funds arrive at **Ephemeral Wallet 2** (a fresh keypair)
-4. The private key for Ephemeral Wallet 2 is encoded into the claim link
+4. A **384-bit composite secret** (containing a 256-bit Ed25519 private key seed) is encoded into the claim link
 
 **Recipient Side (Second Hop):**
 1. Recipient opens the claim link
@@ -280,7 +280,6 @@ hoppy/
 
 ### Up Next
 - [ ] Split claims (one deposit → multiple links)
-- [ ] Stealth addresses
 - [ ] Recall unclaimed payments
 - [ ] Viewing keys for compliance
 - [ ] Conditional release
@@ -288,7 +287,6 @@ hoppy/
 ### Future
 - [ ] x402 Protocol for AI agents
 - [ ] Agent wallets
-- [ ] EVM support
 - [ ] Cross-chain swaps
 
 ---

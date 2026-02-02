@@ -70,11 +70,6 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    console.log(`\n========== CLAIM LINK ==========`);
-    console.log(`[Claim] Ephemeral address: ${ephAddress}`);
-    console.log(`[Claim] Recipient: ${recipientAddress}`);
-    console.log(`[Claim] Privacy mode: ${recipientPrivacy}`);
-
     // ========================================================================
     // FLOW ROUTING: Based on recipientPrivacy
     // 
@@ -100,9 +95,6 @@ export async function POST(request: NextRequest) {
       const TX_FEE = 5000; // Standard tx fee in lamports
       const transferAmount = Math.max(0, ephemeralBalance - TX_FEE);
       
-      console.log(`[Quick] Ephemeral balance: ${ephemeralBalance / 1e9} SOL`);
-      console.log(`[Quick] Transfer amount: ${transferAmount / 1e9} SOL (minus ${TX_FEE} tx fee)`);
-      
       if (transferAmount <= 0) {
         throw new Error("Ephemeral wallet has insufficient balance for transfer");
       }
@@ -125,10 +117,6 @@ export async function POST(request: NextRequest) {
 
       // Check ephemeral is now empty
       const finalBalance = await connection.getBalance(compositeSecret.ephemeralKeypair.publicKey);
-      console.log(`[Quick] Ephemeral final balance: ${finalBalance / 1e9} SOL (should be 0)`);
-      console.log(`[Quick] Recipient received: ${transferAmount / 1e9} SOL`);
-      console.log(`[Quick] Tx: ${txHash}`);
-      console.log(`=================================\n`);
 
       return NextResponse.json({
         success: true,
@@ -160,9 +148,6 @@ export async function POST(request: NextRequest) {
       const MIN_TX_BUFFER = 3_000_000; // ~0.003 SOL - minimal buffer for tx fees
       const depositAmount = Math.max(0, ephBalance - MIN_TX_BUFFER);
       
-      console.log(`[Private] Ephemeral balance: ${ephBalance / 1e9} SOL`);
-      console.log(`[Private] Deposit amount: ${depositAmount / 1e9} SOL (minus ${MIN_TX_BUFFER / 1e9} buffer)`);
-      
       if (depositAmount <= 0) {
         throw new Error("Ephemeral balance too low to cover Privacy Cash overhead");
       }
@@ -171,7 +156,6 @@ export async function POST(request: NextRequest) {
       await privacyCashClient.deposit({
         lamports: depositAmount,
       });
-      console.log(`[Private] Deposited to pool`);
 
       // Withdraw with ZK privacy - pass FULL depositAmount
       // SDK will drain the entire UTXO (no change left behind)
@@ -183,9 +167,6 @@ export async function POST(request: NextRequest) {
 
       // Check ephemeral is now empty
       const finalBalance = await connection.getBalance(compositeSecret.ephemeralKeypair.publicKey);
-      console.log(`[Private] Ephemeral final balance: ${finalBalance / 1e9} SOL`);
-      console.log(`[Private] ZK withdrawal tx: ${withdrawResult.tx}`);
-      console.log(`=================================\n`);
 
       // The SDK deducts fee from depositAmount, recipient gets (depositAmount - fee)
       // Fee structure: 0.006 SOL base + 0.35% of amount
