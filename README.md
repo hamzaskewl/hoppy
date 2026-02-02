@@ -2,15 +2,15 @@
 
 **Privacy-First Payments on Solana**
 
-Send crypto to anyone without revealing the link between sender and recipient. Share a claim link. They withdraw. No trace.
+Sending crypto shouldn't require the recipient to have a wallet set up, share their address, or expose their identity. With hoppy, you just share a link. The money is in the link. They claim it privately.
 
-[![Live on Mainnet](https://img.shields.io/badge/Live-Mainnet-brightgreen)](https://hoppy.lol)
+[![Live on Mainnet](https://img.shields.io/badge/Live-Mainnet-brightgreen)](https://hoppy.cash)
 [![Solana](https://img.shields.io/badge/Built%20on-Solana-9945FF)](https://solana.com)
 [![TypeScript](https://img.shields.io/badge/TypeScript-007ACC?logo=typescript&logoColor=white)](https://typescriptlang.org)
 [![Next.js](https://img.shields.io/badge/Next.js%2015-black?logo=next.js&logoColor=white)](https://nextjs.org)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-[**Live Demo**](https://hoppy.lol) · [**Watch Demo Video**](#) · [**Roadmap**](https://hoppy.lol/roadmap)
+[**Live Demo**](https://hoppy.cash) · [**Watch Demo Video**](#) · [**Roadmap**](https://hoppy.cash/roadmap)
 
 ---
 
@@ -22,7 +22,6 @@ Send crypto to anyone without revealing the link between sender and recipient. S
 - [The Solution](#the-solution)
 - [Demo](#demo)
 - [Features](#features)
-- [Architecture](#architecture)
 - [How It Works](#how-it-works)
 - [Quick Start](#quick-start)
 - [Project Structure](#project-structure)
@@ -35,35 +34,36 @@ Send crypto to anyone without revealing the link between sender and recipient. S
 
 ## The Problem
 
-On-chain payments are **completely transparent**. Every transaction is permanently visible:
+Sending crypto is harder than it should be:
 
-- Anyone can see who paid whom
-- Wallet addresses become linked identities
-- Payment history is exposed forever
-- No way to send money privately without complex tooling
+- Recipient needs a wallet already set up
+- You need to ask for their address (awkward, error-prone)
+- If you send to the wrong address, funds are gone forever
+- Every transaction is publicly visible on-chain
+- Your wallet history becomes your financial identity
 
-This transparency prevents legitimate use cases: private donations, confidential payroll, gifts without revealing your wallet, and basic financial privacy.
+This friction prevents everyday use cases: sending money to friends, private gifts, paying someone who doesn't have crypto yet.
 
 ## The Solution
 
-hoppy makes private payments as simple as sharing a link.
+hoppy lets you send crypto by sharing a link. That's it.
 
-Instead of sending directly to a wallet address, you deposit funds into a **shielded pool** and receive a **claim link**. Share that link with anyone—they connect their wallet and withdraw. On-chain, there's no connection between sender and recipient.
+You deposit funds into a shielded pool and get a claim link. Share that link with anyone via text, email, or QR code. They open it, connect any wallet, and claim the funds. Nobody except the link holder knows what it contains, and on-chain observers cannot connect sender to recipient.
 
-**Create a private payment in 10 seconds. No trace left behind.**
+**No address needed. No wallet required upfront. Complete privacy.**
 
 ---
 
 ## Demo
 
-### For Hackathon Judges
+### For Testers
 
-1. Open [hoppy.lol/create](https://hoppy.lol/create)
-2. Connect your wallet (or sign in with email)
+1. Open [hoppy.cash/create](https://hoppy.cash/create)
+2. Connect your wallet or sign in with email
 3. Enter an amount and click **"Create Private Link"**
 4. Copy the claim link
-5. Open the link in an incognito window
-6. Connect a different wallet and claim the funds
+5. Open the link in another tab or on your phone with a different wallet
+6. Connect and claim the funds
 
 **That's it.** The deposit and withdrawal are unlinkable on-chain.
 
@@ -73,94 +73,54 @@ Instead of sending directly to a wallet address, you deposit funds into a **shie
 
 | Feature | Description |
 |---------|-------------|
-| **Private Payments** | Deposits and withdrawals are cryptographically unlinkable |
-| **Claim Links** | Share via text, email, or QR code—recipient claims to any wallet |
-| **No Seed Phrases** | Sign in with email, Google, or existing wallet |
-| **QR Codes** | Generate scannable codes for mobile claiming |
-| **Virtual Cards** | Convert shielded crypto to Visa/Mastercard *(in progress)* |
+| **Link-Based Payments** | Send money by sharing a link, no recipient address needed |
+| **Complete Privacy** | On-chain observers cannot link sender to recipient |
+| **No Wallet Required** | Recipients can sign in with email to create a wallet instantly |
+| **QR Code Sharing** | Generate scannable codes for mobile claiming |
+| **Gasless Claims** | Recipients don't need SOL to claim, relayer pays fees |
+| **Recipient Privacy Choice** | Recipients can choose quick (cheaper) or private (hidden from sender) |
+| **Virtual Debit Cards** | Convert shielded crypto to Visa/Mastercard *(in progress)* |
 | **Gift Card Payouts** | Redeem to Amazon, Uber, DoorDash *(in progress)* |
 | **Live on Mainnet** | Real SOL, real privacy, production-ready |
 
 ---
 
-## Architecture
-
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                              SENDER DEVICE                                   │
-│  ┌─────────────────┐    ┌─────────────────┐    ┌─────────────────────────┐  │
-│  │   Connect       │───▶│   Enter Amount  │───▶│   Deposit to Pool       │  │
-│  │   Wallet        │    │                 │    │   (ZK Shielded)         │  │
-│  └─────────────────┘    └─────────────────┘    └─────────────────────────┘  │
-└─────────────────────────────────────────────────────────────────────────────┘
-                                    │
-                          Claim Link Generated
-                                    │
-                                    ▼
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                           SHIELDED POOL                                      │
-│  ┌─────────────────────────────────────────────────────────────────────┐    │
-│  │   Commitment Storage  │  Nullifier Tracking  │  ZK Proof Verification │  │
-│  └─────────────────────────────────────────────────────────────────────┘    │
-│                                                                              │
-│   On-chain: Only sees deposits IN and withdrawals OUT (no link between)     │
-└─────────────────────────────────────────────────────────────────────────────┘
-                                    │
-                          Recipient Opens Link
-                                    │
-                                    ▼
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                            RECIPIENT DEVICE                                  │
-│  ┌─────────────────┐    ┌─────────────────┐    ┌─────────────────────────┐  │
-│  │   Open Claim    │───▶│   Connect Any   │───▶│   Withdraw from Pool    │  │
-│  │   Link          │    │   Wallet        │    │   (Funds Received)      │  │
-│  └─────────────────┘    └─────────────────┘    └─────────────────────────┘  │
-└─────────────────────────────────────────────────────────────────────────────┘
-```
-
----
-
 ## How It Works
 
-### Sending a Private Payment
+### Sending a Payment
 
 ```
-User connects wallet
-    ↓
-Enters amount (e.g., 0.5 SOL)
-    ↓
-Funds deposited to shielded pool
-    ↓
-Cryptographic claim link generated
-    ↓
-User shares link with recipient
-    ↓
-✓ No on-chain connection to recipient
+1. Connect your wallet (or sign in with email)
+         ↓
+2. Enter the amount you want to send
+         ↓
+3. Funds are deposited into a shielded pool
+         ↓
+4. You receive a claim link with a cryptographic secret
+         ↓
+5. Share the link however you want (text, email, QR)
 ```
 
 ### Claiming Funds
 
 ```
-Recipient opens claim link
-    ↓
-Connects their wallet (any wallet)
-    ↓
-Clicks "Claim Funds"
-    ↓
-ZK proof verified on-chain
-    ↓
-Funds withdrawn to recipient wallet
-    ↓
-✓ Nullifier prevents double-claiming
+1. Recipient opens the claim link
+         ↓
+2. Connects any wallet (or creates one with email)
+         ↓
+3. Chooses privacy level (Quick or Private)
+         ↓
+4. Clicks "Claim" - funds arrive in their wallet
+         ↓
+5. No SOL needed - relayer pays transaction fees
 ```
 
-### Privacy Guarantee
+### Privacy Levels
 
-| Observer | Can See |
-|----------|---------|
-| **Blockchain** | Deposit to pool ✓, Withdrawal from pool ✓, **Link between them ✗** |
-| **Sender** | Recipient's address (only after they claim) |
-| **Recipient** | Only that they received funds |
+| Level | What Happens | Who Can See Recipient |
+|-------|--------------|----------------------|
+| **Quick Claim** | Direct withdrawal, cheaper | Sender can see if they check |
+| **Private Claim** | Extra routing hop, more private | Nobody, not even sender |
 
 ---
 
@@ -175,7 +135,7 @@ Funds withdrawn to recipient wallet
 
 ```bash
 # Clone the repository
-git clone https://github.com/AgroTree-Ledger/hoppy.git
+git clone https://github.com/hamzaskewl/hoppy.git
 cd hoppy
 
 # Install dependencies
@@ -252,17 +212,18 @@ hoppy/
 
 | Layer | Protection |
 |-------|------------|
-| **Privacy Pool** | ZK-compressed state, cryptographic commitments, unlinkable deposits/withdrawals |
-| **Claim Links** | Cryptographic secret in URL hash—only link holder can claim |
-| **Nullifiers** | Each claim link can only be used once—prevents double-spending |
-| **No Custody** | Funds flow directly through on-chain pool—hoppy never holds your crypto |
+| **Shielded Pool** | ZK-compressed state, cryptographic commitments, unlinkable deposits/withdrawals |
+| **Claim Links** | Cryptographic secret in URL hash, only link holder can claim |
+| **Nullifiers** | Each claim link can only be used once, prevents double-spending |
+| **No Custody** | Funds flow directly through on-chain pool, hoppy never holds your crypto |
+| **Recipient Choice** | Recipients choose their privacy level when claiming |
 | **Open Source** | All code is auditable |
 
-### Threat Model
+### Important Notes
 
-- **Claim link is the secret** — Anyone with the URL can claim. Share securely.
-- **Sender visibility** — Sender learns recipient's address after claim (accepted tradeoff)
-- **Pool privacy** — On-chain observers cannot link sender to recipient
+- **Claim link is the secret.** Anyone with the URL can claim the funds. Share securely.
+- **Quick claims are traceable.** If recipient chooses "Quick Claim", sender can see who claimed by checking the blockchain.
+- **Private claims are hidden.** If recipient chooses "Private Claim", even the sender cannot see who received the funds.
 
 ---
 
@@ -275,8 +236,8 @@ hoppy/
 - Tailwind CSS
 - Framer Motion
 
-**Blockchain**
-- Solana Web3.js
+**Privacy Infrastructure**
+- Privacy Cash SDK
 - Light Protocol (ZK Compression)
 - Helius RPC
 
@@ -293,41 +254,42 @@ hoppy/
 ## Roadmap
 
 ### In Progress
-- [ ] Partial withdrawals — claim only a portion, leave the rest
-- [ ] Multi-token support — USDC, USDT, BONK, SPL tokens
-- [ ] Virtual debit cards — shielded crypto to Visa/Mastercard
-- [ ] Gift card payouts — Amazon, Uber, DoorDash
-- [ ] Claim expiration — auto-refund unclaimed links
+- [ ] Partial withdrawals
+- [ ] Multi-token support (USDC, USDT, BONK)
+- [ ] Virtual debit cards
+- [ ] Gift card payouts
+- [ ] Claim expiration with auto-refund
 
 ### Up Next
-- [ ] Split claims — one deposit → multiple claim links
-- [ ] Stealth addresses — one-time recipient addresses
-- [ ] Recall payments — cancel unclaimed links
-- [ ] Viewing keys — optional compliance/audit capability
-- [ ] Conditional release — oracle-based fund release
+- [ ] Split claims (one deposit → multiple links)
+- [ ] Stealth addresses
+- [ ] Recall unclaimed payments
+- [ ] Viewing keys for compliance
+- [ ] Conditional release
 
 ### Future
-- [ ] x402 Protocol — HTTP 402 payments for AI agents
-- [ ] Agent wallets — autonomous AI spending
-- [ ] EVM support — Ethereum, Base, Arbitrum, Polygon
-- [ ] Cross-chain swaps — swap + shield in one transaction
+- [ ] x402 Protocol for AI agents
+- [ ] Agent wallets
+- [ ] EVM support
+- [ ] Cross-chain swaps
 
 ---
 
 ## Acknowledgments
 
-- **Light Protocol** — ZK compression infrastructure
-- **Helius** — Reliable Solana RPC
-- **Solana Foundation** — Hackathon sponsorship
+- **Privacy Cash** - ZK compression infrastructure
+- **Light Protocol** - Underlying ZK technology
+- **Helius** - Reliable Solana RPC
+- **Solana Foundation** - Hackathon sponsorship
 
 ---
 
 ## Links
 
-- **Live Demo:** [hoppy.lol](https://hoppy.lol)
+- **Live Demo:** [hoppy.cash](https://hoppy.cash)
 - **GitHub:** [github.com/hamzaskewl/hoppy](https://github.com/hamzaskewl/hoppy)
 - **Twitter:** [@hoppyprivacy](https://x.com/hoppyprivacy)
-- **Roadmap:** [hoppy.lol/roadmap](https://hoppy.lol/roadmap)
+- **Roadmap:** [hoppy.cash/roadmap](https://hoppy.cash/roadmap)
 
 ---
 

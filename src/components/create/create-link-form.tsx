@@ -2,6 +2,7 @@
 
 import { useState, useMemo, useEffect, useCallback } from "react";
 import { QRCodeSVG } from "qrcode.react";
+import Image from "next/image";
 import { Copy, Check, Shield, Wallet, ArrowRight, Lock, Info, AlertTriangle, Eye, EyeOff, Save, History, Trash2, ExternalLink, ChevronDown, Settings2 } from "lucide-react";
 import { usePrivy } from "@privy-io/react-auth";
 import { Button } from "@/components/ui/button";
@@ -954,16 +955,27 @@ export function CreateLinkForm() {
         {/* Step 3: Depositing */}
         {step === "depositing" && (
           <div className="py-8 text-center">
-            <div className="relative w-24 h-24 mx-auto">
+            <div className="relative w-32 h-32 mx-auto">
+              {/* Outer pulsing ring */}
               <div className="absolute inset-0 rounded-full border-4 border-hop-500/30 animate-ping" />
+              {/* Middle pulsing ring */}
               <div className="absolute inset-2 rounded-full border-4 border-hop-500/50 animate-pulse" />
-              <div className="absolute inset-4 rounded-full bg-hop-200 dark:bg-hop-500/20 flex items-center justify-center">
-                <Shield className="w-8 h-8 text-hop-600 dark:text-hop-400 animate-pulse" />
+              {/* Inner glow */}
+              <div className="absolute inset-4 rounded-full bg-hop-200/50 dark:bg-hop-500/20" />
+              {/* Bunny animation */}
+              <div className="absolute inset-0 flex items-center justify-center animate-bounce">
+                <Image
+                  src="/bunnyspin.png"
+                  alt="Processing"
+                  width={80}
+                  height={80}
+                  className="object-contain"
+                />
               </div>
             </div>
             <h3 className="mt-6 text-lg font-semibold">Creating Payment Link</h3>
             <p className="mt-2 text-sm text-muted-foreground">
-              {depositProgress || "Processing..."}
+              {depositProgress || "Hopping through privacy..."}
             </p>
             
             <div className="mt-4 p-3 rounded-lg bg-amber-50 dark:bg-amber-500/10 border-2 border-amber-300 dark:border-amber-500/30">
