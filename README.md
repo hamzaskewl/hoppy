@@ -10,7 +10,7 @@ Sending crypto shouldn't require the recipient to have a wallet set up, share th
 [![Next.js](https://img.shields.io/badge/Next.js%2015-black?logo=next.js&logoColor=white)](https://nextjs.org)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-[**Live Demo**](https://hoppy.cash) · [**Watch Demo Video**](#) · [**Roadmap**](https://hoppy.cash/roadmap)
+[**Live Demo**](https://hoppy.cash) · [**Watch Demo Video**](https://www.youtube.com/watch?v=6PiOxw07JJ4) · [**Roadmap**](https://hoppy.cash/roadmap)
 
 ---
 

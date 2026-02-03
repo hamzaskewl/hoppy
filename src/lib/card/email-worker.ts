@@ -143,7 +143,7 @@ async function processEmail(email: ParsedMail): Promise<boolean> {
     claimLink,
   });
   
-  return updated;
+  return updated !== null;
 }
 
 /**
