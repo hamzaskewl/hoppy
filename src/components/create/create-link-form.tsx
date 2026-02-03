@@ -1182,7 +1182,7 @@ export function CreateLinkForm() {
                   disabled={
                     !costBreakdown || 
                     costBreakdown.senderPays <= 0 ||
-                    (selectedToken !== "SOL" && senderPrivacy === "private" && relayerStatus && !relayerStatus.available)
+                    (selectedToken !== "SOL" && senderPrivacy === "private" && relayerStatus !== null && !relayerStatus.available)
                   }
                 >
                   <Shield className="w-4 h-4 mr-2" />

@@ -356,10 +356,11 @@ export function calculateFees(depositAmountLamports: number): FeeEstimate {
  */
 export function calculateSPLFees(tokenAmount: number, decimals: number = 6): FeeEstimate {
   // SPL tokens: Rent fee (in token value) + 0.35%
-  // Rent is ~0.002 SOL, which at market rates is roughly $0.30-0.50
-  // For safety, estimate $0.50 worth of rent per withdrawal
-  const RENT_FEE_USD = 0.50;
-  const rentFeeInBaseUnits = Math.floor(RENT_FEE_USD * (10 ** decimals)); // e.g., 500,000 for USDC
+  // Rent is ~0.002 SOL, which at market rates is roughly $0.50-0.60
+  // Based on actual transaction data: 8 USDC - 7.423 USDC = ~0.58 fee
+  // Percentage: 8 * 0.0035 = 0.028, so rent ≈ $0.55
+  const RENT_FEE_USD = 0.55;
+  const rentFeeInBaseUnits = Math.floor(RENT_FEE_USD * (10 ** decimals)); // e.g., 550,000 for USDC
   
   const percentageFee = Math.floor(tokenAmount * PRIVACY_CASH_PERCENTAGE_FEE);
   const totalFee = rentFeeInBaseUnits + percentageFee;
@@ -382,8 +383,8 @@ export function calculateSPLFees(tokenAmount: number, decimals: number = 6): Fee
  * @returns Deposit amount needed
  */
 export function calculateSPLDepositForRecipientAmount(recipientAmount: number, decimals: number = 6): number {
-  // Rent fee in token units (~$0.50)
-  const RENT_FEE_USD = 0.50;
+  // Rent fee in token units (~$0.55)
+  const RENT_FEE_USD = 0.55;
   const rentFeeInBaseUnits = Math.floor(RENT_FEE_USD * (10 ** decimals));
   return Math.ceil((recipientAmount + rentFeeInBaseUnits) / (1 - PRIVACY_CASH_PERCENTAGE_FEE));
 }
