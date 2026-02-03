@@ -25,7 +25,7 @@ function HoppyLogo({ size = 40 }: { size?: number }) {
 
 export default function ClaimPage() {
   return (
-    <div className="min-h-screen py-12 px-4 bg-background relative">
+    <div className="min-h-screen py-12 px-4 relative">
       {/* Carrot background - light mode */}
       <div
         className="absolute inset-0 -z-10 dark:hidden"

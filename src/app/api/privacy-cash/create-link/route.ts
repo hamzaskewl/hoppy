@@ -17,17 +17,34 @@
  */
 
 import { NextRequest, NextResponse } from "next/server";
-import { Connection } from "@solana/web3.js";
+import { Connection, PublicKey } from "@solana/web3.js";
 import { PrivacyCash } from "privacycash";
+import { getAssociatedTokenAddress, getAccount } from "@solana/spl-token";
+import bs58 from "bs58";
 import {
   decodeCompositeSecret,
   generateCompositeSecret,
   type DoubleHopNote,
   type SenderPrivacy,
+  type SupportedToken,
+  getTokenInfo,
+  SPL_SOL_BUFFER,
 } from "@/lib/privacy/privacy-cash-adapter";
 
 const RPC_URL = process.env.NEXT_PUBLIC_SOLANA_RPC_URL || "https://api.devnet.solana.com";
 const NETWORK = (process.env.NEXT_PUBLIC_SOLANA_NETWORK as "devnet" | "mainnet-beta") || "devnet";
+
+// Helper to get SPL token balance
+async function getTokenBalance(connection: Connection, owner: PublicKey, mint: string): Promise<bigint> {
+  try {
+    const mintPubkey = new PublicKey(mint);
+    const ata = await getAssociatedTokenAddress(mintPubkey, owner);
+    const account = await getAccount(connection, ata);
+    return account.amount;
+  } catch {
+    return BigInt(0);
+  }
+}
 
 
 export async function POST(request: NextRequest) {
@@ -40,6 +57,7 @@ export async function POST(request: NextRequest) {
       fundingTxHash,
       senderPrivacy: senderPrivacyRaw,
       senderAddress, // For reclaim feature
+      token: tokenRaw, // Token type (SOL, USDC, USDT)
     } = body;
 
     // Mutable: may be adjusted if we need to leave rent reserve
@@ -57,6 +75,15 @@ export async function POST(request: NextRequest) {
       (senderPrivacyRaw === "basic" || senderPrivacyRaw === "private") 
         ? senderPrivacyRaw 
         : "basic";
+    
+    // Validate and default token (SOL for backwards compatibility)
+    const token: SupportedToken = 
+      (tokenRaw === "SOL" || tokenRaw === "USDC" || tokenRaw === "USDT")
+        ? tokenRaw
+        : "SOL";
+    
+    const tokenInfo = getTokenInfo(token);
+    const isSOL = token === "SOL";
 
     if (!secretEncoded || !ephemeralAddress || !fundingTxHash) {
       return NextResponse.json(
@@ -104,20 +131,52 @@ export async function POST(request: NextRequest) {
     // Processing sender request
     
     // Verify ephemeral wallet has received funds
-    const ephemeralBalance = await connection.getBalance(compositeSecret.ephemeralKeypair.publicKey);
+    const eph1Pubkey = compositeSecret.ephemeralKeypair.publicKey;
+    const eph1Address = eph1Pubkey.toBase58();
     
-    if (ephemeralBalance <= 0) {
-      return NextResponse.json(
-        { 
-          success: false, 
-          error: `Ephemeral wallet has no balance. Expected ~${amount / 1e9} SOL. Funding transaction may still be processing.` 
-        },
-        { status: 400 }
-      );
+    // For SOL: check SOL balance
+    // For SPL: check token balance AND SOL balance (for gas)
+    const solBalance = await connection.getBalance(eph1Pubkey);
+    
+    let tokenBalance: bigint = BigInt(0);
+    if (!isSOL && tokenInfo.mint) {
+      tokenBalance = await getTokenBalance(connection, eph1Pubkey, tokenInfo.mint);
+      
+      // For SPL tokens, we need both: token balance AND SOL for gas
+      if (tokenBalance <= BigInt(0)) {
+        return NextResponse.json(
+          { 
+            success: false, 
+            error: `Ephemeral wallet has no ${token} balance. Funding transaction may still be processing.` 
+          },
+          { status: 400 }
+        );
+      }
+      
+      if (solBalance < SPL_SOL_BUFFER) {
+        return NextResponse.json(
+          { 
+            success: false, 
+            error: `Ephemeral wallet needs at least ${SPL_SOL_BUFFER / 1e9} SOL for gas fees. Current: ${solBalance / 1e9} SOL` 
+          },
+          { status: 400 }
+        );
+      }
+    } else {
+      // For SOL
+      if (solBalance <= 0) {
+        return NextResponse.json(
+          { 
+            success: false, 
+            error: `Ephemeral wallet has no balance. Expected ~${amount / 1e9} SOL. Funding transaction may still be processing.` 
+          },
+          { status: 400 }
+        );
+      }
     }
-
-    // Balance verified
-    const eph1Address = compositeSecret.ephemeralKeypair.publicKey.toBase58();
+    
+    // Use the appropriate balance
+    const ephemeralBalance = isSOL ? solBalance : Number(tokenBalance);
 
     let depositTxHash: string | undefined;
     let withdrawTxHash: string | undefined;
@@ -140,16 +199,19 @@ export async function POST(request: NextRequest) {
       // 4. Link contains Eph2 - recipient cannot trace back to sender
       // ================================================================
       
-      // SDK needs minimal buffer for tx fees (~0.003 SOL)
-      const MIN_TX_BUFFER = 3_000_000; // ~0.003 SOL
+      // For SOL: leave buffer for tx fees
+      // For SPL: use full token balance (SOL is separate for gas)
+      const MIN_TX_BUFFER = isSOL ? 3_000_000 : 0; // ~0.003 SOL buffer for native SOL only
       const depositAmount = Math.max(0, ephemeralBalance - MIN_TX_BUFFER);
       
       // Privacy Cash fee: ~0.006 SOL base + 0.35% = minimum ~0.007 SOL for small amounts
-      const MIN_AMOUNT_FOR_PRIVATE = 10_000_000; // 0.01 SOL minimum
+      // For USDC: minimum ~$0.10 worth
+      const MIN_AMOUNT_FOR_PRIVATE = isSOL ? 10_000_000 : 100_000; // 0.01 SOL or 0.1 USDC
       
       if (depositAmount <= MIN_AMOUNT_FOR_PRIVATE) {
+        const minDisplay = isSOL ? "0.01 SOL" : `0.1 ${token}`;
         return NextResponse.json(
-          { success: false, error: "Amount too small - need at least 0.01 SOL for private transfer" },
+          { success: false, error: `Amount too small - need at least ${minDisplay} for private transfer` },
           { status: 400 }
         );
       }
@@ -158,18 +220,32 @@ export async function POST(request: NextRequest) {
       const eph1Client = new PrivacyCash({
         RPC_url: RPC_URL,
         owner: compositeSecret.ephemeralKeypair, // Eph1
-        enableDebug: true,
+        enableDebug: false,
       });
       
-      // Step 2: Deposit Eph1 → Pool
+      // Step 2: Deposit Eph1 → Pool (SOL or SPL)
       let depositResult;
       let lastError: any = null;
       
+      // For SPL tokens, Privacy Cash expects amounts in WHOLE TOKENS, not base units
+      // e.g., 10 USDC = 10 (not 10,000,000)
+      const depositAmountForSDK = isSOL 
+        ? depositAmount 
+        : depositAmount / (10 ** tokenInfo.decimals);
+      
       for (let attempt = 1; attempt <= 3; attempt++) {
         try {
-          depositResult = await eph1Client.deposit({
-            lamports: depositAmount,
-          });
+          if (isSOL) {
+            depositResult = await eph1Client.deposit({
+              lamports: depositAmount,
+            });
+          } else {
+            // SPL token deposit - amount in whole tokens
+            depositResult = await eph1Client.depositSPL({
+              amount: depositAmountForSDK,
+              mintAddress: tokenInfo.mint!,
+            });
+          }
           break;
         } catch (depositError: any) {
           lastError = depositError;
@@ -210,10 +286,19 @@ export async function POST(request: NextRequest) {
       let withdrawResult;
       for (let attempt = 1; attempt <= 3; attempt++) {
         try {
-          withdrawResult = await eph1Client.withdraw({
-            lamports: depositAmount, // Full amount - SDK handles fee deduction
-            recipientAddress: eph2Address,
-          });
+          if (isSOL) {
+            withdrawResult = await eph1Client.withdraw({
+              lamports: depositAmount, // Full amount - SDK handles fee deduction
+              recipientAddress: eph2Address,
+            });
+          } else {
+            // SPL token withdrawal - amount in whole tokens
+            withdrawResult = await eph1Client.withdrawSPL({
+              amount: depositAmountForSDK, // Use whole tokens, not base units
+              mintAddress: tokenInfo.mint!,
+              recipientAddress: eph2Address,
+            });
+          }
           break;
         } catch (withdrawError: any) {
           lastError = withdrawError;
@@ -237,16 +322,65 @@ export async function POST(request: NextRequest) {
       withdrawTxHash = withdrawResult.tx;
       
       // Funds are now in Eph2 (funded by the pool via ZK - untraceable!)
-      // Get actual Eph2 balance to know what recipient can claim
       // Wait a moment for the withdrawal to be confirmed
       await new Promise(r => setTimeout(r, 2000));
-      const eph2Balance = await connection.getBalance(eph2Secret.ephemeralKeypair.publicKey);
       
-      // Calculate actual fee paid
-      const actualFee = depositAmount - eph2Balance;
+      // For SPL tokens: Eph2 only received tokens, NO SOL for gas!
+      // Use Hoppy relayer to send SOL to Eph2 (preserves privacy - no link from Eph1 to Eph2)
+      if (!isSOL) {
+        const RELAYER_PRIVATE_KEY = process.env.HOPPY_RELAYER_PRIVATE_KEY;
+        const SOL_FOR_EPH2 = 3_000_000; // 0.003 SOL for recipient to claim
+        
+        if (RELAYER_PRIVATE_KEY) {
+          try {
+            const { Transaction, SystemProgram, Keypair, sendAndConfirmTransaction } = await import("@solana/web3.js");
+            const relayerKeypair = Keypair.fromSecretKey(bs58.decode(RELAYER_PRIVATE_KEY));
+            
+            // Verify Eph2 actually has tokens before sending SOL (prevent abuse)
+            const eph2TokenBalance = await getTokenBalance(
+              connection, 
+              eph2Secret.ephemeralKeypair.publicKey, 
+              tokenInfo.mint!
+            );
+            
+            if (eph2TokenBalance > BigInt(0)) {
+              // Check relayer has enough balance
+              const relayerBalance = await connection.getBalance(relayerKeypair.publicKey);
+              const MIN_RELAYER_BALANCE = 20_000_000; // 0.02 SOL minimum
+              
+              if (relayerBalance > MIN_RELAYER_BALANCE + SOL_FOR_EPH2) {
+                const relayerTx = new Transaction().add(
+                  SystemProgram.transfer({
+                    fromPubkey: relayerKeypair.publicKey,
+                    toPubkey: eph2Secret.ephemeralKeypair.publicKey,
+                    lamports: SOL_FOR_EPH2,
+                  })
+                );
+                await sendAndConfirmTransaction(connection, relayerTx, [relayerKeypair], { commitment: "confirmed" });
+              } else {
+                // Relayer balance too low - log warning but don't fail the transaction
+                console.warn("[Relayer] Balance too low to subsidize gas. User will need to fund Eph2 manually.");
+              }
+            }
+          } catch (relayerError) {
+            // Relayer failed - non-critical, log and continue
+            console.error("[Relayer] Failed to send SOL to Eph2:", relayerError);
+          }
+        }
+      }
       
-      // Check Eph1 final balance
-      const eph1FinalBalance = await connection.getBalance(compositeSecret.ephemeralKeypair.publicKey);
+      // Get actual Eph2 balance to know what recipient can claim
+      let eph2Balance: number;
+      if (isSOL) {
+        eph2Balance = await connection.getBalance(eph2Secret.ephemeralKeypair.publicKey);
+      } else {
+        const eph2TokenBalance = await getTokenBalance(
+          connection, 
+          eph2Secret.ephemeralKeypair.publicKey, 
+          tokenInfo.mint!
+        );
+        eph2Balance = Number(eph2TokenBalance);
+      }
       
       fundsLocation = "ephemeral";
       amount = eph2Balance; // Actual amount Eph2 received (after SDK fee deduction)
@@ -255,7 +389,7 @@ export async function POST(request: NextRequest) {
       finalSecret = eph2Secret.full;
       finalEphemeralAddress = eph2Address;
       
-      // Step 5: Sweep any remaining Eph1 balance back to sender
+      // Step 5: Sweep any remaining Eph1 SOL balance back to sender
       if (senderAddress) {
         try {
           const remainingBalance = await connection.getBalance(compositeSecret.ephemeralKeypair.publicKey);
@@ -304,6 +438,9 @@ export async function POST(request: NextRequest) {
       senderPrivacy,
       senderAddress: senderPrivacy === "basic" ? senderAddress : undefined, // Only store for reclaim if basic
       fundsLocation,
+      // Token info (defaults to SOL for backwards compatibility)
+      token,
+      tokenMint: tokenInfo.mint,
     };
 
     return NextResponse.json({

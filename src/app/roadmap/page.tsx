@@ -4,7 +4,7 @@ import { useRef } from "react";
 import Link from "next/link";
 import Image from "next/image";
 import { motion, useInView } from "framer-motion";
-import { Zap, Clock, Sparkles } from "lucide-react";
+import { Zap, Clock, Sparkles, Check } from "lucide-react";
 import { NavHeader } from "@/components/nav-header";
 
 // Animated Card Component
@@ -39,6 +39,55 @@ function RoadmapCard({
         <p className="text-sm text-muted-foreground leading-relaxed">
           {description}
         </p>
+      </div>
+    </motion.div>
+  );
+}
+
+// Completed Card Component (green with checkmark)
+function CompletedCard({ 
+  title, 
+  description, 
+  index,
+  progress,
+}: { 
+  title: string; 
+  description: string; 
+  index: number;
+  progress?: string; // e.g., "2/3"
+}) {
+  const ref = useRef(null);
+  const isInView = useInView(ref, { once: true, margin: "-50px" });
+
+  return (
+    <motion.div
+      ref={ref}
+      initial={{ opacity: 0, y: 30 }}
+      animate={isInView ? { opacity: 1, y: 0 } : { opacity: 0, y: 30 }}
+      transition={{ 
+        duration: 0.5, 
+        delay: index * 0.1,
+        ease: "easeOut"
+      }}
+      className="group"
+    >
+      <div className="bg-green-50 dark:bg-green-900/20 border-2 border-green-500 rounded-xl p-5 h-full transition-all duration-300 hover:shadow-lg hover:shadow-green-500/20">
+        <div className="flex items-start justify-between gap-2">
+          <div className="flex-1">
+            <h4 className="font-bold text-green-700 dark:text-green-400 mb-1">
+              {title}
+            </h4>
+            <p className="text-sm text-green-600/80 dark:text-green-300/70 leading-relaxed">
+              {description}
+            </p>
+            <span className="inline-block mt-2 text-xs font-semibold text-green-600 dark:text-green-400 bg-green-100 dark:bg-green-900/40 px-2 py-0.5 rounded-full">
+              {progress ? `COMPLETED ${progress}` : "COMPLETED"}
+            </span>
+          </div>
+          <div className="flex-shrink-0 w-6 h-6 rounded-full bg-green-500 flex items-center justify-center">
+            <Check className="w-4 h-4 text-white" />
+          </div>
+        </div>
       </div>
     </motion.div>
   );
@@ -186,14 +235,15 @@ export default function RoadmapPage() {
             <div className="bg-card/95 backdrop-blur-md rounded-2xl border-2 border-hop-500 p-5 shadow-xl">
               <ColumnHeader icon={Zap} title="In Progress" variant="active" />
               <div className="space-y-4">
+                <CompletedCard 
+                  title="Multi-Token Support" 
+                  description="USDC, USDT, and more SPL tokens"
+                  index={0}
+                  progress="2/3"
+                />
                 <RoadmapCard 
                   title="Partial Withdrawals" 
                   description="Claim only a portion of funds, leave the rest for later"
-                  index={0}
-                />
-                <RoadmapCard 
-                  title="Multi-Token Support" 
-                  description="USDC, USDT, BONK, and more SPL tokens"
                   index={1}
                 />
                 <RoadmapCard 

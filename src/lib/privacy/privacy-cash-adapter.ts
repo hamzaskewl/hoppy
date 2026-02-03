@@ -49,6 +49,53 @@ import bs58 from "bs58";
 // This prevents the CURVE.a bundling error
 const LAMPORTS_PER_SOL = 1_000_000_000;
 
+// ============================================================================
+// Token Constants
+// ============================================================================
+
+export type SupportedToken = "SOL" | "USDC" | "USDT";
+
+export interface TokenInfo {
+  symbol: SupportedToken;
+  name: string;
+  mint: string | null; // null for native SOL
+  decimals: number;
+  icon: string;
+}
+
+// Mainnet token mints
+export const TOKEN_MINTS: Record<SupportedToken, TokenInfo> = {
+  SOL: {
+    symbol: "SOL",
+    name: "Solana",
+    mint: null, // Native SOL
+    decimals: 9,
+    icon: "/sol.svg",
+  },
+  USDC: {
+    symbol: "USDC",
+    name: "USD Coin",
+    mint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v", // Mainnet USDC
+    decimals: 6,
+    icon: "https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v/logo.png",
+  },
+  USDT: {
+    symbol: "USDT",
+    name: "Tether USD",
+    mint: "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB", // Mainnet USDT
+    decimals: 6,
+    icon: "https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB/logo.png",
+  },
+};
+
+// Get token info (mainnet only - Privacy Cash doesn't support devnet)
+export function getTokenInfo(token: SupportedToken): TokenInfo {
+  return TOKEN_MINTS[token];
+}
+
+// SOL buffer needed for SPL token transactions (for gas fees + potential ATA creation)
+export const SPL_SOL_BUFFER = 5_000_000; // 0.005 SOL
+
 // Lazy loader for Keypair to avoid bundling issues with @solana/web3.js
 let _Keypair: typeof import("@solana/web3.js").Keypair | null = null;
 
@@ -80,7 +127,7 @@ export interface CompositeSecret {
 export interface DoubleHopNote {
   /** Composite secret (base58 encoded) */
   secret: string;
-  /** Amount in lamports available for recipient */
+  /** Amount in smallest unit (lamports for SOL, 6 decimals for USDC/USDT) */
   amount: number;
   /** Network */
   network: "devnet" | "mainnet-beta";
@@ -96,6 +143,10 @@ export interface DoubleHopNote {
   senderAddress?: string;
   /** Where funds are currently located */
   fundsLocation: "ephemeral" | "pool";
+  /** Token type (defaults to SOL for backwards compatibility) */
+  token?: SupportedToken;
+  /** Token mint address (null for native SOL) */
+  tokenMint?: string | null;
 }
 
 export interface FeeEstimate {
@@ -273,7 +324,7 @@ export function decodeCompositeSecret(encoded: string): CompositeSecret | null {
 
 /**
  * Calculate Privacy Cash fees for withdrawing a given deposit amount.
- * Fee formula: depositAmount * 0.35% + 0.006 SOL base fee
+ * Fee formula for SOL: depositAmount * 0.35% + 0.006 SOL base fee
  * 
  * @param depositAmountLamports The amount being deposited/withdrawn from Privacy Cash
  * @returns Fee breakdown including what recipient receives
@@ -290,6 +341,51 @@ export function calculateFees(depositAmountLamports: number): FeeEstimate {
     totalFee,
     recipientReceives: Math.max(0, recipientReceives),
   };
+}
+
+/**
+ * Calculate Privacy Cash fees for SPL tokens.
+ * Fee formula for SPL: RENT FEE (in token value) + 0.35% of amount
+ * 
+ * The rent fee is ~0.002 SOL converted to token value. At ~$150/SOL, that's ~$0.30-0.50
+ * For stablecoins (6 decimals), we estimate ~500,000 base units (~$0.50) as rent fee
+ * 
+ * @param tokenAmount The token amount in base units (e.g., 1 USDC = 1,000,000)
+ * @param decimals Token decimals (6 for USDC/USDT)
+ * @returns Fee breakdown including what recipient receives
+ */
+export function calculateSPLFees(tokenAmount: number, decimals: number = 6): FeeEstimate {
+  // SPL tokens: Rent fee (in token value) + 0.35%
+  // Rent is ~0.002 SOL, which at market rates is roughly $0.30-0.50
+  // For safety, estimate $0.50 worth of rent per withdrawal
+  const RENT_FEE_USD = 0.50;
+  const rentFeeInBaseUnits = Math.floor(RENT_FEE_USD * (10 ** decimals)); // e.g., 500,000 for USDC
+  
+  const percentageFee = Math.floor(tokenAmount * PRIVACY_CASH_PERCENTAGE_FEE);
+  const totalFee = rentFeeInBaseUnits + percentageFee;
+  const recipientReceives = tokenAmount - totalFee;
+  
+  return {
+    baseFee: rentFeeInBaseUnits, // Rent fee in token units
+    percentageFee,
+    totalFee,
+    recipientReceives: Math.max(0, recipientReceives),
+  };
+}
+
+/**
+ * Calculate how much SPL to deposit so recipient receives the intended amount.
+ * Math: Deposit = (recipientAmount + rentFee) / (1 - 0.0035)
+ * 
+ * @param recipientAmount The amount the recipient should receive
+ * @param decimals Token decimals (6 for USDC/USDT)
+ * @returns Deposit amount needed
+ */
+export function calculateSPLDepositForRecipientAmount(recipientAmount: number, decimals: number = 6): number {
+  // Rent fee in token units (~$0.50)
+  const RENT_FEE_USD = 0.50;
+  const rentFeeInBaseUnits = Math.floor(RENT_FEE_USD * (10 ** decimals));
+  return Math.ceil((recipientAmount + rentFeeInBaseUnits) / (1 - PRIVACY_CASH_PERCENTAGE_FEE));
 }
 
 /**
@@ -400,6 +496,42 @@ export function calculateRecipientReceives(
   };
 }
 
+/**
+ * Calculate what recipient receives for SPL tokens.
+ * SPL tokens: Rent fee (~$0.50 in token value) + 0.35% per withdrawal
+ * 
+ * @param tokenAmount Amount of tokens in base units
+ * @param recipientPrivacy Recipient's privacy choice
+ * @param decimals Token decimals (6 for USDC/USDT)
+ */
+export function calculateSPLRecipientReceives(
+  tokenAmount: number,
+  recipientPrivacy: RecipientPrivacy = "quick",
+  decimals: number = 6
+): {
+  poolAmount: number;
+  recipientReceives: number;
+  fee: number;
+  privacyInfo: RecipientPrivacyInfo;
+} {
+  const privacyInfo = RECIPIENT_PRIVACY[recipientPrivacy];
+  const hops = privacyInfo.hops;
+  
+  // Each hop costs rent fee (~$0.50 in token) + 0.35%
+  let remaining = tokenAmount;
+  for (let i = 0; i < hops; i++) {
+    const fees = calculateSPLFees(remaining, decimals);
+    remaining = fees.recipientReceives;
+  }
+  
+  return {
+    poolAmount: tokenAmount,
+    recipientReceives: remaining,
+    fee: tokenAmount - remaining,
+    privacyInfo,
+  };
+}
+
 // Legacy function for backwards compatibility
 export function calculateTotalDeposit(
   recipientAmountLamports: number,
@@ -438,6 +570,8 @@ interface SerializedDoubleHopNote {
   sp: string; // sender privacy
   sa?: string; // sender address (for reclaim)
   fl: string; // funds location (ephemeral or pool)
+  t?: string; // token type (SOL, USDC, USDT)
+  tm?: string | null; // token mint address
 }
 
 /**
@@ -452,6 +586,8 @@ export function serializeDoubleHopNote(note: DoubleHopNote): string {
     sp: note.senderPrivacy,
     sa: note.senderAddress,
     fl: note.fundsLocation,
+    t: note.token,
+    tm: note.tokenMint,
   };
   
   const json = JSON.stringify(data);
@@ -485,6 +621,9 @@ export function deserializeDoubleHopNote(encoded: string): DoubleHopNote | null 
       senderAddress: data.sa,
       // Default to pool for old links
       fundsLocation: (data.fl as "ephemeral" | "pool") || "pool",
+      // Token fields (default to SOL for backwards compatibility)
+      token: (data.t as SupportedToken) || "SOL",
+      tokenMint: data.tm || null,
     };
   } catch (error) {
     console.error("[PrivacyCash] Failed to deserialize note:", error);

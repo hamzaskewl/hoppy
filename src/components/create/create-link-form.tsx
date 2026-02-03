@@ -3,6 +3,7 @@
 import { useState, useMemo, useEffect, useCallback } from "react";
 import { QRCodeSVG } from "qrcode.react";
 import Image from "next/image";
+import { motion } from "framer-motion";
 import { Copy, Check, Shield, Wallet, ArrowRight, Lock, Info, AlertTriangle, Eye, EyeOff, Save, History, Trash2, ExternalLink, ChevronDown, Settings2 } from "lucide-react";
 import { usePrivy } from "@privy-io/react-auth";
 import { Button } from "@/components/ui/button";
@@ -13,14 +14,26 @@ import {
   generateCompositeSecret,
   calculateSenderCost,
   calculateRecipientReceives,
+  calculateSPLRecipientReceives,
   calculateDepositForRecipientAmount,
+  calculateSPLDepositForRecipientAmount,
   SENDER_PRIVACY,
   RECIPIENT_PRIVACY,
+  TOKEN_MINTS,
+  SPL_SOL_BUFFER,
   type DoubleHopNote,
   type SenderPrivacy,
+  type SupportedToken,
 } from "@/lib/privacy";
 import { shortenAddress, solToLamports, lamportsToSol } from "@/lib/utils";
 import { Connection, Transaction, SystemProgram, PublicKey, LAMPORTS_PER_SOL, Keypair } from "@solana/web3.js";
+import { 
+  getAssociatedTokenAddress, 
+  createAssociatedTokenAccountInstruction,
+  createTransferInstruction,
+  TOKEN_PROGRAM_ID,
+  getAccount,
+} from "@solana/spl-token";
 import bs58 from "bs58";
 
 
@@ -161,9 +174,9 @@ export function CreateLinkForm() {
   const [step, setStep] = useState<Step>("connect");
   const [amount, setAmount] = useState<string>("0.1");
   const [currency, setCurrency] = useState<"SOL" | "USD">("SOL");
+  const [selectedToken, setSelectedToken] = useState<SupportedToken>("SOL");
   const [solPrice, setSolPrice] = useState<number | null>(null);
   const [senderPrivacy, setSenderPrivacy] = useState<SenderPrivacy>("basic");
-  const [sponsorFees, setSponsorFees] = useState(true); // Sender sponsors recipient's fees by default
   const [showAdvanced, setShowAdvanced] = useState(false); // Hide advanced options by default
   const [isDepositing, setIsDepositing] = useState(false);
   const [doubleHopNote, setDoubleHopNote] = useState<DoubleHopNote | null>(null);
@@ -175,9 +188,15 @@ export function CreateLinkForm() {
   const [depositProgress, setDepositProgress] = useState<string>("");
   const [savedLinks, setSavedLinks] = useState<SavedLink[]>([]);
   const [showHistory, setShowHistory] = useState(false);
+  const [showTokenDropdown, setShowTokenDropdown] = useState(false);
   const [failedDepositRecovery, setFailedDepositRecovery] = useState<FailedDepositRecovery | null>(null);
   const [isReclaiming, setIsReclaiming] = useState(false);
   const [reclaimSuccess, setReclaimSuccess] = useState<string | null>(null);
+  const [relayerStatus, setRelayerStatus] = useState<{
+    available: boolean;
+    warning?: boolean;
+    message?: string;
+  } | null>(null);
 
   // Get Solana wallet address - look for chainType: 'solana'
   const getSolanaAddress = useCallback((): string | null => {
@@ -231,87 +250,115 @@ export function CreateLinkForm() {
     return () => { cancelled = true; };
   }, [step]);
 
-  // Calculate costs based on amount and sender privacy
+  // Check relayer status when selecting SPL token + private mode
+  useEffect(() => {
+    if (selectedToken !== "SOL" && senderPrivacy === "private" && step === "amount") {
+      let cancelled = false;
+      (async () => {
+        try {
+          const res = await fetch("/api/relayer/status");
+          if (!res.ok || cancelled) return;
+          const status = await res.json();
+          if (!cancelled) setRelayerStatus(status);
+        } catch {
+          if (!cancelled) setRelayerStatus({ available: false, message: "Failed to check relayer status" });
+        }
+      })();
+      return () => { cancelled = true; };
+    } else {
+      setRelayerStatus(null);
+    }
+  }, [selectedToken, senderPrivacy, step]);
+
+  // Calculate costs based on amount, token, and sender privacy
+  // Fee per Privacy Cash withdrawal: 0.006 SOL (base) + 0.35% (percentage)
   const costBreakdown = useMemo(() => {
     const amountNum = parseFloat(amount) || 0;
     if (amountNum <= 0) return null;
-    
-    // Base amount user wants recipient to receive
-    const baseRecipientAmount = solToLamports(amountNum);
-    
-    // Calculate what to put in pool/ephemeral for recipient
-    // If sponsoring fees, we need to deposit more so recipient gets the full amount after their claim
-    let poolAmount: number;
-    let senderPays: number;
-    let senderFee: number;
-    
-    const inPool = senderPrivacy === "private";
-    
-    // 3% buffer added to ALL transfers to ensure recipient gets enough after on-chain costs
-    const BUFFER_PERCENTAGE = 0.03;
-    
-    if (sponsorFees) {
-      // Sponsor fees: Calculate how much to deposit so recipient gets baseRecipientAmount
-      // after doing a "quick" claim (1 withdrawal hop)
-      if (inPool) {
-        // Private sender + sponsor: Sender→Pool→Eph→Pool, recipient withdraws and gets baseRecipientAmount
-        // Need to calculate: deposit X so that after 1 withdrawal, recipient gets baseRecipientAmount
-        poolAmount = calculateDepositForRecipientAmount(baseRecipientAmount);
-        
-        // Private sender: SDK needs minimal buffer for tx fees + 3% buffer
-        const MIN_TX_BUFFER = 3_000_000; // lamports (~0.003 SOL) - minimal buffer for tx fees
-        const bufferAmount = Math.ceil(poolAmount * BUFFER_PERCENTAGE);
-        senderPays = poolAmount + MIN_TX_BUFFER + bufferAmount;
+
+    const isPrivateSender = senderPrivacy === "private";
+
+    // SOL path (lamports + Privacy Cash fee model)
+    if (selectedToken === "SOL") {
+      const baseRecipientAmount = solToLamports(amountNum);
+      
+      // Small buffer for blockchain tx fees (~0.000005 SOL per tx, but we add ~0.001 to be safe)
+      const TX_FEE_BUFFER = 1_000_000; // 0.001 SOL
+      
+      let senderPays: number;
+      let senderFee: number;
+      const poolAmount = baseRecipientAmount; // What ends up in ephemeral for recipient
+
+      if (isPrivateSender) {
+        // PRIVATE sender: Sender → Pool → Ephemeral (1 withdrawal fee on sender side)
+        // Deposit X so that X - fee(X) = baseRecipientAmount in ephemeral
+        const depositNeeded = calculateDepositForRecipientAmount(baseRecipientAmount);
+        senderPays = depositNeeded + TX_FEE_BUFFER;
         senderFee = senderPays - baseRecipientAmount;
       } else {
-        // Basic sender + sponsor: Sender→Eph, recipient claims from ephemeral
-        // Add 3% buffer to ensure enough funds arrive
-        poolAmount = baseRecipientAmount;
-        const bufferAmount = Math.ceil(poolAmount * BUFFER_PERCENTAGE);
-        senderPays = baseRecipientAmount + bufferAmount;
-        senderFee = bufferAmount;
+        // BASIC sender: Sender → Ephemeral (direct transfer, no pool fee)
+        senderPays = baseRecipientAmount + TX_FEE_BUFFER;
+        senderFee = TX_FEE_BUFFER;
       }
-    } else {
-      // Don't sponsor: Recipient pays fees from the amount
-      poolAmount = baseRecipientAmount;
-      const bufferAmount = Math.ceil(poolAmount * BUFFER_PERCENTAGE);
-      
-      if (inPool) {
-        // Private sender, no sponsor: pay minimal tx buffer + 3% buffer
-        const MIN_TX_BUFFER = 3_000_000;
-        senderPays = baseRecipientAmount + MIN_TX_BUFFER + bufferAmount;
-        senderFee = MIN_TX_BUFFER + bufferAmount;
-      } else {
-        // Basic sender, no sponsor: just add 3% buffer
-        senderPays = baseRecipientAmount + bufferAmount;
-        senderFee = bufferAmount;
-      }
+
+      // Recipient amounts:
+      // - Quick claim: direct from ephemeral (no pool fee)
+      // - Private claim: ephemeral → pool → recipient (1 withdrawal fee)
+      const recipientQuickAmount = baseRecipientAmount;
+      const recipientPrivateAmount = calculateRecipientReceives(baseRecipientAmount, "quick").recipientReceives;
+
+      return {
+        token: selectedToken,
+        decimals: 9,
+        baseRecipientAmount,
+        poolAmount,
+        senderPays,
+        senderFee,
+        senderPaysGasLamports: 0,
+        senderPrivacyInfo: SENDER_PRIVACY[senderPrivacy],
+        recipientQuick: recipientQuickAmount,
+        recipientPrivate: recipientPrivateAmount,
+      };
     }
-    
-    // Calculate what recipient gets based on pool amount
-    // Quick = 1 withdrawal (0.006 + 0.35%). Private = 2 withdrawals (fee applied twice).
-    let recipientQuick, recipientPrivate;
-    if (inPool) {
-      // Funds in pool: recipient pays withdrawal fee(s)
-      recipientQuick = calculateRecipientReceives(poolAmount, "quick");   // 1 hop → ~0.094 on 0.1 SOL
-      recipientPrivate = calculateRecipientReceives(poolAmount, "private"); // 2 hops → ~0.087 on 0.1 SOL
+
+    // SPL path (token units + separate SOL gas buffer)
+    const decimals = TOKEN_MINTS[selectedToken].decimals;
+    const baseRecipientAmount = Math.round(amountNum * 10 ** decimals);
+    const senderPaysGasLamports = SPL_SOL_BUFFER;
+
+    // SPL tokens: Rent fee (~$0.50 in token) + 0.35% per withdrawal
+    let senderPaysTokens: number;
+    let senderFeeTokens: number;
+
+    if (isPrivateSender) {
+      // Private sender: deposit more so after fee, ephemeral gets baseRecipientAmount
+      senderPaysTokens = calculateSPLDepositForRecipientAmount(baseRecipientAmount, decimals);
+      senderFeeTokens = senderPaysTokens - baseRecipientAmount;
     } else {
-      // Funds in ephemeral: quick = no fee; private = 1 hop fee
-      recipientQuick = { recipientReceives: poolAmount, fee: 0 };
-      recipientPrivate = calculateRecipientReceives(poolAmount, "quick");
+      // Basic sender: direct transfer to ephemeral (no pool fee)
+      senderPaysTokens = baseRecipientAmount;
+      senderFeeTokens = 0;
     }
-    
+
+    // Recipient amounts:
+    // - Quick claim: direct from ephemeral (no pool fee)
+    // - Private claim: ephemeral → pool → recipient (rent fee + 0.35%)
+    const recipientQuickAmount = baseRecipientAmount;
+    const recipientPrivateAmount = calculateSPLRecipientReceives(baseRecipientAmount, "quick", decimals).recipientReceives;
+
     return {
-      baseRecipientAmount, // What user typed
-      poolAmount, // What goes into pool/ephemeral
-      senderPays, // Total sender pays
-      senderFee, // Fee portion
+      token: selectedToken,
+      decimals,
+      baseRecipientAmount,
+      poolAmount: baseRecipientAmount,
+      senderPays: senderPaysTokens,
+      senderFee: senderFeeTokens,
+      senderPaysGasLamports,
       senderPrivacyInfo: SENDER_PRIVACY[senderPrivacy],
-      recipientQuick: recipientQuick.recipientReceives,
-      recipientPrivate: recipientPrivate.recipientReceives,
-      sponsorFees,
+      recipientQuick: recipientQuickAmount,
+      recipientPrivate: recipientPrivateAmount,
     };
-  }, [amount, senderPrivacy, sponsorFees]);
+  }, [amount, senderPrivacy, selectedToken]);
 
   // Move to amount step when authenticated
   const handleContinue = () => {
@@ -388,30 +435,79 @@ export function CreateLinkForm() {
 
       setDepositProgress("Preparing transaction...");
       
-      // 2. Create funding transaction (sender → ephemeral)
-      // Add 3% buffer to ALL transfers to ensure recipient gets enough after on-chain costs
-      const BUFFER_PERCENTAGE = 0.03; // 3% buffer
-      const bufferAmount = Math.ceil(costBreakdown.poolAmount * BUFFER_PERCENTAGE);
-      // For private: also add minimal buffer for tx fees
-      const MIN_TX_BUFFER = 3_000_000; // ~0.003 SOL - minimal buffer for tx fees
-      const fundingAmount = senderPrivacy === "private" 
-        ? costBreakdown.poolAmount + MIN_TX_BUFFER + bufferAmount
-        : costBreakdown.poolAmount + bufferAmount;
-      
       const rpcUrl = process.env.NEXT_PUBLIC_SOLANA_RPC_URL || "https://api.devnet.solana.com";
       const connection = new Connection(rpcUrl, "confirmed");
+      const senderPubkey = new PublicKey(solanaAddress);
+      const ephemeralPubkey = compositeSecret.ephemeralKeypair.publicKey;
       
-      const fundingTx = new Transaction().add(
-        SystemProgram.transfer({
-          fromPubkey: new PublicKey(solanaAddress),
-          toPubkey: compositeSecret.ephemeralKeypair.publicKey,
-          lamports: fundingAmount,
-        })
-      );
+      // 2. Create funding transaction (sender → ephemeral)
+      const fundingTx = new Transaction();
+      const isSOL = selectedToken === "SOL";
+      
+      if (isSOL) {
+        // SOL: Simple transfer
+        // Add 3% buffer to ALL transfers to ensure recipient gets enough after on-chain costs
+        const BUFFER_PERCENTAGE = 0.03; // 3% buffer
+        const bufferAmount = Math.ceil(costBreakdown.poolAmount * BUFFER_PERCENTAGE);
+        // For private: also add minimal buffer for tx fees
+        const MIN_TX_BUFFER = 3_000_000; // ~0.003 SOL - minimal buffer for tx fees
+        const fundingAmount = senderPrivacy === "private" 
+          ? costBreakdown.poolAmount + MIN_TX_BUFFER + bufferAmount
+          : costBreakdown.poolAmount + bufferAmount;
+        
+        fundingTx.add(
+          SystemProgram.transfer({
+            fromPubkey: senderPubkey,
+            toPubkey: ephemeralPubkey,
+            lamports: fundingAmount,
+          })
+        );
+      } else {
+        // SPL Token: Need to send both SOL (for gas) and the token
+        const tokenInfo = TOKEN_MINTS[selectedToken];
+        const mintPubkey = new PublicKey(tokenInfo.mint!);
+        
+        // 1. Send SOL for gas fees
+        fundingTx.add(
+          SystemProgram.transfer({
+            fromPubkey: senderPubkey,
+            toPubkey: ephemeralPubkey,
+            lamports: SPL_SOL_BUFFER, // 0.005 SOL for gas
+          })
+        );
+        
+        // 2. Get sender's token account
+        const senderAta = await getAssociatedTokenAddress(mintPubkey, senderPubkey);
+        
+        // 3. Create ephemeral's token account (ATA)
+        const ephemeralAta = await getAssociatedTokenAddress(mintPubkey, ephemeralPubkey);
+        fundingTx.add(
+          createAssociatedTokenAccountInstruction(
+            senderPubkey, // payer
+            ephemeralAta,
+            ephemeralPubkey,
+            mintPubkey
+          )
+        );
+        
+        // 4. Transfer tokens to ephemeral
+        // Add small buffer for fees (~1%)
+        const tokenAmount = BigInt(Math.ceil(costBreakdown.poolAmount * 1.01));
+        fundingTx.add(
+          createTransferInstruction(
+            senderAta,
+            ephemeralAta,
+            senderPubkey,
+            tokenAmount,
+            [],
+            TOKEN_PROGRAM_ID
+          )
+        );
+      }
 
       const { blockhash } = await connection.getLatestBlockhash();
       fundingTx.recentBlockhash = blockhash;
-      fundingTx.feePayer = new PublicKey(solanaAddress);
+      fundingTx.feePayer = senderPubkey;
 
       setDepositProgress("Please sign the transaction in your wallet...");
       
@@ -456,6 +552,7 @@ export function CreateLinkForm() {
           fundingTxHash,
           senderPrivacy,
           senderAddress: solanaAddress, // For reclaim feature
+          token: selectedToken, // Token type (SOL, USDC, USDT)
         }),
       });
 
@@ -561,10 +658,6 @@ export function CreateLinkForm() {
     setReclaimSuccess(null);
   };
 
-  const feeCoverage = costBreakdown
-    ? Math.max(0, costBreakdown.senderFee)
-    : 0;
-
   const handleReclaim = async () => {
     if (!failedDepositRecovery) return;
     setIsReclaiming(true);
@@ -573,20 +666,83 @@ export function CreateLinkForm() {
       const rpcUrl = process.env.NEXT_PUBLIC_SOLANA_RPC_URL || "https://api.devnet.solana.com";
       const connection = new Connection(rpcUrl, "confirmed");
       const ephemeralKeypair = Keypair.fromSecretKey(bs58.decode(failedDepositRecovery.ephemeralSecretKeyBase58));
-      const balance = await connection.getBalance(ephemeralKeypair.publicKey);
-      const feeReserve = 5000; // leave for tx fee
-      const toSend = Math.max(0, balance - feeReserve);
-      if (toSend <= 0) {
-        setError("No SOL left in ephemeral wallet to reclaim.");
+      const userPubkey = new PublicKey(failedDepositRecovery.userWallet);
+      
+      const tx = new Transaction();
+      let hasAnythingToReclaim = false;
+      const reclaimedItems: string[] = [];
+      
+      // Check and reclaim SPL tokens (USDC, USDT)
+      for (const tokenSymbol of ["USDC", "USDT"] as SupportedToken[]) {
+        const tokenInfo = TOKEN_MINTS[tokenSymbol];
+        if (!tokenInfo.mint) continue;
+        
+        try {
+          const mintPubkey = new PublicKey(tokenInfo.mint);
+          const ephemeralAta = await getAssociatedTokenAddress(mintPubkey, ephemeralKeypair.publicKey);
+          const account = await getAccount(connection, ephemeralAta);
+          const tokenBalance = account.amount;
+          
+          if (tokenBalance > BigInt(0)) {
+            // Check if user has ATA, create if not
+            const userAta = await getAssociatedTokenAddress(mintPubkey, userPubkey);
+            try {
+              await getAccount(connection, userAta);
+            } catch {
+              // User doesn't have ATA, create it
+              tx.add(
+                createAssociatedTokenAccountInstruction(
+                  ephemeralKeypair.publicKey, // payer
+                  userAta,
+                  userPubkey,
+                  mintPubkey
+                )
+              );
+            }
+            
+            // Transfer tokens
+            tx.add(
+              createTransferInstruction(
+                ephemeralAta,
+                userAta,
+                ephemeralKeypair.publicKey,
+                tokenBalance,
+                [],
+                TOKEN_PROGRAM_ID
+              )
+            );
+            
+            const displayAmount = Number(tokenBalance) / (10 ** tokenInfo.decimals);
+            reclaimedItems.push(`${displayAmount.toFixed(2)} ${tokenSymbol}`);
+            hasAnythingToReclaim = true;
+          }
+        } catch {
+          // No token account or error, skip
+        }
+      }
+      
+      // Check and reclaim SOL
+      const solBalance = await connection.getBalance(ephemeralKeypair.publicKey);
+      const feeReserve = 10000; // leave for tx fees
+      const solToSend = Math.max(0, solBalance - feeReserve);
+      
+      if (solToSend > 0) {
+        tx.add(
+          SystemProgram.transfer({
+            fromPubkey: ephemeralKeypair.publicKey,
+            toPubkey: userPubkey,
+            lamports: solToSend,
+          })
+        );
+        reclaimedItems.push(`${(solToSend / 1e9).toFixed(4)} SOL`);
+        hasAnythingToReclaim = true;
+      }
+      
+      if (!hasAnythingToReclaim) {
+        setError("No funds left in ephemeral wallet to reclaim.");
         return;
       }
-      const tx = new Transaction().add(
-        SystemProgram.transfer({
-          fromPubkey: ephemeralKeypair.publicKey,
-          toPubkey: new PublicKey(failedDepositRecovery.userWallet),
-          lamports: toSend,
-        })
-      );
+      
       const { blockhash } = await connection.getLatestBlockhash();
       tx.recentBlockhash = blockhash;
       tx.feePayer = ephemeralKeypair.publicKey;
@@ -595,8 +751,8 @@ export function CreateLinkForm() {
       await connection.confirmTransaction(sig, "confirmed");
       setError(null);
       setFailedDepositRecovery(null);
-      setReclaimSuccess("Reclaimed! SOL sent back to your wallet.");
-      setTimeout(() => setReclaimSuccess(null), 8000);
+      setReclaimSuccess(`Reclaimed: ${reclaimedItems.join(", ")}`);
+      setTimeout(() => setReclaimSuccess(null), 10000);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Reclaim failed");
     } finally {
@@ -730,32 +886,34 @@ export function CreateLinkForm() {
             <div className="grid md:grid-cols-[1.2fr,1fr] gap-6">
               {/* LEFT: Amount Input */}
               <div className="space-y-4">
-                {/* Amount Input */}
+                {/* Amount Input with Token Dropdown */}
                 <div className="space-y-2">
                   <div className="flex items-center justify-between">
                     <label className="text-sm font-medium">Amount</label>
-                    <div className="flex rounded-lg border-2 border-border overflow-hidden">
-                      <button
-                        type="button"
-                        onClick={() => setCurrency("SOL")}
-                        className={`px-3 py-1 text-xs font-medium transition-colors ${currency === "SOL" ? "bg-hop-500 text-white" : "bg-card text-muted-foreground hover:bg-secondary"}`}
-                      >
-                        SOL
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setCurrency("USD")}
-                        className={`px-3 py-1 text-xs font-medium transition-colors ${currency === "USD" ? "bg-hop-500 text-white" : "bg-card text-muted-foreground hover:bg-secondary"}`}
-                      >
-                        USD
-                      </button>
-                    </div>
+                    {selectedToken === "SOL" && (
+                      <div className="flex rounded-lg border-2 border-border overflow-hidden">
+                        <button
+                          type="button"
+                          onClick={() => setCurrency("SOL")}
+                          className={`px-3 py-1 text-xs font-medium transition-colors ${currency === "SOL" ? "bg-hop-500 text-white" : "bg-card text-muted-foreground hover:bg-secondary"}`}
+                        >
+                          SOL
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setCurrency("USD")}
+                          className={`px-3 py-1 text-xs font-medium transition-colors ${currency === "USD" ? "bg-hop-500 text-white" : "bg-card text-muted-foreground hover:bg-secondary"}`}
+                        >
+                          USD
+                        </button>
+                      </div>
+                    )}
                   </div>
                   <div className="relative">
                     <Input
                       type="text"
                       inputMode="decimal"
-                      value={currency === "USD" && solPrice
+                      value={currency === "USD" && solPrice && selectedToken === "SOL"
                         ? ((parseFloat(amount) || 0) * solPrice).toFixed(2)
                         : amount
                       }
@@ -763,7 +921,7 @@ export function CreateLinkForm() {
                         const v = e.target.value;
                         // Allow empty, numbers, and single decimal point
                         if (v === "" || /^\d*\.?\d*$/.test(v)) {
-                          if (currency === "SOL") {
+                          if (currency === "SOL" || selectedToken !== "SOL") {
                             setAmount(v); // Allow empty
                           } else {
                             const usd = parseFloat(v) || 0;
@@ -775,43 +933,103 @@ export function CreateLinkForm() {
                       onBlur={(e) => {
                         const v = e.target.value;
                         if (v === "" || parseFloat(v) === 0) {
-                          // Leave empty or set to 0.1 only if completely empty
-                          setAmount(v === "" ? "" : "0.1");
+                          // Leave empty or set default
+                          const defaultAmount = selectedToken === "SOL" ? "0.1" : "1";
+                          setAmount(v === "" ? "" : defaultAmount);
                         } else {
                           // Remove leading zeros: 010 → 10
                           const num = parseFloat(v);
                           if (!isNaN(num)) setAmount(num.toString());
                         }
                       }}
-                      placeholder={currency === "SOL" ? "0.00" : "0"}
-                      className="text-3xl h-16 text-left font-bold bg-card border-2 border-border focus:border-hop-500 pl-4 pr-14"
+                      placeholder={selectedToken === "SOL" ? "0.00" : "0"}
+                      className="text-3xl h-16 text-left font-bold bg-card border-2 border-border focus:border-hop-500 pl-4 pr-28"
                     />
-                    <span className="absolute right-4 top-1/2 -translate-y-1/2 text-lg text-muted-foreground font-semibold">
-                      {currency === "SOL" ? "SOL" : "USD"}
-                    </span>
+                    {/* Token Dropdown */}
+                    <div className="absolute right-2 top-1/2 -translate-y-1/2">
+                      <button
+                        type="button"
+                        onClick={() => setShowTokenDropdown(!showTokenDropdown)}
+                        className="flex items-center gap-1.5 px-2 py-1.5 rounded-lg hover:bg-secondary transition-colors"
+                      >
+                        {selectedToken === "SOL" ? (
+                          <Image src="/sol.svg" alt="SOL" width={20} height={20} style={{ width: 20, height: 20 }} />
+                        ) : (
+                          <Image
+                            src={selectedToken === "USDC" ? "/usdc.svg" : "/usdt.svg"}
+                            alt={selectedToken}
+                            width={20}
+                            height={20}
+                            style={{ width: 20, height: 20 }}
+                          />
+                        )}
+                        <span className="font-semibold text-muted-foreground">
+                          {selectedToken === "SOL" && currency === "USD" ? "USD" : selectedToken}
+                        </span>
+                        <ChevronDown className={`w-4 h-4 text-muted-foreground transition-transform ${showTokenDropdown ? "rotate-180" : ""}`} />
+                      </button>
+                      
+                      {/* Dropdown Menu */}
+                      {showTokenDropdown && (
+                        <div className="absolute right-0 top-full mt-1 bg-card border-2 border-border rounded-xl shadow-lg z-50 min-w-[140px] overflow-hidden">
+                          {(["SOL", "USDC", "USDT"] as SupportedToken[]).map((token) => (
+                            <button
+                              key={token}
+                              type="button"
+                              onClick={() => {
+                                setSelectedToken(token);
+                                setShowTokenDropdown(false);
+                                if (token !== "SOL") setCurrency("SOL");
+                                // Set appropriate default amount
+                                if (token === "SOL" && parseFloat(amount) >= 100) {
+                                  setAmount("0.1");
+                                } else if (token !== "SOL" && parseFloat(amount) < 1) {
+                                  setAmount("1");
+                                }
+                              }}
+                              className={`w-full flex items-center gap-2 px-3 py-2.5 hover:bg-secondary transition-colors ${
+                                selectedToken === token ? "bg-hop-500/10" : ""
+                              }`}
+                            >
+                              {token === "SOL" ? (
+                                <Image src="/sol.svg" alt="SOL" width={20} height={20} style={{ width: 20, height: 20 }} />
+                              ) : (
+                                <Image
+                                  src={token === "USDC" ? "/usdc.svg" : "/usdt.svg"}
+                                  alt={token}
+                                  width={20}
+                                  height={20}
+                                  style={{ width: 20, height: 20 }}
+                                />
+                              )}
+                              <span className={`font-medium ${selectedToken === token ? "text-hop-600 dark:text-hop-400" : ""}`}>
+                                {token}
+                              </span>
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
                   </div>
-                  {currency === "USD" && solPrice && (
+                  {currency === "USD" && solPrice && selectedToken === "SOL" && (
                     <p className="text-xs text-muted-foreground">
                       ≈ {(parseFloat(amount) || 0).toFixed(4)} SOL · 1 SOL = ${solPrice.toFixed(2)}
                     </p>
                   )}
                   {/* Quick amounts */}
                   <div className="flex gap-2">
-                    {(currency === "SOL" || !solPrice
-                      ? ["0.1", "0.5", "1", "5"]
-                      : ["10", "50", "100", "500"]
+                    {(selectedToken === "SOL" 
+                      ? (currency === "USD" && solPrice ? ["10", "50", "100", "500"] : ["0.1", "0.5", "1", "5"])
+                      : ["1", "5", "10", "50"] // USDC/USDT amounts
                     ).map((val) => {
-                      const isUsd = currency === "USD" && solPrice;
-                      const solEquivalent = isUsd ? (parseFloat(val) / solPrice!).toFixed(6) : val;
-                      const isSelected = isUsd ? amount === solEquivalent : amount === val;
+                      const isUsd = selectedToken === "SOL" && currency === "USD" && solPrice;
+                      const actualAmount = isUsd ? (parseFloat(val) / solPrice!).toFixed(6) : val;
+                      const isSelected = amount === actualAmount;
                       return (
                         <button
                           key={val}
                           type="button"
-                          onClick={() => {
-                            if (isUsd) setAmount((parseFloat(val) / solPrice!).toFixed(6));
-                            else setAmount(val);
-                          }}
+                          onClick={() => setAmount(actualAmount)}
                           className={`flex-1 py-1.5 rounded-lg text-xs font-medium transition-all border-2 ${
                             isSelected ? "bg-hop-500 text-white border-hop-600" : "bg-card border-border hover:border-hop-400"
                           }`}
@@ -834,43 +1052,54 @@ export function CreateLinkForm() {
                   <ChevronDown className={`w-4 h-4 transition-transform ${showAdvanced ? "rotate-180" : ""}`} />
                 </button>
 
-                {/* Cost Breakdown + Cover fees - Shows when Options expanded */}
+                {/* Cost Breakdown - Shows when Options expanded */}
                 {showAdvanced && costBreakdown && (
                   <div className="space-y-3">
                     <div className="p-3 rounded-xl bg-secondary border-2 border-border space-y-2 text-sm">
                       <div className="flex justify-between">
                         <span className="text-muted-foreground">Amount</span>
-                        <span>{lamportsToSol(costBreakdown.baseRecipientAmount).toFixed(4)} SOL</span>
+                        <span>
+                          {selectedToken === "SOL" 
+                            ? `${lamportsToSol(costBreakdown.baseRecipientAmount).toFixed(4)} SOL`
+                            : `${(costBreakdown.baseRecipientAmount / 10 ** costBreakdown.decimals).toFixed(2)} ${selectedToken}`
+                          }
+                        </span>
                       </div>
-                      {feeCoverage > 0 && (
+                      {selectedToken === "SOL" && senderPrivacy === "private" && (
                         <div className="flex justify-between">
-                          <span className="text-muted-foreground">Recipient fee coverage</span>
-                          <span className="text-honey-600 dark:text-honey-400">+{lamportsToSol(feeCoverage).toFixed(4)}</span>
+                          <span className="text-muted-foreground">Privacy fee (0.006 + 0.35%)</span>
+                          <span className="text-honey-600 dark:text-honey-400">
+                            +{lamportsToSol(Math.max(0, costBreakdown.senderFee - 1_000_000)).toFixed(4)}
+                          </span>
+                        </div>
+                      )}
+                      {selectedToken === "SOL" && (
+                        <div className="flex justify-between">
+                          <span className="text-muted-foreground">Tx buffer</span>
+                          <span className="text-muted-foreground">+0.001 SOL</span>
+                        </div>
+                      )}
+                      {selectedToken !== "SOL" && (
+                        <div className="flex justify-between">
+                          <span className="text-muted-foreground">Gas buffer</span>
+                          <span className="text-muted-foreground">+0.005 SOL</span>
                         </div>
                       )}
                       <div className="border-t border-border pt-2 flex justify-between font-semibold">
                         <span>Total</span>
-                        <span className="text-hop-600 dark:text-hop-400">{lamportsToSol(costBreakdown.senderPays).toFixed(4)} SOL</span>
+                        <span className="text-hop-600 dark:text-hop-400">
+                          {selectedToken === "SOL"
+                            ? `${lamportsToSol(costBreakdown.senderPays).toFixed(4)} SOL`
+                            : `${(costBreakdown.senderPays / 10 ** costBreakdown.decimals).toFixed(2)} ${selectedToken} + 0.005 SOL`
+                          }
+                        </span>
                       </div>
                     </div>
-                    <label className={`flex items-center gap-3 p-3 rounded-xl border-2 cursor-pointer transition-all ${
-                      sponsorFees 
-                        ? "bg-hop-100 dark:bg-hop-900/20 border-hop-400"
-                        : "bg-card border-border hover:border-hop-400"
-                    }`}>
-                      <input
-                        type="checkbox"
-                        checked={sponsorFees}
-                        onChange={(e) => setSponsorFees(e.target.checked)}
-                        className="w-4 h-4 rounded border-hop-500 text-hop-500 focus:ring-hop-500"
-                      />
-                      <div className="flex-1 min-w-0">
-                        <p className="text-sm font-medium">Cover fees</p>
-                        <p className="text-[10px] text-muted-foreground truncate">
-                          {sponsorFees ? "Recipient gets full amount" : "Recipient pays fees"}
-                        </p>
-                      </div>
-                    </label>
+                    {selectedToken === "SOL" && senderPrivacy === "basic" && (
+                      <p className="text-xs text-muted-foreground">
+                        Quick claim is free. Private claim costs ~0.006 + 0.35%.
+                      </p>
+                    )}
                   </div>
                 )}
               </div>
@@ -905,7 +1134,7 @@ export function CreateLinkForm() {
                     >
                       <EyeOff className={`w-5 h-5 ${senderPrivacy === "private" ? "text-hop-600" : "text-muted-foreground"}`} />
                       <span className={`text-sm font-medium ${senderPrivacy === "private" ? "text-hop-700 dark:text-hop-300" : ""}`}>Private</span>
-                      <span className="text-[10px] text-muted-foreground">~0.006 SOL</span>
+                      <span className="text-[10px] text-muted-foreground">0.006 + 0.35%</span>
                     </button>
                   </div>
                 </div>
@@ -915,7 +1144,31 @@ export function CreateLinkForm() {
                   <div className="p-3 rounded-xl bg-hop-100/50 dark:bg-hop-900/20 border-2 border-hop-300 dark:border-hop-700">
                     <p className="text-[10px] text-muted-foreground uppercase tracking-wide mb-1">Recipient gets (max)</p>
                     <p className="text-lg font-bold text-hop-700 dark:text-hop-300">
-                      {lamportsToSol(costBreakdown.recipientQuick).toFixed(4)} SOL
+                      {selectedToken === "SOL"
+                        ? `${lamportsToSol(costBreakdown.recipientQuick).toFixed(4)} SOL`
+                        : `${(costBreakdown.recipientQuick / 10 ** costBreakdown.decimals).toFixed(2)} ${selectedToken}`}
+                    </p>
+                    {selectedToken !== "SOL" && (
+                      <p className="text-[10px] text-muted-foreground mt-0.5">+ ~0.005 SOL gas</p>
+                    )}
+                  </div>
+                )}
+
+                {/* Relayer Warning for SPL + Private */}
+                {selectedToken !== "SOL" && senderPrivacy === "private" && relayerStatus && !relayerStatus.available && (
+                  <div className="p-3 rounded-lg bg-red-100 dark:bg-red-900/20 border-2 border-red-400 dark:border-red-700">
+                    <p className="text-sm text-red-700 dark:text-red-400 font-medium">
+                      {relayerStatus.message || "Private mode temporarily unavailable for stablecoins"}
+                    </p>
+                    <p className="text-xs text-red-600 dark:text-red-300 mt-1">
+                      Try Basic mode or use SOL instead.
+                    </p>
+                  </div>
+                )}
+                {selectedToken !== "SOL" && senderPrivacy === "private" && relayerStatus?.warning && relayerStatus.available && (
+                  <div className="p-2 rounded-lg bg-amber-100 dark:bg-amber-900/20 border border-amber-400 dark:border-amber-700">
+                    <p className="text-xs text-amber-700 dark:text-amber-400">
+                      ⚠️ Relayer balance running low. Service may become unavailable soon.
                     </p>
                   </div>
                 )}
@@ -924,12 +1177,20 @@ export function CreateLinkForm() {
                 <Button
                   onClick={handleDeposit}
                   loading={isDepositing}
-                  className="w-full h-12 font-semibold"
+                  className="w-full h-12 font-semibold text-sm"
                   size="lg"
-                  disabled={!costBreakdown || costBreakdown.senderPays <= 0}
+                  disabled={
+                    !costBreakdown || 
+                    costBreakdown.senderPays <= 0 ||
+                    (selectedToken !== "SOL" && senderPrivacy === "private" && relayerStatus && !relayerStatus.available)
+                  }
                 >
                   <Shield className="w-4 h-4 mr-2" />
-                  Create · {lamportsToSol(costBreakdown?.senderPays || 0).toFixed(4)} SOL
+                  {selectedToken === "SOL" ? (
+                    <>Create · {lamportsToSol(costBreakdown?.senderPays || 0).toFixed(4)} SOL</>
+                  ) : (
+                    <>Create · {(costBreakdown ? (costBreakdown.senderPays / 10 ** costBreakdown.decimals).toFixed(2) : "0.00")} {selectedToken}</>
+                  )}
                 </Button>
               </div>
             </div>
@@ -945,23 +1206,32 @@ export function CreateLinkForm() {
         {/* Step 3: Depositing */}
         {step === "depositing" && (
           <div className="py-8 text-center">
-            <div className="relative w-32 h-32 mx-auto">
-              {/* Outer pulsing ring */}
-              <div className="absolute inset-0 rounded-full border-4 border-hop-500/30 animate-ping" />
-              {/* Middle pulsing ring */}
-              <div className="absolute inset-2 rounded-full border-4 border-hop-500/50 animate-pulse" />
+            <div className="relative w-28 h-28 mx-auto">
+              {/* Outer subtle ring */}
+              <div className="absolute inset-0 rounded-full border-2 border-hop-500/20 animate-pulse" />
               {/* Inner glow */}
-              <div className="absolute inset-4 rounded-full bg-hop-200/50 dark:bg-hop-500/20" />
-              {/* Bunny animation */}
-              <div className="absolute inset-0 flex items-center justify-center animate-bounce">
+              <div className="absolute inset-2 rounded-full bg-hop-200/30 dark:bg-hop-500/10" />
+              {/* Bunny animation - gentle hop */}
+              <motion.div 
+                className="absolute inset-0 flex items-center justify-center"
+                animate={{ 
+                  y: [0, -8, 0],
+                  scale: [1, 1.05, 1],
+                }}
+                transition={{ 
+                  duration: 0.8, 
+                  repeat: Infinity, 
+                  ease: "easeInOut" 
+                }}
+              >
                 <Image
                   src="/bunnyspin.png"
                   alt="Processing"
-                  width={80}
-                  height={80}
+                  width={72}
+                  height={72}
                   className="object-contain"
                 />
-              </div>
+              </motion.div>
             </div>
             <h3 className="mt-6 text-lg font-semibold">Creating Payment Link</h3>
             <p className="mt-2 text-sm text-muted-foreground">
@@ -1017,10 +1287,26 @@ export function CreateLinkForm() {
             <div className="p-4 rounded-xl bg-hop-100 dark:bg-hop-500/10 border-2 border-hop-400 text-center">
               <p className="text-sm text-muted-foreground">Recipient Will Receive (Quick Claim)</p>
               <p className="text-2xl font-bold text-hop-700 dark:text-hop-400">
-                ~{lamportsToSol(doubleHopNote.amount).toFixed(4)} SOL
+                {(() => {
+                  const isSOL = !doubleHopNote.token || doubleHopNote.token === "SOL";
+                  if (isSOL) {
+                    return `~${lamportsToSol(doubleHopNote.amount).toFixed(4)} SOL`;
+                  } else {
+                    const decimals = doubleHopNote.token === "USDC" || doubleHopNote.token === "USDT" ? 6 : 9;
+                    return `~${(doubleHopNote.amount / (10 ** decimals)).toFixed(2)} ${doubleHopNote.token}`;
+                  }
+                })()}
               </p>
               <p className="text-xs text-muted-foreground mt-1">
-                Claimable balance: {lamportsToSol(doubleHopNote.amount).toFixed(4)} SOL
+                {(() => {
+                  const isSOL = !doubleHopNote.token || doubleHopNote.token === "SOL";
+                  if (isSOL) {
+                    return `Claimable balance: ${lamportsToSol(doubleHopNote.amount).toFixed(4)} SOL`;
+                  } else {
+                    const decimals = doubleHopNote.token === "USDC" || doubleHopNote.token === "USDT" ? 6 : 9;
+                    return `Claimable balance: ${(doubleHopNote.amount / (10 ** decimals)).toFixed(2)} ${doubleHopNote.token}`;
+                  }
+                })()}
               </p>
             </div>
 

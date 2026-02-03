@@ -12,6 +12,7 @@ import {
   extractDoubleHopNoteFromUrl,
   decodeCompositeSecret,
   calculateRecipientReceives,
+  calculateSPLRecipientReceives,
   RECIPIENT_PRIVACY,
   SENDER_PRIVACY,
   type DoubleHopNote,
@@ -69,9 +70,43 @@ export function ClaimFlow() {
   const hasStartedParsing = useRef(false);
   
   // Calculate what recipient receives based on their privacy choice
+  // IMPORTANT: The calculation depends on WHERE the funds currently are:
+  // - If funds are in ephemeral: Quick = direct (0 fee), Private = 1 hop (1 fee)
+  // - If funds are in pool: Quick = 1 hop (1 fee), Private = 2 hops (2 fees)
   const receiveBreakdown = useMemo(() => {
     if (!state.note) return null;
-    return calculateRecipientReceives(state.note.amount, recipientPrivacy);
+    
+    const amount = state.note.amount;
+    const inEphemeral = state.note.fundsLocation === "ephemeral";
+    const isSOL = !state.note.token || state.note.token === "SOL";
+    const decimals = state.note.token === "USDC" || state.note.token === "USDT" ? 6 : 9;
+    
+    // Helper to calculate receives with correct params
+    const calcReceives = (amt: number, privacy: "quick" | "private") => {
+      if (isSOL) {
+        return calculateRecipientReceives(amt, privacy);
+      }
+      return calculateSPLRecipientReceives(amt, privacy, decimals);
+    };
+    
+    if (inEphemeral) {
+      // Funds in ephemeral wallet
+      if (recipientPrivacy === "quick") {
+        // Direct transfer from ephemeral - no pool fee, just tiny tx fee
+        return {
+          poolAmount: amount,
+          recipientReceives: amount, // Full amount (tx fee is negligible)
+          fee: 0,
+          privacyInfo: RECIPIENT_PRIVACY[recipientPrivacy],
+        };
+      } else {
+        // Private: ephemeral → pool → recipient (1 withdrawal fee)
+        return calcReceives(amount, "quick"); // "quick" = 1 hop
+      }
+    } else {
+      // Funds in pool (shouldn't happen with current implementation, but handle it)
+      return calcReceives(amount, recipientPrivacy);
+    }
   }, [state.note, recipientPrivacy]);
   
   // Validate paste address
@@ -166,18 +201,57 @@ export function ClaimFlow() {
         const connection = new Connection(rpcUrl, "confirmed");
         
         if (note.fundsLocation === "ephemeral") {
-          // For ephemeral funds, check if the wallet still has balance
-          const ephemeralBalance = await connection.getBalance(new PublicKey(note.ephemeralAddress));
+          const ephemeralPubkey = new PublicKey(note.ephemeralAddress);
           
-          if (ephemeralBalance === 0) {
-            setState({
-              status: "already-claimed",
-              note,
-              withdrawTxHash: null,
-              amountReceived: null,
-              error: "This payment has already been claimed or expired",
-            });
-            return;
+          // Check the appropriate balance based on token type
+          const isSOL = !note.token || note.token === "SOL";
+          
+          if (isSOL) {
+            // For SOL, check native balance
+            const ephemeralBalance = await connection.getBalance(ephemeralPubkey);
+            
+            if (ephemeralBalance === 0) {
+              setState({
+                status: "already-claimed",
+                note,
+                withdrawTxHash: null,
+                amountReceived: null,
+                error: "This payment has already been claimed or expired",
+              });
+              return;
+            }
+          } else {
+            // For SPL tokens, check token balance
+            try {
+              const { getAssociatedTokenAddress, getAccount } = await import("@solana/spl-token");
+              const mintPubkey = new PublicKey(note.tokenMint!);
+              const ata = await getAssociatedTokenAddress(mintPubkey, ephemeralPubkey);
+              const account = await getAccount(connection, ata);
+              
+              if (account.amount === BigInt(0)) {
+                setState({
+                  status: "already-claimed",
+                  note,
+                  withdrawTxHash: null,
+                  amountReceived: null,
+                  error: "This payment has already been claimed or expired",
+                });
+                return;
+              }
+              
+              // Update note amount with actual token balance (in case it differs)
+              note.amount = Number(account.amount);
+            } catch {
+              // Token account doesn't exist = already claimed or never funded
+              setState({
+                status: "already-claimed",
+                note,
+                withdrawTxHash: null,
+                amountReceived: null,
+                error: "This payment has already been claimed or expired",
+              });
+              return;
+            }
           }
         }
         // For pool funds, we'll verify during claim attempt (SDK checks UTXOs)
@@ -397,7 +471,16 @@ export function ClaimFlow() {
                 Payment Ready to Claim
               </h3>
               <p className="text-sm text-muted-foreground text-center mb-4">
-                {lamportsToSol(state.note.amount).toFixed(4)} SOL available to claim
+                {(() => {
+                  const isSOL = !state.note.token || state.note.token === "SOL";
+                  if (isSOL) {
+                    return `${lamportsToSol(state.note.amount).toFixed(4)} SOL`;
+                  } else {
+                    // SPL token - USDC/USDT have 6 decimals
+                    const decimals = state.note.token === "USDC" || state.note.token === "USDT" ? 6 : 9;
+                    return `${(state.note.amount / (10 ** decimals)).toFixed(2)} ${state.note.token}`;
+                  }
+                })()} available to claim
               </p>
 
               {/* Sender privacy indicator */}
@@ -424,7 +507,25 @@ export function ClaimFlow() {
                   {(Object.keys(RECIPIENT_PRIVACY) as RecipientPrivacy[]).map((level) => {
                     const info = RECIPIENT_PRIVACY[level];
                     const isSelected = recipientPrivacy === level;
-                    const receives = calculateRecipientReceives(state.note!.amount, level);
+                    // Calculate based on fundsLocation and token type
+                    const amount = state.note!.amount;
+                    const inEphemeral = state.note!.fundsLocation === "ephemeral";
+                    const isSOL = !state.note!.token || state.note!.token === "SOL";
+                    const decimals = state.note!.token === "USDC" || state.note!.token === "USDT" ? 6 : 9;
+                    const calcReceives = (amt: number, priv: "quick" | "private") => 
+                      isSOL ? calculateRecipientReceives(amt, priv) : calculateSPLRecipientReceives(amt, priv, decimals);
+                    let receives;
+                    if (inEphemeral) {
+                      if (level === "quick") {
+                        // Direct transfer - no pool fee
+                        receives = { recipientReceives: amount, fee: 0 };
+                      } else {
+                        // Private: 1 hop through pool
+                        receives = calcReceives(amount, "quick");
+                      }
+                    } else {
+                      receives = calcReceives(amount, level);
+                    }
                     return (
                       <button
                         key={level}
@@ -441,7 +542,15 @@ export function ClaimFlow() {
                           <span className="text-sm font-semibold">{info.name}</span>
                         </div>
                         <p className="text-lg font-bold">
-                          {lamportsToSol(receives.recipientReceives).toFixed(4)} SOL
+                          {(() => {
+                            const isSOL = !state.note!.token || state.note!.token === "SOL";
+                            if (isSOL) {
+                              return `${lamportsToSol(receives.recipientReceives).toFixed(4)} SOL`;
+                            } else {
+                              const decimals = state.note!.token === "USDC" || state.note!.token === "USDT" ? 6 : 9;
+                              return `${(receives.recipientReceives / (10 ** decimals)).toFixed(2)} ${state.note!.token}`;
+                            }
+                          })()}
                         </p>
                         <p className="text-xs text-muted-foreground">
                           {info.recipientHidden ? "You stay hidden" : "Sender can see you"}
@@ -544,7 +653,16 @@ export function ClaimFlow() {
                 }
               >
                 <Zap className="w-4 h-4 mr-2" />
-                Claim {receiveBreakdown ? lamportsToSol(receiveBreakdown.recipientReceives).toFixed(4) : "0"} SOL
+                Claim {(() => {
+                  if (!receiveBreakdown || !state.note) return "0";
+                  const isSOL = !state.note.token || state.note.token === "SOL";
+                  if (isSOL) {
+                    return `${lamportsToSol(receiveBreakdown.recipientReceives).toFixed(4)} SOL`;
+                  } else {
+                    const decimals = state.note.token === "USDC" || state.note.token === "USDT" ? 6 : 9;
+                    return `${(receiveBreakdown.recipientReceives / (10 ** decimals)).toFixed(2)} ${state.note.token}`;
+                  }
+                })()}
                 <ArrowRight className="w-4 h-4 ml-2" />
               </Button>
               
@@ -662,7 +780,17 @@ export function ClaimFlow() {
                 <div className="p-4 rounded-xl bg-background border border-border mb-4">
                   <div className="flex justify-between text-sm mb-2">
                     <span className="text-muted-foreground">Original Amount</span>
-                    <span className="font-semibold">{formatSol(state.note.amount)} SOL</span>
+                    <span className="font-semibold">
+                      {(() => {
+                        const isSOL = !state.note.token || state.note.token === "SOL";
+                        if (isSOL) {
+                          return `${formatSol(state.note.amount)} SOL`;
+                        } else {
+                          const decimals = state.note.token === "USDC" || state.note.token === "USDT" ? 6 : 9;
+                          return `${(state.note.amount / (10 ** decimals)).toFixed(2)} ${state.note.token}`;
+                        }
+                      })()}
+                    </span>
                   </div>
                 </div>
               )}

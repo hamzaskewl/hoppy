@@ -271,9 +271,12 @@ hoppy/
 
 ## Roadmap
 
+### Recently Completed
+- [x] **Multi-token support (USDC, USDT)** - February 3rd, 2026
+- [x] **Relayer for SPL gas fees** - February 3rd, 2026 - Automatic SOL subsidies for stablecoin claims
+
 ### In Progress
 - [ ] Partial withdrawals
-- [ ] Multi-token support (USDC, USDT, BONK)
 - [ ] Virtual debit cards
 - [ ] Gift card payouts
 - [ ] Claim expiration with auto-refund

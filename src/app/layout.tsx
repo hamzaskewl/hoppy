@@ -8,6 +8,7 @@ const inter = Inter({ subsets: ["latin"] });
 const APP_URL = process.env.NEXT_PUBLIC_APP_URL || "https://hoppy.cash";
 
 export const metadata: Metadata = {
+  metadataBase: new URL(APP_URL),
   title: "hoppy | Privacy-First Payments",
   description: "Load. Redeem. Privately. A privacy-first payment platform on Solana.",
   keywords: ["privacy", "solana", "payments", "crypto", "web3", "hoppy"],

@@ -19,16 +19,80 @@
  */
 
 import { NextRequest, NextResponse } from "next/server";
-import { Connection, Transaction, SystemProgram, sendAndConfirmTransaction } from "@solana/web3.js";
+import { Connection, Transaction, SystemProgram, sendAndConfirmTransaction, PublicKey, Keypair } from "@solana/web3.js";
 import { PrivacyCash } from "privacycash";
+import { 
+  getAssociatedTokenAddress, 
+  getAccount, 
+  createAssociatedTokenAccountInstruction,
+  createTransferInstruction,
+  TOKEN_PROGRAM_ID,
+} from "@solana/spl-token";
 import {
   decodeCompositeSecret,
   type DoubleHopNote,
   type RecipientPrivacy,
+  getTokenInfo,
+  type SupportedToken,
 } from "@/lib/privacy/privacy-cash-adapter";
+import bs58 from "bs58";
 
 const RPC_URL = process.env.NEXT_PUBLIC_SOLANA_RPC_URL || "https://api.devnet.solana.com";
 const connection = new Connection(RPC_URL, "confirmed");
+
+// Sweep leftover SOL from ephemeral back to relayer (non-blocking)
+async function sweepToRelayer(ephemeralKeypair: Keypair) {
+  try {
+    const RELAYER_PRIVATE_KEY = process.env.HOPPY_RELAYER_PRIVATE_KEY;
+    if (!RELAYER_PRIVATE_KEY) return;
+    
+    const relayerKeypair = Keypair.fromSecretKey(bs58.decode(RELAYER_PRIVATE_KEY));
+    const balance = await connection.getBalance(ephemeralKeypair.publicKey);
+    
+    // Only sweep if there's enough to cover tx fee + have something left
+    const TX_FEE = 5000;
+    const MIN_SWEEP = 100_000; // 0.0001 SOL minimum to bother sweeping
+    
+    if (balance > TX_FEE + MIN_SWEEP) {
+      const sweepAmount = balance - TX_FEE;
+      const tx = new Transaction().add(
+        SystemProgram.transfer({
+          fromPubkey: ephemeralKeypair.publicKey,
+          toPubkey: relayerKeypair.publicKey,
+          lamports: sweepAmount,
+        })
+      );
+      await sendAndConfirmTransaction(connection, tx, [ephemeralKeypair], { commitment: "confirmed" });
+    }
+  } catch {
+    // Non-critical - just log and continue
+    console.warn("[Claim] Failed to sweep leftover SOL to relayer");
+  }
+}
+
+// Helper to get SPL token balance
+async function getTokenBalance(owner: PublicKey, mint: string): Promise<bigint> {
+  try {
+    const mintPubkey = new PublicKey(mint);
+    const ata = await getAssociatedTokenAddress(mintPubkey, owner);
+    const account = await getAccount(connection, ata);
+    return account.amount;
+  } catch {
+    return BigInt(0);
+  }
+}
+
+// Helper to check if ATA exists
+async function ataExists(owner: PublicKey, mint: string): Promise<boolean> {
+  try {
+    const mintPubkey = new PublicKey(mint);
+    const ata = await getAssociatedTokenAddress(mintPubkey, owner);
+    await getAccount(connection, ata);
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 export async function POST(request: NextRequest) {
   try {
@@ -70,6 +134,11 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    // Get token info from note (defaults to SOL for backwards compatibility)
+    const token: SupportedToken = doubleHopNote.token || "SOL";
+    const tokenInfo = getTokenInfo(token);
+    const isSOL = token === "SOL";
+
     // ========================================================================
     // FLOW ROUTING: Based on recipientPrivacy
     // 
@@ -89,42 +158,101 @@ export async function POST(request: NextRequest) {
     // ------------------------------------------------------------------------
     if (!needsPrivacy) {
       // Flow 1: Direct transfer (QUICK CLAIM)
+      const recipientPubkey = new PublicKey(recipientAddress);
+      const ephPubkey = compositeSecret.ephemeralKeypair.publicKey;
       
-      // Get actual ephemeral balance and sweep it all (minus tx fee)
-      const ephemeralBalance = await connection.getBalance(compositeSecret.ephemeralKeypair.publicKey);
-      const TX_FEE = 5000; // Standard tx fee in lamports
-      const transferAmount = Math.max(0, ephemeralBalance - TX_FEE);
-      
-      if (transferAmount <= 0) {
-        throw new Error("Ephemeral wallet has insufficient balance for transfer");
+      if (isSOL) {
+        // SOL: Get actual ephemeral balance and sweep it all (minus tx fee)
+        const ephemeralBalance = await connection.getBalance(ephPubkey);
+        const TX_FEE = 5000; // Standard tx fee in lamports
+        const transferAmount = Math.max(0, ephemeralBalance - TX_FEE);
+        
+        if (transferAmount <= 0) {
+          throw new Error("Ephemeral wallet has insufficient balance for transfer");
+        }
+        
+        // Sweeping ephemeral SOL to recipient
+        const tx = new Transaction().add(
+          SystemProgram.transfer({
+            fromPubkey: ephPubkey,
+            toPubkey: recipientPubkey,
+            lamports: transferAmount,
+          })
+        );
+
+        const txHash = await sendAndConfirmTransaction(
+          connection,
+          tx,
+          [compositeSecret.ephemeralKeypair],
+          { commitment: "confirmed" }
+        );
+
+        return NextResponse.json({
+          success: true,
+          withdrawTxHash: txHash,
+          amountReceived: transferAmount,
+          recipientPrivacy,
+          hops: 0,
+          token,
+        });
+      } else {
+        // SPL Token: Transfer token from ephemeral to recipient
+        const mintPubkey = new PublicKey(tokenInfo.mint!);
+        const ephAta = await getAssociatedTokenAddress(mintPubkey, ephPubkey);
+        const recipientAta = await getAssociatedTokenAddress(mintPubkey, recipientPubkey);
+        
+        // Get token balance
+        const tokenBalance = await getTokenBalance(ephPubkey, tokenInfo.mint!);
+        if (tokenBalance <= BigInt(0)) {
+          throw new Error(`Ephemeral wallet has no ${token} balance`);
+        }
+        
+        const tx = new Transaction();
+        
+        // Create recipient ATA if needed
+        const recipientAtaExists = await ataExists(recipientPubkey, tokenInfo.mint!);
+        if (!recipientAtaExists) {
+          tx.add(
+            createAssociatedTokenAccountInstruction(
+              ephPubkey, // payer
+              recipientAta,
+              recipientPubkey,
+              mintPubkey
+            )
+          );
+        }
+        
+        // Transfer all tokens
+        tx.add(
+          createTransferInstruction(
+            ephAta,
+            recipientAta,
+            ephPubkey,
+            tokenBalance,
+            [],
+            TOKEN_PROGRAM_ID
+          )
+        );
+
+        const txHash = await sendAndConfirmTransaction(
+          connection,
+          tx,
+          [compositeSecret.ephemeralKeypair],
+          { commitment: "confirmed" }
+        );
+
+        // Sweep leftover SOL back to relayer (non-blocking)
+        sweepToRelayer(compositeSecret.ephemeralKeypair).catch(() => {});
+
+        return NextResponse.json({
+          success: true,
+          withdrawTxHash: txHash,
+          amountReceived: Number(tokenBalance),
+          recipientPrivacy,
+          hops: 0,
+          token,
+        });
       }
-      
-      // Sweeping ephemeral to recipient
-      const tx = new Transaction().add(
-        SystemProgram.transfer({
-          fromPubkey: compositeSecret.ephemeralKeypair.publicKey,
-          toPubkey: new (await import("@solana/web3.js")).PublicKey(recipientAddress),
-          lamports: transferAmount,
-        })
-      );
-
-      const txHash = await sendAndConfirmTransaction(
-        connection,
-        tx,
-        [compositeSecret.ephemeralKeypair],
-        { commitment: "confirmed" }
-      );
-
-      // Check ephemeral is now empty
-      const finalBalance = await connection.getBalance(compositeSecret.ephemeralKeypair.publicKey);
-
-      return NextResponse.json({
-        success: true,
-        withdrawTxHash: txHash,
-        amountReceived: transferAmount,
-        recipientPrivacy,
-        hops: 0,
-      });
     }
 
     // ------------------------------------------------------------------------
@@ -136,50 +264,83 @@ export async function POST(request: NextRequest) {
     // ------------------------------------------------------------------------
     if (needsPrivacy) {
       // Flow 2: Ephemeral → Pool → Recipient (PRIVATE CLAIM)
+      const ephPubkey = compositeSecret.ephemeralKeypair.publicKey;
 
       const privacyCashClient = new PrivacyCash({
         RPC_url: RPC_URL,
         owner: compositeSecret.ephemeralKeypair,
-        enableDebug: true,
+        enableDebug: false,
       });
 
-      // Check actual ephemeral balance and subtract SDK overhead
-      const ephBalance = await connection.getBalance(compositeSecret.ephemeralKeypair.publicKey);
-      const MIN_TX_BUFFER = 3_000_000; // ~0.003 SOL - minimal buffer for tx fees
-      const depositAmount = Math.max(0, ephBalance - MIN_TX_BUFFER);
-      
-      if (depositAmount <= 0) {
-        throw new Error("Ephemeral balance too low to cover Privacy Cash overhead");
+      if (isSOL) {
+        // SOL: Check actual ephemeral balance and subtract SDK overhead
+        const ephBalance = await connection.getBalance(ephPubkey);
+        const MIN_TX_BUFFER = 3_000_000; // ~0.003 SOL - minimal buffer for tx fees
+        const depositAmount = Math.max(0, ephBalance - MIN_TX_BUFFER);
+        
+        if (depositAmount <= 0) {
+          throw new Error("Ephemeral balance too low to cover Privacy Cash overhead");
+        }
+        
+        // First deposit to pool (free, no fee)
+        await privacyCashClient.deposit({
+          lamports: depositAmount,
+        });
+
+        // Withdraw with ZK privacy
+        const withdrawResult = await privacyCashClient.withdraw({
+          lamports: depositAmount,
+          recipientAddress,
+        });
+
+        // Sweep leftover SOL back to relayer (non-blocking)
+        sweepToRelayer(compositeSecret.ephemeralKeypair).catch(() => {});
+
+        return NextResponse.json({
+          success: true,
+          withdrawTxHash: withdrawResult.tx,
+          amountReceived: depositAmount,
+          recipientPrivacy,
+          hops: 1,
+          token,
+        });
+      } else {
+        // SPL Token: Deposit and withdraw via Privacy Cash SPL methods
+        const tokenBalance = await getTokenBalance(ephPubkey, tokenInfo.mint!);
+        
+        if (tokenBalance <= BigInt(0)) {
+          throw new Error(`Ephemeral wallet has no ${token} balance`);
+        }
+        
+        const depositAmountBaseUnits = Number(tokenBalance);
+        // Privacy Cash expects amounts in WHOLE TOKENS, not base units
+        const depositAmountWholeTokens = depositAmountBaseUnits / (10 ** tokenInfo.decimals);
+        
+        // Deposit SPL to pool
+        await privacyCashClient.depositSPL({
+          amount: depositAmountWholeTokens,
+          mintAddress: tokenInfo.mint!,
+        });
+
+        // Withdraw SPL with ZK privacy
+        const withdrawResult = await privacyCashClient.withdrawSPL({
+          amount: depositAmountWholeTokens,
+          mintAddress: tokenInfo.mint!,
+          recipientAddress,
+        });
+
+        // Sweep leftover SOL back to relayer (non-blocking)
+        sweepToRelayer(compositeSecret.ephemeralKeypair).catch(() => {});
+
+        return NextResponse.json({
+          success: true,
+          withdrawTxHash: withdrawResult.tx,
+          amountReceived: depositAmountBaseUnits, // Return in base units for UI consistency
+          recipientPrivacy,
+          hops: 1,
+          token,
+        });
       }
-      
-      // First deposit to pool (free, no fee)
-      await privacyCashClient.deposit({
-        lamports: depositAmount,
-      });
-
-      // Withdraw with ZK privacy - pass FULL depositAmount
-      // SDK will drain the entire UTXO (no change left behind)
-      // and deduct its fee automatically (~0.006 SOL + 0.35%)
-      const withdrawResult = await privacyCashClient.withdraw({
-        lamports: depositAmount,
-        recipientAddress,
-      });
-
-      // Check ephemeral is now empty
-      const finalBalance = await connection.getBalance(compositeSecret.ephemeralKeypair.publicKey);
-
-      // The SDK deducts fee from depositAmount, recipient gets (depositAmount - fee)
-      // Fee structure: 0.006 SOL base + 0.35% of amount
-      // We don't know exact amount, SDK logs it - just return depositAmount as estimate
-      // The actual received amount is shown in SDK logs
-
-      return NextResponse.json({
-        success: true,
-        withdrawTxHash: withdrawResult.tx,
-        amountReceived: depositAmount, // SDK shows actual in its logs
-        recipientPrivacy,
-        hops: 1,
-      });
     }
 
     // Should never reach here

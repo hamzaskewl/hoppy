@@ -196,8 +196,10 @@ export function CardPurchaseFlow({ disabled = false }: { disabled?: boolean }) {
                       Custom
                     </button>
                   </div>
-                  <div className="relative">
-                    <span className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground text-sm">$</span>
+                  <div className="flex">
+                    <span className="inline-flex items-center px-3 rounded-l-lg border-2 border-r-0 border-border bg-secondary text-muted-foreground font-medium">
+                      $
+                    </span>
                     <Input
                       id="custom-amount-input"
                       type="text"
@@ -223,7 +225,7 @@ export function CardPurchaseFlow({ disabled = false }: { disabled?: boolean }) {
                           setAmountInput(validAmount.toString());
                         }
                       }}
-                      className="bg-card border-2 border-border pl-7 pr-3"
+                      className="bg-card border-2 border-border rounded-l-none flex-1"
                       placeholder="5 - 10,000"
                     />
                   </div>
