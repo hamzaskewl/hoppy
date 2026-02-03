@@ -720,10 +720,16 @@ export function ClaimFlow() {
               
               <h3 className="mt-6 text-2xl font-bold">Claim Complete!</h3>
               <p className="mt-2 text-muted-foreground">
-                {state.amountReceived 
-                  ? `${formatSol(state.amountReceived)} SOL sent to your wallet`
-                  : `${formatSol(state.note.amount)} SOL sent to your wallet`
-                }
+                {(() => {
+                  const amount = state.amountReceived || state.note.amount;
+                  const isSOL = !state.note.token || state.note.token === "SOL";
+                  if (isSOL) {
+                    return `${formatSol(amount)} SOL sent to your wallet`;
+                  } else {
+                    const decimals = state.note.token === "USDC" || state.note.token === "USDT" ? 6 : 9;
+                    return `${(amount / (10 ** decimals)).toFixed(2)} ${state.note.token} sent to your wallet`;
+                  }
+                })()}
               </p>
 
               {/* Privacy confirmation */}
