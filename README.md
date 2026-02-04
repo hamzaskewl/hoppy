@@ -277,8 +277,8 @@ hoppy/
 
 ### In Progress
 - [ ] Partial withdrawals
-- [ ] Virtual debit cards
-- [ ] Gift card payouts
+- [ ] Virtual cards (using reloadly)
+- [ ] Gift cards 
 - [ ] Claim expiration with auto-refund
 
 ### Up Next

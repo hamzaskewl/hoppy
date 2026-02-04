@@ -5,7 +5,7 @@ import dynamic from "next/dynamic";
 import Image from "next/image";
 import { NavHeader } from "@/components/nav-header";
 import { CardPurchaseFlow } from "@/components/card/card-purchase-flow";
-import { Shield, Mail, AlertTriangle } from "lucide-react";
+import { Mail, AlertTriangle } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 // Dynamic import for Privacy Cash component (server-side libs)
@@ -100,7 +100,7 @@ export default function CardPage() {
                     : "hover:bg-secondary"
                 )}
               >
-                <Shield className="w-4 h-4" />
+                <Image src="/bunnypriv.png" alt="Private" width={18} height={18} className="w-[18px] h-[18px]" />
                 Private (Gift Link)
               </button>
               <button

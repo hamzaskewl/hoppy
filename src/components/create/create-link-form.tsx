@@ -4,7 +4,7 @@ import { useState, useMemo, useEffect, useCallback } from "react";
 import { QRCodeSVG } from "qrcode.react";
 import Image from "next/image";
 import { motion } from "framer-motion";
-import { Copy, Check, Shield, Wallet, ArrowRight, Lock, Info, AlertTriangle, Eye, EyeOff, Save, History, Trash2, ExternalLink, ChevronDown, Settings2 } from "lucide-react";
+import { Copy, Check, Wallet, ArrowRight, Lock, Info, AlertTriangle, Eye, EyeOff, Save, History, Trash2, ExternalLink, ChevronDown, Settings2 } from "lucide-react";
 import { usePrivy } from "@privy-io/react-auth";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -795,7 +795,7 @@ export function CreateLinkForm() {
           <div className="space-y-4">
             <div className="p-4 rounded-xl bg-hop-100 dark:bg-hop-900/30 border-2 border-hop-400/50">
               <div className="flex items-start gap-3">
-                <Shield className="w-5 h-5 text-hop-600 dark:text-hop-400 mt-0.5" />
+                <Image src="/bunnypriv.png" alt="Privacy" width={24} height={24} className="w-6 h-6 mt-0.5" />
                 <div>
                   <p className="text-sm font-medium text-hop-700 dark:text-hop-300">Double Hop Privacy</p>
                   <p className="text-xs text-muted-foreground mt-1">
@@ -1185,7 +1185,7 @@ export function CreateLinkForm() {
                     (selectedToken !== "SOL" && senderPrivacy === "private" && relayerStatus !== null && !relayerStatus.available)
                   }
                 >
-                  <Shield className="w-4 h-4 mr-2" />
+                  <Image src="/bunnypriv.png" alt="" width={18} height={18} className="w-[18px] h-[18px] mr-2" />
                   {selectedToken === "SOL" ? (
                     <>Create · {lamportsToSol(costBreakdown?.senderPays || 0).toFixed(4)} SOL</>
                   ) : (

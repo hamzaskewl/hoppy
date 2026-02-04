@@ -10,12 +10,12 @@ import {
   Loader2,
   AlertTriangle,
   ArrowRight,
-  Shield,
   Gift,
   Link as LinkIcon,
   Eye,
   EyeOff,
 } from "lucide-react";
+import Image from "next/image";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -304,7 +304,7 @@ export function PrivateCardFlow({ disabled = false }: { disabled?: boolean }) {
               <CardContent className="space-y-6">
                 {/* Privacy Badge */}
                 <div className="p-3 rounded-xl bg-hop-100 dark:bg-hop-500/10 border-2 border-hop-400 flex items-center gap-3">
-                  <Shield className="w-5 h-5 text-hop-600 dark:text-hop-400" />
+                  <Image src="/bunnypriv.png" alt="Privacy" width={24} height={24} className="w-6 h-6" />
                   <div>
                     <p className="text-sm font-medium text-hop-700 dark:text-hop-300">Maximum Privacy</p>
                     <p className="text-xs text-muted-foreground">Card provider cannot trace your wallet</p>
@@ -443,7 +443,7 @@ export function PrivateCardFlow({ disabled = false }: { disabled?: boolean }) {
             <Card>
               <CardContent className="py-16 text-center space-y-6">
                 <div className="w-16 h-16 rounded-full bg-hop-500 border-2 border-hop-600 mx-auto flex items-center justify-center animate-pulse">
-                  {step === "depositing" && <Shield className="w-8 h-8 text-white" />}
+                  {step === "depositing" && <Image src="/bunnypriv.png" alt="Privacy" width={32} height={32} className="w-8 h-8" />}
                   {step === "withdrawing" && <CreditCard className="w-8 h-8 text-white" />}
                   {step === "waiting" && <Gift className="w-8 h-8 text-white" />}
                 </div>

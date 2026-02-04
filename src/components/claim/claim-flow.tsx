@@ -3,7 +3,8 @@
 import { useEffect, useState, useCallback, useRef, useMemo } from "react";
 import { usePrivy } from "@privy-io/react-auth";
 import { motion, AnimatePresence } from "framer-motion";
-import { Wallet, Check, Copy, ArrowRight, AlertTriangle, Shield, Lock, Zap, Eye, EyeOff } from "lucide-react";
+import { Wallet, Check, Copy, ArrowRight, AlertTriangle, Lock, Zap, Eye, EyeOff } from "lucide-react";
+import Image from "next/image";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -13,6 +14,8 @@ import {
   decodeCompositeSecret,
   calculateRecipientReceives,
   calculateSPLRecipientReceives,
+  calculateFees,
+  calculateSPLFees,
   RECIPIENT_PRIVACY,
   SENDER_PRIVACY,
   type DoubleHopNote,
@@ -66,6 +69,11 @@ export function ClaimFlow() {
   const [useCustomAddress, setUseCustomAddress] = useState(false);
   const [isReclaiming, setIsReclaiming] = useState(false);
   const [reclaimSuccess, setReclaimSuccess] = useState<string | null>(null);
+  // Partial claim state
+  const [enablePartialClaim, setEnablePartialClaim] = useState(false);
+  const [partialAmount, setPartialAmount] = useState<string>("");
+  const [remainderLink, setRemainderLink] = useState<string | null>(null);
+  const [remainderAmount, setRemainderAmount] = useState<number | null>(null);
   
   const hasStartedParsing = useRef(false);
   
@@ -119,6 +127,73 @@ export function ClaimFlow() {
       return false;
     }
   }, [pasteAddress]);
+  
+  // Partial claim validation and calculations
+  const partialClaimInfo = useMemo(() => {
+    if (!state.note || recipientPrivacy !== "private") {
+      return null;
+    }
+    
+    const totalAmount = state.note.amount;
+    const isSOL = !state.note.token || state.note.token === "SOL";
+    const decimals = state.note.token === "USDC" || state.note.token === "USDT" ? 6 : 9;
+    
+    // Parse partial amount
+    const partialNum = parseFloat(partialAmount) || 0;
+    const partialInBaseUnits = isSOL 
+      ? Math.floor(partialNum * 1e9) 
+      : Math.floor(partialNum * (10 ** decimals));
+    
+    // Minimum partial amount to cover fees (0.006 SOL base + 0.35% for SOL, ~$0.55 + 0.35% for SPL)
+    const minPartialAmount = isSOL ? 10_000_000 : 600_000; // 0.01 SOL or ~$0.60
+    
+    // Validate partial amount - must be above minimum and leave enough for remainder
+    const minRemainder = isSOL ? 10_000_000 : 600_000; // Leave at least 0.01 SOL or ~$0.60 for remainder
+    const maxPartialAmount = totalAmount - minRemainder;
+    const isValidPartial = partialInBaseUnits >= minPartialAmount && partialInBaseUnits <= maxPartialAmount;
+    
+    // Calculate fees for partial withdrawal
+    const partialFees = isSOL 
+      ? calculateFees(partialInBaseUnits)
+      : calculateSPLFees(partialInBaseUnits, decimals);
+    
+    // Estimate remainder (total - partial - fees)
+    // Flow: Eph → EphRemainder → Pool (deposit) → partial withdraw → remainder stays in pool
+    const fundsInPool = state.note.fundsLocation === "pool";
+    let estimatedRemainder: number;
+    
+    if (fundsInPool) {
+      // Funds already in pool, just withdraw partial, remainder stays (no extra fees on remainder)
+      // Only the partial withdrawal has a fee
+      estimatedRemainder = totalAmount - partialInBaseUnits - partialFees.totalFee;
+    } else {
+      // First partial claim from ephemeral:
+      // 1. Transfer Eph → EphRemainder (tx fee ~0.000005 SOL, negligible)
+      // 2. Deposit to pool (FREE)
+      // 3. Partial withdraw (one withdrawal fee)
+      // 4. Remainder stays in pool (NO FEE until later claimed)
+      // 
+      // So: remainder = total - partial - partial_withdrawal_fee - small_tx_buffer
+      const TX_BUFFER = isSOL ? 3_000_000 : 0; // ~0.003 SOL buffer for tx fees during transfer
+      estimatedRemainder = totalAmount - partialInBaseUnits - partialFees.totalFee - TX_BUFFER;
+    }
+    
+    const grossRemainder = Math.max(0, totalAmount - partialInBaseUnits);
+    
+    return {
+      totalAmount,
+      partialInBaseUnits,
+      isValidPartial,
+      partialReceives: partialFees.recipientReceives,
+      estimatedRemainder: Math.max(0, estimatedRemainder),
+      grossRemainder,
+      isSOL,
+      decimals,
+      fundsInPool,
+      minPartialAmount,
+      maxPartialAmount,
+    };
+  }, [state.note, recipientPrivacy, partialAmount]);
 
   // Get user's wallet address (Solana only)
   const getUserWalletAddress = useCallback((): PublicKey | null => {
@@ -307,9 +382,16 @@ export function ClaimFlow() {
     setClaimProgress("Initializing withdrawal...");
 
     try {
-      setClaimProgress(recipientPrivacy === "private" 
-        ? "Routing through privacy layer..." 
-        : "Connecting to Privacy Cash...");
+      // Determine if this is a partial claim
+      const isPartial = enablePartialClaim && 
+                        recipientPrivacy === "private" && 
+                        partialClaimInfo?.isValidPartial;
+      
+      setClaimProgress(isPartial
+        ? "Processing partial claim..."
+        : recipientPrivacy === "private" 
+          ? "Routing through privacy layer..." 
+          : "Connecting to Privacy Cash...");
       
       // Call API route to handle Privacy Cash withdrawal (server-side)
       const response = await fetch("/api/privacy-cash/claim", {
@@ -321,13 +403,53 @@ export function ClaimFlow() {
           note: state.note,
           recipientAddress,
           recipientPrivacy,
+          // Include partial amount if doing partial claim
+          ...(isPartial && partialClaimInfo && {
+            partialAmount: partialClaimInfo.partialInBaseUnits,
+          }),
         }),
       });
 
       const result = await response.json();
 
       if (!result.success) {
+        // Check if there's a recovery link (partial claim failed mid-way)
+        if (result.recoveryLink) {
+          // CRITICAL: Store recovery link in localStorage IMMEDIATELY
+          // This ensures user can recover funds even if they close the browser
+          try {
+            const recoveryData = {
+              link: result.recoveryLink,
+              amount: result.recoveryNote?.amount || 0,
+              timestamp: Date.now(),
+              error: result.error,
+              originalLink: window.location.href,
+            };
+            const existingRecoveries = JSON.parse(localStorage.getItem("hoppy_recovery_links") || "[]");
+            existingRecoveries.push(recoveryData);
+            localStorage.setItem("hoppy_recovery_links", JSON.stringify(existingRecoveries));
+            console.log("[Recovery] Saved recovery link to localStorage:", result.recoveryLink);
+          } catch (storageError) {
+            console.error("[Recovery] Failed to save to localStorage:", storageError);
+          }
+          
+          setRemainderLink(result.recoveryLink);
+          setRemainderAmount(result.recoveryNote?.amount || 0);
+          // Still show error but with recovery info
+          setState((prev) => ({
+            ...prev,
+            status: "complete", // Show complete state to display recovery link
+            error: result.error,
+          }));
+          return;
+        }
         throw new Error(result.error || "Claim failed");
+      }
+
+      // Handle partial claim remainder
+      if (result.isPartialClaim && result.remainderLink) {
+        setRemainderLink(result.remainderLink);
+        setRemainderAmount(result.remainderAmount);
       }
 
       setState((prev) => ({
@@ -462,8 +584,14 @@ export function ClaimFlow() {
             <CardContent className="py-6">
               {/* Header */}
               <div className="flex justify-center mb-4">
-                <div className="w-14 h-14 rounded-full bg-hop-200 dark:bg-hop-500/20 border-2 border-hop-400/50 flex items-center justify-center">
-                  <Shield className="w-7 h-7 text-hop-600 dark:text-hop-400" />
+                <div className="w-14 h-14 rounded-full overflow-hidden">
+                  <Image 
+                    src="/bunnypriv.png" 
+                    alt="Privacy" 
+                    width={56} 
+                    height={56}
+                    className="w-full h-full object-cover"
+                  />
                 </div>
               </div>
 
@@ -530,18 +658,30 @@ export function ClaimFlow() {
                       <button
                         key={level}
                         onClick={() => setRecipientPrivacy(level)}
-                        className={`p-3 rounded-xl border-2 transition-all text-left ${
+                        className={`p-3 rounded-xl border-2 transition-all text-left relative ${
                           isSelected
-                            ? level === "quick" ? "border-yellow-500 bg-yellow-500/10" : "border-hop-500 bg-hop-500/10"
+                            ? level === "quick" 
+                              ? "border-yellow-500 bg-yellow-500/10 ring-2 ring-yellow-500/30" 
+                              : "border-hop-500 bg-hop-500/20 ring-2 ring-hop-500/50"
                             : "border-border hover:border-muted-foreground/50 bg-background"
                         }`}
                       >
+                        {/* Recommended badge for private */}
+                        {level === "private" && (
+                          <span className="absolute -top-2 -right-2 px-1.5 py-0.5 text-[10px] font-bold bg-hop-500 text-white rounded-full">
+                            Recommended
+                          </span>
+                        )}
                         <div className="flex items-center gap-2 mb-1">
-                          {level === "quick" && <Eye className="w-4 h-4 text-yellow-500" />}
-                          {level === "private" && <EyeOff className="w-4 h-4 text-hop-500" />}
-                          <span className="text-sm font-semibold">{info.name}</span>
+                          {level === "quick" && <Eye className={`w-4 h-4 ${isSelected ? "text-yellow-600" : "text-yellow-500"}`} />}
+                          {level === "private" && (
+                            <Image src="/bunnypriv.png" alt="Private" width={18} height={18} className="w-[18px] h-[18px]" />
+                          )}
+                          <span className={`text-sm font-semibold ${isSelected && level === "private" ? "text-hop-700 dark:text-hop-300" : ""}`}>
+                            {info.name}
+                          </span>
                         </div>
-                        <p className="text-lg font-bold">
+                        <p className={`text-lg font-bold ${isSelected && level === "private" ? "text-hop-700 dark:text-hop-300" : ""}`}>
                           {(() => {
                             const isSOL = !state.note!.token || state.note!.token === "SOL";
                             if (isSOL) {
@@ -570,6 +710,126 @@ export function ClaimFlow() {
                   {RECIPIENT_PRIVACY[recipientPrivacy].description}
                 </p>
               </div>
+              
+              {/* Partial Claim Option - Only for Private */}
+              {recipientPrivacy === "private" && state.note && (
+                <div className="mb-4 p-3 rounded-xl border-2 border-hop-400/30 bg-hop-500/5">
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={enablePartialClaim}
+                      onChange={(e) => {
+                        setEnablePartialClaim(e.target.checked);
+                        if (!e.target.checked) setPartialAmount("");
+                      }}
+                      className="w-4 h-4 rounded border-border accent-hop-500"
+                    />
+                    <span className="text-sm font-medium">Claim partial amount</span>
+                    <span className="px-1.5 py-0.5 text-[10px] font-medium bg-hop-500/20 text-hop-700 dark:text-hop-300 rounded">
+                      Extra Privacy
+                    </span>
+                  </label>
+                  <p className="text-xs text-muted-foreground mt-1 ml-6">
+                    Split claims are harder to trace. Get a new link for the remainder.
+                  </p>
+                  
+                  {enablePartialClaim && (
+                    <div className="mt-3 space-y-3">
+                      <div>
+                        <label className="text-xs text-muted-foreground mb-1 block">
+                          Amount to claim
+                        </label>
+                        <div className="flex items-center gap-2">
+                          <Input
+                            type="text"
+                            inputMode="decimal"
+                            placeholder="0.00"
+                            value={partialAmount}
+                            onChange={(e) => {
+                              const v = e.target.value;
+                              if (v === "" || /^\d*\.?\d*$/.test(v)) {
+                                setPartialAmount(v);
+                              }
+                            }}
+                            className="flex-1"
+                          />
+                          <span className="text-sm font-medium text-muted-foreground">
+                            {state.note.token || "SOL"}
+                          </span>
+                        </div>
+                        {/* Quick amount buttons */}
+                        <div className="flex gap-1 mt-2">
+                          {[0.25, 0.5, 0.75].map((pct) => {
+                            const isSOL = !state.note!.token || state.note!.token === "SOL";
+                            const decimals = isSOL ? 9 : 6;
+                            const total = state.note!.amount;
+                            const val = isSOL 
+                              ? ((total * pct) / 1e9).toFixed(4)
+                              : ((total * pct) / (10 ** decimals)).toFixed(2);
+                            return (
+                              <button
+                                key={pct}
+                                type="button"
+                                onClick={() => setPartialAmount(val)}
+                                className="px-2 py-1 text-xs rounded bg-secondary hover:bg-secondary/80 transition-colors"
+                              >
+                                {pct * 100}%
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                      
+                      {/* Partial claim breakdown */}
+                      {partialClaimInfo && partialClaimInfo.isValidPartial && (
+                        <div className="p-2 rounded-lg bg-hop-500/10 border border-hop-500/20 text-xs space-y-1">
+                          <div className="flex justify-between">
+                            <span className="text-muted-foreground">You receive:</span>
+                            <span className="font-medium">
+                              {partialClaimInfo.isSOL
+                                ? `~${(partialClaimInfo.partialReceives / 1e9).toFixed(4)} SOL`
+                                : `~${(partialClaimInfo.partialReceives / (10 ** partialClaimInfo.decimals)).toFixed(2)} ${state.note.token}`
+                              }
+                            </span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span className="text-muted-foreground">Remainder link:</span>
+                            <span className="font-medium text-hop-600 dark:text-hop-400">
+                              {/* Show gross remainder (what the new link will say is available),
+                                  not net-after-fees of the *future* claim on that link */}
+                              {partialClaimInfo.isSOL
+                                ? `~${(partialClaimInfo.grossRemainder / 1e9).toFixed(4)} SOL`
+                                : `~${(partialClaimInfo.grossRemainder / (10 ** partialClaimInfo.decimals)).toFixed(2)} ${state.note.token}`
+                              }
+                            </span>
+                          </div>
+                          {!partialClaimInfo.fundsInPool && (
+                            <p className="text-muted-foreground/70 mt-1">
+                              * Extra fees apply for first partial claim
+                            </p>
+                          )}
+                        </div>
+                      )}
+                      
+                      {/* Validation error */}
+                      {partialAmount && partialClaimInfo && !partialClaimInfo.isValidPartial && (
+                        <p className="text-xs text-red-400">
+                          {partialClaimInfo.partialInBaseUnits < partialClaimInfo.minPartialAmount
+                            ? `Minimum: ${partialClaimInfo.isSOL 
+                                ? `${(partialClaimInfo.minPartialAmount / 1e9).toFixed(3)} SOL` 
+                                : `${(partialClaimInfo.minPartialAmount / (10 ** partialClaimInfo.decimals)).toFixed(2)} ${state.note?.token}`
+                              } (to cover fees)`
+                            : `Maximum: ${partialClaimInfo.isSOL 
+                                ? `${(partialClaimInfo.maxPartialAmount / 1e9).toFixed(4)} SOL` 
+                                : `${(partialClaimInfo.maxPartialAmount / (10 ** partialClaimInfo.decimals)).toFixed(2)} ${state.note?.token}`
+                              } (leave some for remainder)`
+                          }
+                        </p>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
 
               {/* Destination Address */}
               <div className="mb-4">
@@ -647,22 +907,34 @@ export function ClaimFlow() {
                 className="w-full"
                 size="lg"
                 disabled={
-                  useCustomAddress 
-                    ? !isValidPasteAddress 
-                    : (!authenticated || !getUserWalletAddress())
+                  (useCustomAddress ? !isValidPasteAddress : (!authenticated || !getUserWalletAddress())) ||
+                  (enablePartialClaim && recipientPrivacy === "private" && (!partialClaimInfo || !partialClaimInfo.isValidPartial))
                 }
               >
                 <Zap className="w-4 h-4 mr-2" />
-                Claim {(() => {
-                  if (!receiveBreakdown || !state.note) return "0";
-                  const isSOL = !state.note.token || state.note.token === "SOL";
-                  if (isSOL) {
-                    return `${lamportsToSol(receiveBreakdown.recipientReceives).toFixed(4)} SOL`;
-                  } else {
-                    const decimals = state.note.token === "USDC" || state.note.token === "USDT" ? 6 : 9;
-                    return `${(receiveBreakdown.recipientReceives / (10 ** decimals)).toFixed(2)} ${state.note.token}`;
-                  }
-                })()}
+                {enablePartialClaim && partialClaimInfo?.isValidPartial ? (
+                  // Partial claim button text
+                  <>
+                    Claim {partialClaimInfo.isSOL
+                      ? `${(partialClaimInfo.partialReceives / 1e9).toFixed(4)} SOL`
+                      : `${(partialClaimInfo.partialReceives / (10 ** partialClaimInfo.decimals)).toFixed(2)} ${state.note?.token}`
+                    }
+                  </>
+                ) : (
+                  // Full claim button text
+                  <>
+                    Claim {(() => {
+                      if (!receiveBreakdown || !state.note) return "0";
+                      const isSOL = !state.note.token || state.note.token === "SOL";
+                      if (isSOL) {
+                        return `${lamportsToSol(receiveBreakdown.recipientReceives).toFixed(4)} SOL`;
+                      } else {
+                        const decimals = state.note.token === "USDC" || state.note.token === "USDT" ? 6 : 9;
+                        return `${(receiveBreakdown.recipientReceives / (10 ** decimals)).toFixed(2)} ${state.note.token}`;
+                      }
+                    })()}
+                  </>
+                )}
                 <ArrowRight className="w-4 h-4 ml-2" />
               </Button>
               
@@ -713,34 +985,111 @@ export function ClaimFlow() {
                 initial={{ scale: 0 }}
                 animate={{ scale: 1 }}
                 transition={{ type: "spring", stiffness: 200, damping: 15 }}
-                className="w-20 h-20 rounded-full bg-hop-500 flex items-center justify-center mx-auto"
+                className={`w-20 h-20 rounded-full flex items-center justify-center mx-auto ${
+                  state.error && remainderLink ? "bg-amber-500" : "bg-hop-500"
+                }`}
               >
-                <Check className="w-10 h-10 text-white" />
+                {state.error && remainderLink ? (
+                  <AlertTriangle className="w-10 h-10 text-white" />
+                ) : (
+                  <Check className="w-10 h-10 text-white" />
+                )}
               </motion.div>
               
-              <h3 className="mt-6 text-2xl font-bold">Claim Complete!</h3>
+              <h3 className="mt-6 text-2xl font-bold">
+                {state.error && remainderLink 
+                  ? "Partial Claim Failed - Recovery Link Below" 
+                  : remainderLink 
+                    ? "Partial Claim Complete!" 
+                    : "Claim Complete!"}
+              </h3>
               <p className="mt-2 text-muted-foreground">
-                {(() => {
-                  const amount = state.amountReceived || state.note.amount;
-                  const isSOL = !state.note.token || state.note.token === "SOL";
-                  if (isSOL) {
-                    return `${formatSol(amount)} SOL sent to your wallet`;
-                  } else {
-                    const decimals = state.note.token === "USDC" || state.note.token === "USDT" ? 6 : 9;
-                    return `${(amount / (10 ** decimals)).toFixed(2)} ${state.note.token} sent to your wallet`;
-                  }
-                })()}
+                {state.error && remainderLink ? (
+                  <span className="text-amber-600 dark:text-amber-400">
+                    {state.error}. Save the recovery link below!
+                  </span>
+                ) : (
+                  (() => {
+                    const amount = state.amountReceived || state.note.amount;
+                    const isSOL = !state.note.token || state.note.token === "SOL";
+                    if (isSOL) {
+                      return `${formatSol(amount)} SOL sent to your wallet`;
+                    } else {
+                      const decimals = state.note.token === "USDC" || state.note.token === "USDT" ? 6 : 9;
+                      return `${(amount / (10 ** decimals)).toFixed(2)} ${state.note.token} sent to your wallet`;
+                    }
+                  })()
+                )}
               </p>
 
               {/* Privacy confirmation */}
               <div className="mt-4 p-3 rounded-lg bg-hop-100 dark:bg-hop-500/10 border-2 border-hop-400/50 inline-block">
                 <div className="flex items-center gap-2">
-                  <Shield className="w-4 h-4 text-hop-600 dark:text-hop-400" />
+                  <Image src="/bunnypriv.png" alt="Privacy" width={20} height={20} className="w-5 h-5" />
                   <p className="text-xs text-hop-700 dark:text-hop-300 font-medium">
                     Privacy preserved - no link to sender
                   </p>
                 </div>
               </div>
+
+              {/* Remainder/Recovery Link */}
+              {remainderLink && remainderAmount && (
+                <div className={`mt-6 p-4 rounded-xl text-left ${
+                  state.error 
+                    ? "bg-amber-100 dark:bg-amber-500/10 border-2 border-amber-500" 
+                    : "bg-hop-100 dark:bg-hop-500/10 border-2 border-hop-500"
+                }`}>
+                  <div className="flex items-center gap-2 mb-2">
+                    {state.error ? (
+                      <AlertTriangle className="w-6 h-6 text-amber-600 dark:text-amber-400" />
+                    ) : (
+                      <Image src="/bunnypriv.png" alt="Privacy" width={24} height={24} className="w-6 h-6" />
+                    )}
+                    <span className={`font-semibold ${
+                      state.error 
+                        ? "text-amber-700 dark:text-amber-300" 
+                        : "text-hop-700 dark:text-hop-300"
+                    }`}>
+                      {state.error ? "⚠️ RECOVERY LINK - SAVE THIS!" : "Remainder Link"}
+                    </span>
+                  </div>
+                  {state.error && (
+                    <p className="text-sm text-amber-700 dark:text-amber-300 mb-3 font-medium">
+                      Something went wrong but your funds are safe! This link contains your funds.
+                      Copy it now and save it somewhere safe.
+                    </p>
+                  )}
+                  <p className="text-sm text-muted-foreground mb-3">
+                    {(() => {
+                      const isSOL = !state.note.token || state.note.token === "SOL";
+                      if (isSOL) {
+                        return `${(remainderAmount / 1e9).toFixed(4)} SOL available`;
+                      } else {
+                        const decimals = state.note.token === "USDC" || state.note.token === "USDT" ? 6 : 9;
+                        return `${(remainderAmount / (10 ** decimals)).toFixed(2)} ${state.note.token} available`;
+                      }
+                    })()}
+                  </p>
+                  
+                  <div className="flex items-center gap-2 p-2 rounded-lg bg-card border border-border">
+                    <code className="flex-1 text-xs font-mono truncate">
+                      {remainderLink}
+                    </code>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      onClick={() => handleCopyText(remainderLink)}
+                      className="h-8 w-8 flex-shrink-0"
+                    >
+                      {copied ? <Check className="h-4 w-4 text-hop-600" /> : <Copy className="h-4 w-4" />}
+                    </Button>
+                  </div>
+                  
+                  <p className="text-xs text-muted-foreground mt-2">
+                    Save this link! You can claim the remainder anytime or share it with someone else.
+                  </p>
+                </div>
+              )}
 
               {/* Transaction Hash */}
               {state.withdrawTxHash && (
@@ -755,7 +1104,15 @@ export function ClaimFlow() {
                 </div>
               )}
 
-              <div className="mt-8">
+              <div className="mt-8 flex gap-3 justify-center">
+                {remainderLink && (
+                  <Button
+                    onClick={() => handleCopyText(remainderLink)}
+                  >
+                    {copied ? <Check className="w-4 h-4 mr-2" /> : <Copy className="w-4 h-4 mr-2" />}
+                    Copy Remainder Link
+                  </Button>
+                )}
                 <Button
                   variant="outline"
                   onClick={() => window.location.href = "/"}
