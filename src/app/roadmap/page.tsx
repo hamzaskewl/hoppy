@@ -236,24 +236,25 @@ export default function RoadmapPage() {
               <ColumnHeader icon={Zap} title="In Progress" variant="active" />
               <div className="space-y-4">
                 <CompletedCard 
+                  title="Partial Claims" 
+                  description="Claim only a portion, get a new link for the remainder"
+                  index={0}
+                  progress="2/4"
+                />
+                <CompletedCard 
                   title="Multi-Token Support" 
                   description="USDC, USDT, and more SPL tokens"
-                  index={0}
+                  index={1}
                   progress="2/3"
                 />
                 <RoadmapCard 
-                  title="Partial Withdrawals" 
-                  description="Claim only a portion of funds, leave the rest for later"
-                  index={1}
-                />
-                <RoadmapCard 
                   title="Virtual Debit Cards" 
-                  description="Convert shielded crypto to Visa/Mastercard"
+                  description="Convert shielded crypto to Visa/Mastercard using Reloadly"
                   index={2}
                 />
                 <RoadmapCard 
                   title="Gift Card Payouts" 
-                  description="Redeem to Amazon, Uber, DoorDash, and more"
+                  description="Redeem to Amazon, Uber, DoorDash via Reloadly"
                   index={3}
                 />
                 <RoadmapCard 
