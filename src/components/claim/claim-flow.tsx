@@ -3,7 +3,7 @@
 import { useEffect, useState, useCallback, useRef, useMemo } from "react";
 import { usePrivy } from "@privy-io/react-auth";
 import { motion, AnimatePresence } from "framer-motion";
-import { Wallet, Check, Copy, ArrowRight, AlertTriangle, Lock, Zap, Eye, EyeOff } from "lucide-react";
+import { Wallet, Check, Copy, ArrowRight, AlertTriangle, Lock, Zap, Eye, EyeOff, Home } from "lucide-react";
 import Image from "next/image";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -584,12 +584,12 @@ export function ClaimFlow() {
             <CardContent className="py-6">
               {/* Header */}
               <div className="flex justify-center mb-4">
-                <div className="w-14 h-14 rounded-full overflow-hidden">
+                <div className="w-16 h-16 rounded-full overflow-hidden">
                   <Image 
                     src="/bunnypriv.png" 
                     alt="Privacy" 
-                    width={56} 
-                    height={56}
+                    width={64} 
+                    height={64}
                     className="w-full h-full object-cover"
                   />
                 </div>
@@ -675,7 +675,7 @@ export function ClaimFlow() {
                         <div className="flex items-center gap-2 mb-1">
                           {level === "quick" && <Eye className={`w-4 h-4 ${isSelected ? "text-yellow-600" : "text-yellow-500"}`} />}
                           {level === "private" && (
-                            <Image src="/bunnypriv.png" alt="Private" width={18} height={18} className="w-[18px] h-[18px]" />
+                            <Image src="/bunnypriv.png" alt="Private" width={22} height={22} className="w-[22px] h-[22px]" />
                           )}
                           <span className={`text-sm font-semibold ${isSelected && level === "private" ? "text-hop-700 dark:text-hop-300" : ""}`}>
                             {info.name}
@@ -1025,7 +1025,7 @@ export function ClaimFlow() {
               {/* Privacy confirmation */}
               <div className="mt-4 p-3 rounded-lg bg-hop-100 dark:bg-hop-500/10 border-2 border-hop-400/50 inline-block">
                 <div className="flex items-center gap-2">
-                  <Image src="/bunnypriv.png" alt="Privacy" width={20} height={20} className="w-5 h-5" />
+                  <Image src="/bunnypriv.png" alt="Privacy" width={24} height={24} className="w-6 h-6" />
                   <p className="text-xs text-hop-700 dark:text-hop-300 font-medium">
                     Privacy preserved - no link to sender
                   </p>
@@ -1043,7 +1043,7 @@ export function ClaimFlow() {
                     {state.error ? (
                       <AlertTriangle className="w-6 h-6 text-amber-600 dark:text-amber-400" />
                     ) : (
-                      <Image src="/bunnypriv.png" alt="Privacy" width={24} height={24} className="w-6 h-6" />
+                      <Image src="/bunnypriv.png" alt="Privacy" width={28} height={28} className="w-7 h-7" />
                     )}
                     <span className={`font-semibold ${
                       state.error 
@@ -1116,8 +1116,10 @@ export function ClaimFlow() {
                 <Button
                   variant="outline"
                   onClick={() => window.location.href = "/"}
+                  className="rounded-full"
                 >
-                  Back to Home
+                  <Home className="w-4 h-4 mr-2" />
+                  Home
                 </Button>
               </div>
             </CardContent>

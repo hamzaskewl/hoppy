@@ -4,7 +4,7 @@ import { useState, useMemo, useEffect, useCallback } from "react";
 import { QRCodeSVG } from "qrcode.react";
 import Image from "next/image";
 import { motion } from "framer-motion";
-import { Copy, Check, Wallet, ArrowRight, Lock, Info, AlertTriangle, Eye, EyeOff, Save, History, Trash2, ExternalLink, ChevronDown, Settings2 } from "lucide-react";
+import { Copy, Check, Wallet, ArrowRight, Lock, Info, AlertTriangle, Eye, EyeOff, Save, History, Trash2, ExternalLink, ChevronDown, Settings2, QrCode, Download } from "lucide-react";
 import { usePrivy } from "@privy-io/react-auth";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -188,6 +188,7 @@ export function CreateLinkForm() {
   const [depositProgress, setDepositProgress] = useState<string>("");
   const [savedLinks, setSavedLinks] = useState<SavedLink[]>([]);
   const [showHistory, setShowHistory] = useState(false);
+  const [showQrCode, setShowQrCode] = useState(false);
   const [showTokenDropdown, setShowTokenDropdown] = useState(false);
   const [failedDepositRecovery, setFailedDepositRecovery] = useState<FailedDepositRecovery | null>(null);
   const [isReclaiming, setIsReclaiming] = useState(false);
@@ -795,7 +796,7 @@ export function CreateLinkForm() {
           <div className="space-y-4">
             <div className="p-4 rounded-xl bg-hop-100 dark:bg-hop-900/30 border-2 border-hop-400/50">
               <div className="flex items-start gap-3">
-                <Image src="/bunnypriv.png" alt="Privacy" width={24} height={24} className="w-6 h-6 mt-0.5" />
+                <Image src="/bunnypriv.png" alt="Privacy" width={28} height={28} className="w-7 h-7 mt-0.5" />
                 <div>
                   <p className="text-sm font-medium text-hop-700 dark:text-hop-300">Double Hop Privacy</p>
                   <p className="text-xs text-muted-foreground mt-1">
@@ -1185,7 +1186,7 @@ export function CreateLinkForm() {
                     (selectedToken !== "SOL" && senderPrivacy === "private" && relayerStatus !== null && !relayerStatus.available)
                   }
                 >
-                  <Image src="/bunnypriv.png" alt="" width={18} height={18} className="w-[18px] h-[18px] mr-2" />
+                  <Image src="/bunnypriv.png" alt="" width={22} height={22} className="w-[22px] h-[22px] mr-2" />
                   {selectedToken === "SOL" ? (
                     <>Create · {lamportsToSol(costBreakdown?.senderPays || 0).toFixed(4)} SOL</>
                   ) : (
@@ -1263,23 +1264,25 @@ export function CreateLinkForm() {
               </p>
             </div>
 
-            {/* QR Code with Logo (Original) */}
-            <div className="flex justify-center">
-              <div className="p-4 bg-white rounded-2xl border-2 border-border">
-                <QRCodeSVG
-                  value={claimUrl}
-                  size={180}
-                  level="H"
-                  includeMargin={false}
-                  imageSettings={{
-                    src: "/hoppy-logo.png",
-                    x: undefined,
-                    y: undefined,
-                    height: 52,
-                    width: 52,
-                    excavate: true,
-                  }}
-                />
+            {/* Claim URL - Priority */}
+            <div className="space-y-2">
+              <label className="text-sm text-muted-foreground font-medium">Claim Link</label>
+              <div className="flex items-center gap-2 p-3 rounded-xl bg-card border-2 border-hop-500">
+                <code className="flex-1 text-xs font-mono truncate">
+                  {claimUrl}
+                </code>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={() => handleCopy(claimUrl)}
+                  className="h-8 w-8 flex-shrink-0"
+                >
+                  {copied ? (
+                    <Check className="h-4 w-4 text-hop-600" />
+                  ) : (
+                    <Copy className="h-4 w-4" />
+                  )}
+                </Button>
               </div>
             </div>
 
@@ -1310,26 +1313,66 @@ export function CreateLinkForm() {
               </p>
             </div>
 
-            {/* Claim URL */}
+            {/* QR Code Toggle */}
             <div className="space-y-2">
-              <label className="text-sm text-muted-foreground font-medium">Claim Link</label>
-              <div className="flex items-center gap-2 p-3 rounded-xl bg-card border-2 border-border">
-                <code className="flex-1 text-xs font-mono truncate">
-                  {claimUrl}
-                </code>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  onClick={() => handleCopy(claimUrl)}
-                  className="h-8 w-8 flex-shrink-0"
-                >
-                  {copied ? (
-                    <Check className="h-4 w-4 text-hop-600" />
-                  ) : (
-                    <Copy className="h-4 w-4" />
-                  )}
-                </Button>
-              </div>
+              <button
+                onClick={() => setShowQrCode(!showQrCode)}
+                className="flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground transition-colors w-full p-3 rounded-xl bg-card border-2 border-border hover:border-hop-400"
+              >
+                <QrCode className="w-4 h-4" />
+                <span>QR Code</span>
+                <ArrowRight className={`w-4 h-4 ml-auto transition-transform ${showQrCode ? "rotate-90" : ""}`} />
+              </button>
+              
+              {showQrCode && (
+                <div className="flex flex-col items-center gap-3 p-4 rounded-xl bg-card border-2 border-border">
+                  <div className="p-4 bg-white rounded-2xl border-2 border-border">
+                    <QRCodeSVG
+                      id="qr-code-svg"
+                      value={claimUrl}
+                      size={160}
+                      level="H"
+                      includeMargin={false}
+                      imageSettings={{
+                        src: "/hoppy-logo.png",
+                        x: undefined,
+                        y: undefined,
+                        height: 44,
+                        width: 44,
+                        excavate: true,
+                      }}
+                    />
+                  </div>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => {
+                      const svg = document.getElementById("qr-code-svg");
+                      if (svg) {
+                        const svgData = new XMLSerializer().serializeToString(svg);
+                        const canvas = document.createElement("canvas");
+                        const ctx = canvas.getContext("2d");
+                        const img = new window.Image();
+                        img.onload = () => {
+                          canvas.width = img.width;
+                          canvas.height = img.height;
+                          ctx?.drawImage(img, 0, 0);
+                          const pngUrl = canvas.toDataURL("image/png");
+                          const downloadLink = document.createElement("a");
+                          downloadLink.href = pngUrl;
+                          downloadLink.download = "hoppy-qr.png";
+                          downloadLink.click();
+                        };
+                        img.src = "data:image/svg+xml;base64," + btoa(svgData);
+                      }
+                    }}
+                    className="text-xs"
+                  >
+                    <Download className="w-3 h-3 mr-1" />
+                    Download QR
+                  </Button>
+                </div>
+              )}
             </div>
 
             {/* Transaction Hashes */}
@@ -1337,14 +1380,18 @@ export function CreateLinkForm() {
               {fundingTxHash && (
                 <div className="p-3 rounded-xl bg-card border-2 border-border">
                   <div className="flex items-center justify-between">
-                    <span className="text-xs text-muted-foreground">Ephemeral Funding</span>
-                    <button
-                      onClick={() => handleCopy(fundingTxHash)}
-                      className="flex items-center gap-1 text-xs font-mono text-hop-600 dark:text-hop-400 hover:text-hop-700 dark:hover:text-hop-300"
-                    >
-                      {shortenAddress(fundingTxHash, 6)}
-                      {copied ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
-                    </button>
+                    <span className="text-xs text-muted-foreground">TXN: Ephemeral Funding</span>
+                    <div className="flex items-center gap-2">
+                      <a
+                        href={`https://solscan.io/tx/${fundingTxHash}${process.env.NEXT_PUBLIC_SOLANA_NETWORK === "devnet" ? "?cluster=devnet" : ""}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="flex items-center gap-1 text-xs font-mono text-hop-600 dark:text-hop-400 hover:text-hop-700 dark:hover:text-hop-300"
+                      >
+                        {shortenAddress(fundingTxHash, 6)}
+                        <ExternalLink className="w-3 h-3" />
+                      </a>
+                    </div>
                   </div>
                 </div>
               )}
@@ -1352,14 +1399,18 @@ export function CreateLinkForm() {
               {depositTxHash && (
                 <div className="p-3 rounded-xl bg-card border-2 border-border">
                   <div className="flex items-center justify-between">
-                    <span className="text-xs text-muted-foreground">Privacy Cash Deposit</span>
-                    <button
-                      onClick={() => handleCopy(depositTxHash)}
-                      className="flex items-center gap-1 text-xs font-mono text-hop-600 dark:text-hop-400 hover:text-hop-700 dark:hover:text-hop-300"
-                    >
-                      {shortenAddress(depositTxHash, 6)}
-                      {copied ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
-                    </button>
+                    <span className="text-xs text-muted-foreground">TXN: Pool Deposit</span>
+                    <div className="flex items-center gap-2">
+                      <a
+                        href={`https://solscan.io/tx/${depositTxHash}${process.env.NEXT_PUBLIC_SOLANA_NETWORK === "devnet" ? "?cluster=devnet" : ""}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="flex items-center gap-1 text-xs font-mono text-hop-600 dark:text-hop-400 hover:text-hop-700 dark:hover:text-hop-300"
+                      >
+                        {shortenAddress(depositTxHash, 6)}
+                        <ExternalLink className="w-3 h-3" />
+                      </a>
+                    </div>
                   </div>
                 </div>
               )}
@@ -1407,37 +1458,62 @@ export function CreateLinkForm() {
             
             {showHistory && (
               <div className="mt-4 space-y-2 max-h-64 overflow-y-auto">
-                {savedLinks.map((link) => (
+                {/* Sort: unclaimed/active first, then by date */}
+                {[...savedLinks]
+                  .sort((a, b) => {
+                    // Active/unknown first
+                    if (a.status !== "claimed" && b.status === "claimed") return -1;
+                    if (a.status === "claimed" && b.status !== "claimed") return 1;
+                    // Then by date (newest first)
+                    return b.createdAt - a.createdAt;
+                  })
+                  .map((link) => (
                   <div
                     key={link.id}
-                    className="p-3 rounded-xl bg-card border-2 border-border"
+                    className={`p-3 rounded-xl bg-card border-2 ${
+                      link.status === "claimed" 
+                        ? "border-gray-300 dark:border-gray-600 opacity-60" 
+                        : "border-hop-400"
+                    }`}
                   >
                     <div className="flex items-center justify-between mb-2">
                       <span className="text-sm font-medium">
                         {lamportsToSol(link.amount).toFixed(4)} SOL
                       </span>
-                      <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
+                      <span className={`text-xs px-2 py-0.5 rounded-full font-medium flex items-center gap-1 ${
                         link.status === "active" 
                           ? "bg-hop-200 dark:bg-hop-500/20 text-hop-700 dark:text-hop-400"
                           : link.status === "claimed"
                           ? "bg-gray-200 dark:bg-gray-500/20 text-gray-600 dark:text-gray-400"
                           : "bg-honey-100 dark:bg-yellow-500/20 text-honey-700 dark:text-yellow-400"
                       }`}>
-                        {link.status}
+                        {link.status === "claimed" && <Check className="w-3 h-3" />}
+                        {link.status === "claimed" ? "Claimed" : link.status === "active" ? "Unclaimed" : "Unknown"}
                       </span>
                     </div>
-                    <div className="flex items-center gap-2">
-                      <code className="flex-1 text-xs font-mono truncate text-muted-foreground">
+                    {/* Claim Link - Priority */}
+                    <div className="flex items-center gap-2 mb-2">
+                      <code className="flex-1 text-xs font-mono truncate text-foreground bg-muted/50 px-2 py-1 rounded">
                         {link.claimUrl}
                       </code>
                       <Button
                         variant="ghost"
                         size="icon"
                         onClick={() => handleCopy(link.claimUrl)}
-                        className="h-6 w-6 flex-shrink-0"
+                        className="h-7 w-7 flex-shrink-0"
+                        title="Copy link"
                       >
                         <Copy className="h-3 w-3" />
                       </Button>
+                      <a
+                        href={link.claimUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="h-7 w-7 flex items-center justify-center text-muted-foreground hover:text-foreground"
+                        title="Open link"
+                      >
+                        <ExternalLink className="h-3 w-3" />
+                      </a>
                       <Button
                         variant="ghost"
                         size="icon"
@@ -1449,18 +1525,19 @@ export function CreateLinkForm() {
                             setSavedLinks(updated);
                           }
                         }}
-                        className="h-6 w-6 flex-shrink-0 text-red-600 dark:text-red-400 hover:text-red-700 dark:hover:text-red-300"
+                        className="h-7 w-7 flex-shrink-0 text-red-600 dark:text-red-400 hover:text-red-700 dark:hover:text-red-300"
+                        title="Delete"
                       >
                         <Trash2 className="h-3 w-3" />
                       </Button>
                     </div>
-                    <div className="flex items-center justify-between mt-2 text-xs text-muted-foreground">
+                    <div className="flex items-center justify-between text-xs text-muted-foreground">
                       <span>{new Date(link.createdAt).toLocaleDateString()}</span>
                       <span className={link.senderPrivacy === "private" 
                         ? "text-hop-600 dark:text-hop-400" 
                         : "text-honey-600 dark:text-yellow-400"
                       }>
-                        {link.senderPrivacy === "private" ? "Private" : "Basic"}
+                        {link.senderPrivacy === "private" ? "Private Send" : "Basic Send"}
                       </span>
                     </div>
                   </div>

@@ -100,7 +100,7 @@ export default function CardPage() {
                     : "hover:bg-secondary"
                 )}
               >
-                <Image src="/bunnypriv.png" alt="Private" width={18} height={18} className="w-[18px] h-[18px]" />
+                <Image src="/bunnypriv.png" alt="Private" width={22} height={22} className="w-[22px] h-[22px]" />
                 Private (Gift Link)
               </button>
               <button
