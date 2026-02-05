@@ -584,12 +584,12 @@ export function ClaimFlow() {
             <CardContent className="py-6">
               {/* Header */}
               <div className="flex justify-center mb-4">
-                <div className="w-16 h-16 rounded-full overflow-hidden">
+                <div className="w-24 h-24">
                   <Image 
                     src="/bunnypriv.png" 
                     alt="Privacy" 
-                    width={64} 
-                    height={64}
+                    width={96} 
+                    height={96}
                     className="w-full h-full object-cover"
                   />
                 </div>
@@ -675,7 +675,7 @@ export function ClaimFlow() {
                         <div className="flex items-center gap-2 mb-1">
                           {level === "quick" && <Eye className={`w-4 h-4 ${isSelected ? "text-yellow-600" : "text-yellow-500"}`} />}
                           {level === "private" && (
-                            <Image src="/bunnypriv.png" alt="Private" width={22} height={22} className="w-[22px] h-[22px]" />
+                            <Image src="/bunnypriv.png" alt="Private" width={28} height={28} className="w-7 h-7" />
                           )}
                           <span className={`text-sm font-semibold ${isSelected && level === "private" ? "text-hop-700 dark:text-hop-300" : ""}`}>
                             {info.name}

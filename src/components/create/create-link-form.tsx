@@ -1186,7 +1186,7 @@ export function CreateLinkForm() {
                     (selectedToken !== "SOL" && senderPrivacy === "private" && relayerStatus !== null && !relayerStatus.available)
                   }
                 >
-                  <Image src="/bunnypriv.png" alt="" width={22} height={22} className="w-[22px] h-[22px] mr-2" />
+                  <Image src="/bunnypriv.png" alt="" width={28} height={28} className="w-7 h-7 mr-2" />
                   {selectedToken === "SOL" ? (
                     <>Create · {lamportsToSol(costBreakdown?.senderPays || 0).toFixed(4)} SOL</>
                   ) : (
