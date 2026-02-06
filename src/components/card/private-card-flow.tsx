@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { usePrivy } from "@privy-io/react-auth";
+import { useWallets, useSignAndSendTransaction } from "@privy-io/react-auth/solana";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   CreditCard,
@@ -44,6 +45,9 @@ interface OrderData {
 
 export function PrivateCardFlow({ disabled = false }: { disabled?: boolean }) {
   const { authenticated, login, user } = usePrivy();
+  // Privy Solana wallet hooks for embedded wallet support
+  const { wallets: privyWallets } = useWallets();
+  const { signAndSendTransaction: privySignAndSend } = useSignAndSendTransaction();
 
   // Form state
   const [amount, setAmount] = useState<number>(50);
@@ -135,10 +139,26 @@ export function PrivateCardFlow({ disabled = false }: { disabled?: boolean }) {
       
       const rpcUrl = process.env.NEXT_PUBLIC_SOLANA_RPC_URL || "https://api.devnet.solana.com";
       
-      // Get the Solana provider from Privy
-      const solanaProvider = await (window as any).solana;
-      if (!solanaProvider) {
-        throw new Error("Solana wallet not found. Please use Phantom or similar.");
+      // Check for Privy embedded wallet first, then fall back to browser extensions
+      const privyWallet = privyWallets?.find(
+        (w) => w.address?.toLowerCase() === walletAddress.toLowerCase()
+      );
+      const isPrivyEmbeddedWallet = !!privyWallet;
+      
+      // Get browser extension provider as fallback
+      let solanaProvider: any = null;
+      if (!isPrivyEmbeddedWallet && typeof window !== "undefined") {
+        if ((window as any).phantom?.solana?.isPhantom) {
+          solanaProvider = (window as any).phantom.solana;
+        } else if ((window as any).solflare?.isSolflare) {
+          solanaProvider = (window as any).solflare;
+        } else if ((window as any).solana) {
+          solanaProvider = (window as any).solana;
+        }
+      }
+      
+      if (!isPrivyEmbeddedWallet && !solanaProvider) {
+        throw new Error("Solana wallet not found. Please connect a wallet or install Phantom.");
       }
 
       // Create ephemeral keypair for the deposit
@@ -174,9 +194,26 @@ export function PrivateCardFlow({ disabled = false }: { disabled?: boolean }) {
       fundingTx.recentBlockhash = blockhash;
       fundingTx.feePayer = new PublicKey(walletAddress);
       
-      // Sign with user's wallet
-      const signedFundingTx = await solanaProvider.signTransaction(fundingTx);
-      const fundingTxHash = await connection.sendRawTransaction(signedFundingTx.serialize());
+      // Sign and send with user's wallet (Privy embedded or browser extension)
+      let fundingTxHash: string;
+      
+      if (isPrivyEmbeddedWallet && privyWallet) {
+        // Use Privy embedded wallet
+        const bs58 = (await import("bs58")).default;
+        const serializedTx = fundingTx.serialize({ requireAllSignatures: false });
+        const result = await privySignAndSend({
+          transaction: new Uint8Array(serializedTx),
+          wallet: privyWallet,
+        });
+        fundingTxHash = bs58.encode(result.signature);
+      } else if (solanaProvider) {
+        // Use browser extension wallet
+        const signedFundingTx = await solanaProvider.signTransaction(fundingTx);
+        fundingTxHash = await connection.sendRawTransaction(signedFundingTx.serialize());
+      } else {
+        throw new Error("No wallet available for signing");
+      }
+      
       await connection.confirmTransaction(fundingTxHash, "confirmed");
 
       // Wait for balance

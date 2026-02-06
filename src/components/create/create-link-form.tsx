@@ -6,6 +6,7 @@ import Image from "next/image";
 import { motion } from "framer-motion";
 import { Copy, Check, Wallet, ArrowRight, Lock, Info, AlertTriangle, Eye, EyeOff, Save, History, Trash2, ExternalLink, ChevronDown, Settings2, QrCode, Download, Undo2, X, RefreshCw } from "lucide-react";
 import { usePrivy } from "@privy-io/react-auth";
+import { useWallets, useSignAndSendTransaction, useFundWallet } from "@privy-io/react-auth/solana";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -111,7 +112,22 @@ async function encryptData(data: string, walletAddress: string): Promise<string>
 async function decryptData(encryptedBase64: string, walletAddress: string): Promise<string | null> {
   try {
     const key = await deriveKey(walletAddress);
-    const combined = Uint8Array.from(atob(encryptedBase64), c => c.charCodeAt(0));
+    
+    let combined: Uint8Array;
+    try {
+      combined = Uint8Array.from(atob(encryptedBase64), c => c.charCodeAt(0));
+    } catch {
+      // Invalid base64 - corrupted data, clear it
+      console.warn("[Storage] Corrupted data in localStorage, clearing");
+      localStorage.removeItem(STORAGE_KEY);
+      return null;
+    }
+    
+    // Need at least 12 bytes for IV + some ciphertext
+    if (combined.length <= 12) {
+      localStorage.removeItem(STORAGE_KEY);
+      return null;
+    }
     
     const iv = combined.slice(0, 12);
     const encrypted = combined.slice(12);
@@ -123,8 +139,11 @@ async function decryptData(encryptedBase64: string, walletAddress: string): Prom
     );
     
     return new TextDecoder().decode(decrypted);
-  } catch (error) {
-    console.error("[Storage] Decryption failed:", error);
+  } catch {
+    // Decryption failed - likely encrypted with a different wallet address.
+    // This is normal when switching wallets. Don't clear storage since
+    // the data may belong to another wallet.
+    console.warn("[Storage] Decryption failed (wallet mismatch or stale data)");
     return null;
   }
 }
@@ -173,7 +192,14 @@ async function deleteLink(linkId: string, walletAddress: string): Promise<void> 
 
 export function CreateLinkForm() {
   const { login, logout, authenticated, ready, user } = usePrivy();
+  // Privy Solana wallet hooks for embedded wallet support
+  const { wallets: privyWallets } = useWallets();
+  const { signAndSendTransaction: privySignAndSend } = useSignAndSendTransaction();
+  const { fundWallet } = useFundWallet();
   const [step, setStep] = useState<Step>("connect");
+  // Wallet balance tracking for embedded wallets
+  const [walletBalance, setWalletBalance] = useState<number | null>(null);
+  const [isLoadingBalance, setIsLoadingBalance] = useState(false);
   const [amount, setAmount] = useState<string>("0.1");
   const [currency, setCurrency] = useState<"SOL" | "USD">("SOL");
   const [selectedToken, setSelectedToken] = useState<SupportedToken>("SOL");
@@ -344,6 +370,57 @@ export function CreateLinkForm() {
     return () => { cancelled = true; };
   }, [step]);
 
+  // Check if user has a Privy embedded wallet
+  const isEmbeddedWallet = useMemo(() => {
+    const addr = getSolanaAddress();
+    if (!addr || !privyWallets?.length) return false;
+    return privyWallets.some(
+      (w) => w.address?.toLowerCase() === addr.toLowerCase()
+    );
+  }, [getSolanaAddress, privyWallets]);
+
+  // Fetch wallet balance when on amount step
+  useEffect(() => {
+    if (step !== "amount" && step !== "connect") return;
+    const addr = getSolanaAddress();
+    if (!addr || !authenticated) return;
+
+    let cancelled = false;
+    const fetchBalance = async () => {
+      setIsLoadingBalance(true);
+      try {
+        const rpcUrl = process.env.NEXT_PUBLIC_SOLANA_RPC_URL || "https://api.mainnet-beta.solana.com";
+        const connection = new Connection(rpcUrl, "confirmed");
+        const balance = await connection.getBalance(new PublicKey(addr));
+        if (!cancelled) setWalletBalance(balance);
+      } catch {
+        if (!cancelled) setWalletBalance(null);
+      } finally {
+        if (!cancelled) setIsLoadingBalance(false);
+      }
+    };
+    fetchBalance();
+    return () => { cancelled = true; };
+  }, [step, authenticated, getSolanaAddress]);
+
+  // Helper: handle funding the embedded wallet
+  const handleFundWallet = useCallback(async () => {
+    const addr = getSolanaAddress();
+    if (!addr) return;
+    try {
+      await fundWallet({
+        address: addr,
+      });
+      // Refresh balance after funding
+      const rpcUrl = process.env.NEXT_PUBLIC_SOLANA_RPC_URL || "https://api.mainnet-beta.solana.com";
+      const connection = new Connection(rpcUrl, "confirmed");
+      const balance = await connection.getBalance(new PublicKey(addr));
+      setWalletBalance(balance);
+    } catch {
+      // User cancelled funding
+    }
+  }, [getSolanaAddress, fundWallet]);
+
   // Check relayer status when selecting SPL token + private mode
   useEffect(() => {
     if (selectedToken !== "SOL" && senderPrivacy === "private" && step === "amount") {
@@ -476,6 +553,19 @@ export function CreateLinkForm() {
       return;
     }
 
+    // Pre-check: if embedded wallet, verify balance before attempting tx
+    if (isEmbeddedWallet && walletBalance !== null) {
+      const neededLamports = selectedToken === "SOL" 
+        ? costBreakdown.senderPays 
+        : (costBreakdown.senderPays + 5_000_000); // SPL needs SOL for gas too
+      if (walletBalance < neededLamports) {
+        setError(
+          `Insufficient balance. You have ${lamportsToSol(walletBalance).toFixed(4)} SOL but need ~${lamportsToSol(neededLamports).toFixed(4)} SOL. Use the "Add Funds" button below to deposit.`
+        );
+        return;
+      }
+    }
+
     setError(null);
     setIsDepositing(true);
     setStep("depositing");
@@ -488,11 +578,17 @@ export function CreateLinkForm() {
         throw new Error("No Solana wallet connected");
       }
 
-      // Get Solana wallet provider (Phantom, Solflare, etc.)
-      // These wallets inject their provider into window
+      // Check for Privy embedded wallet first, then fall back to browser extensions
+      // This ensures Gmail/email users with embedded wallets can also deposit
+      const privyWallet = privyWallets?.find(
+        (w) => w.address?.toLowerCase() === solanaAddress.toLowerCase()
+      );
+      const isPrivyEmbeddedWallet = !!privyWallet;
+      
+      // Get browser extension provider (Phantom, Solflare, etc.) as fallback
       let solanaProvider: any = null;
       
-      if (typeof window !== "undefined") {
+      if (!isPrivyEmbeddedWallet && typeof window !== "undefined") {
         // Check for Phantom
         if ((window as any).phantom?.solana?.isPhantom) {
           solanaProvider = (window as any).phantom.solana;
@@ -507,15 +603,17 @@ export function CreateLinkForm() {
         }
       }
       
-      if (!solanaProvider) {
-        throw new Error("No Solana wallet found. Please install Phantom or another Solana wallet.");
+      // Must have either Privy embedded wallet or browser extension
+      if (!isPrivyEmbeddedWallet && !solanaProvider) {
+        throw new Error("No Solana wallet found. Please connect a wallet or install Phantom.");
       }
       
-      // Verify the connected address matches
-      if (solanaProvider.publicKey?.toBase58() !== solanaAddress) {
-        // Try to connect if not connected
-        if (!solanaProvider.isConnected) {
-          await solanaProvider.connect();
+      // For browser extension wallets, verify connection
+      if (solanaProvider && !isPrivyEmbeddedWallet) {
+        if (solanaProvider.publicKey?.toBase58() !== solanaAddress) {
+          if (!solanaProvider.isConnected) {
+            await solanaProvider.connect();
+          }
         }
       }
 
@@ -605,19 +703,34 @@ export function CreateLinkForm() {
 
       setDepositProgress("Please sign the transaction in your wallet...");
       
-      // 3. Sign and send transaction via Solana wallet (Phantom, etc.)
+      // 3. Sign and send transaction
       let fundingTxHash: string;
       
-      if (typeof solanaProvider.signAndSendTransaction === "function") {
-        // Phantom and most wallets support this
-        const result = await solanaProvider.signAndSendTransaction(fundingTx);
-        fundingTxHash = result.signature;
-      } else if (typeof solanaProvider.signTransaction === "function") {
-        // Fallback: sign then send separately
-        const signedTx = await solanaProvider.signTransaction(fundingTx);
-        fundingTxHash = await connection.sendRawTransaction(signedTx.serialize());
+      if (isPrivyEmbeddedWallet && privyWallet) {
+        // Use Privy's embedded wallet signing
+        // Serialize transaction to Uint8Array for Privy
+        const serializedTx = fundingTx.serialize({ requireAllSignatures: false });
+        const result = await privySignAndSend({
+          transaction: new Uint8Array(serializedTx),
+          wallet: privyWallet,
+        });
+        // Convert signature Uint8Array to base58 string
+        fundingTxHash = bs58.encode(result.signature);
+      } else if (solanaProvider) {
+        // Use browser extension wallet (Phantom, Solflare, etc.)
+        if (typeof solanaProvider.signAndSendTransaction === "function") {
+          // Phantom and most wallets support this
+          const result = await solanaProvider.signAndSendTransaction(fundingTx);
+          fundingTxHash = result.signature;
+        } else if (typeof solanaProvider.signTransaction === "function") {
+          // Fallback: sign then send separately
+          const signedTx = await solanaProvider.signTransaction(fundingTx);
+          fundingTxHash = await connection.sendRawTransaction(signedTx.serialize());
+        } else {
+          throw new Error("Wallet does not support transaction signing");
+        }
       } else {
-        throw new Error("Wallet does not support transaction signing");
+        throw new Error("No wallet available for signing");
       }
       
       
@@ -1045,11 +1158,40 @@ export function CreateLinkForm() {
               getSolanaAddress() ? (
                 <div className="space-y-3">
                   <div className="p-3 rounded-xl bg-card border-2 border-border">
-                    <p className="text-xs text-muted-foreground mb-1">Connected Wallet (Solana)</p>
-                    <p className="font-mono text-sm font-medium">
-                      {shortenAddress(getSolanaAddress()!, 6)}
-                    </p>
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <p className="text-xs text-muted-foreground mb-1">
+                          {isEmbeddedWallet ? "Hoppy Wallet (Solana)" : "Connected Wallet (Solana)"}
+                        </p>
+                        <p className="font-mono text-sm font-medium">
+                          {shortenAddress(getSolanaAddress()!, 6)}
+                        </p>
+                      </div>
+                      {walletBalance !== null && (
+                        <div className="text-right">
+                          <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Balance</p>
+                          <p className="text-sm font-semibold font-mono">{lamportsToSol(walletBalance).toFixed(4)} SOL</p>
+                        </div>
+                      )}
+                    </div>
                   </div>
+                  {isEmbeddedWallet && walletBalance !== null && walletBalance < 10_000_000 && (
+                    <div className="p-3 rounded-xl bg-amber-50 dark:bg-amber-900/20 border-2 border-amber-300 dark:border-amber-700">
+                      <p className="text-xs text-amber-700 dark:text-amber-400 font-medium mb-2">
+                        Your wallet needs funds to create payment links.
+                      </p>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={handleFundWallet}
+                        className="w-full text-xs border-amber-400 text-amber-700 hover:bg-amber-100"
+                      >
+                        <Wallet className="w-3 h-3 mr-1.5" />
+                        Add Funds
+                      </Button>
+                    </div>
+                  )}
                   <Button onClick={handleContinue} className="w-full" size="lg">
                     Continue
                     <ArrowRight className="w-4 h-4 ml-2" />
@@ -1408,6 +1550,35 @@ export function CreateLinkForm() {
                   </div>
                 )}
 
+                {/* Embedded wallet balance + fund button */}
+                {isEmbeddedWallet && (
+                  <div className="p-3 rounded-xl bg-card border-2 border-border">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <p className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Wallet Balance</p>
+                        <p className="text-sm font-semibold font-mono">
+                          {isLoadingBalance ? "..." : walletBalance !== null ? `${lamportsToSol(walletBalance).toFixed(4)} SOL` : "---"}
+                        </p>
+                      </div>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={handleFundWallet}
+                        className="text-xs h-8 px-3 border-hop-400 text-hop-700 hover:bg-hop-100"
+                      >
+                        <Wallet className="w-3 h-3 mr-1.5" />
+                        Add Funds
+                      </Button>
+                    </div>
+                    {walletBalance !== null && costBreakdown && walletBalance < costBreakdown.senderPays && (
+                      <p className="text-[11px] text-amber-600 dark:text-amber-400 mt-2 font-medium">
+                        You need ~{lamportsToSol(costBreakdown.senderPays).toFixed(4)} SOL. Add funds to continue.
+                      </p>
+                    )}
+                  </div>
+                )}
+
                 {/* Create Button - under Recipient gets */}
                 <Button
                   onClick={handleDeposit}
@@ -1417,7 +1588,8 @@ export function CreateLinkForm() {
                   disabled={
                     !costBreakdown || 
                     costBreakdown.senderPays <= 0 ||
-                    (selectedToken !== "SOL" && senderPrivacy === "private" && relayerStatus !== null && !relayerStatus.available)
+                    (selectedToken !== "SOL" && senderPrivacy === "private" && relayerStatus !== null && !relayerStatus.available) ||
+                    (isEmbeddedWallet && walletBalance !== null && costBreakdown && walletBalance < costBreakdown.senderPays)
                   }
                 >
                   <Image src="/bunnypriv.png" alt="" width={28} height={28} className="w-7 h-7 mr-2" />
@@ -1433,6 +1605,18 @@ export function CreateLinkForm() {
             {error && (
               <div className="p-3 rounded-lg bg-red-100 dark:bg-red-900/20 border-2 border-red-400 dark:border-red-700">
                 <p className="text-sm text-red-700 dark:text-red-400 font-medium">{error}</p>
+                {isEmbeddedWallet && error.includes("nsufficient") && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={handleFundWallet}
+                    className="mt-2 text-xs border-red-400 text-red-700 hover:bg-red-50"
+                  >
+                    <Wallet className="w-3 h-3 mr-1.5" />
+                    Add Funds to Wallet
+                  </Button>
+                )}
               </div>
             )}
           </div>
