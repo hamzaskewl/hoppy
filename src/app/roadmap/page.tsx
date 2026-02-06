@@ -257,10 +257,11 @@ export default function RoadmapPage() {
                   description="Redeem to Amazon, Uber, DoorDash via Reloadly"
                   index={3}
                 />
-                <RoadmapCard 
-                  title="Claim Expiration" 
-                  description="Auto-expire unclaimed links, refund sender"
+                <CompletedCard 
+                  title="Cancel/Recall Payments" 
+                  description="Get back unclaimed funds before they're claimed"
                   index={4}
+                  progress="2/4"
                 />
               </div>
             </div>
@@ -270,18 +271,18 @@ export default function RoadmapPage() {
               <ColumnHeader icon={Clock} title="Up Next" variant="upcoming" />
               <div className="space-y-4">
                 <RoadmapCard 
-                  title="Split Claims" 
-                  description="One deposit → multiple claim links"
+                  title="Claim Expiration" 
+                  description="Auto-expire unclaimed links, refund sender"
                   index={0}
                 />
                 <RoadmapCard 
-                  title="Recall Payments" 
-                  description="Cancel unclaimed payments, get your funds back"
+                  title="Split Claims" 
+                  description="One deposit → multiple claim links"
                   index={1}
                 />
                 <RoadmapCard 
                   title="Viewing Keys" 
-                  description="Optional compliance without breaking privacy"
+                  description="Optional compliance - share read-only access for audits"
                   index={2}
                 />
                 <RoadmapCard 

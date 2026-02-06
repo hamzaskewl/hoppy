@@ -4,7 +4,7 @@ import { useState, useMemo, useEffect, useCallback } from "react";
 import { QRCodeSVG } from "qrcode.react";
 import Image from "next/image";
 import { motion } from "framer-motion";
-import { Copy, Check, Wallet, ArrowRight, Lock, Info, AlertTriangle, Eye, EyeOff, Save, History, Trash2, ExternalLink, ChevronDown, Settings2, QrCode, Download } from "lucide-react";
+import { Copy, Check, Wallet, ArrowRight, Lock, Info, AlertTriangle, Eye, EyeOff, Save, History, Trash2, ExternalLink, ChevronDown, Settings2, QrCode, Download, Undo2, X, RefreshCw } from "lucide-react";
 import { usePrivy } from "@privy-io/react-auth";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -12,6 +12,8 @@ import { Input } from "@/components/ui/input";
 import { 
   createDoubleHopClaimUrl,
   generateCompositeSecret,
+  decodeCompositeSecret,
+  extractDoubleHopNoteFromUrl,
   calculateSenderCost,
   calculateRecipientReceives,
   calculateSPLRecipientReceives,
@@ -55,7 +57,7 @@ interface SavedLink {
   claimUrl: string;
   amount: number; // lamports
   createdAt: number;
-  status: "active" | "claimed" | "unknown";
+  status: "active" | "claimed" | "recalled" | "dust" | "unknown";
   senderPrivacy: SenderPrivacy;
   recipientAddress?: string;
 }
@@ -193,6 +195,12 @@ export function CreateLinkForm() {
   const [failedDepositRecovery, setFailedDepositRecovery] = useState<FailedDepositRecovery | null>(null);
   const [isReclaiming, setIsReclaiming] = useState(false);
   const [reclaimSuccess, setReclaimSuccess] = useState<string | null>(null);
+  // Recall modal state
+  const [recallModalLink, setRecallModalLink] = useState<SavedLink | null>(null);
+  const [recallDestination, setRecallDestination] = useState<"sender" | "custom">("sender");
+  const [recallCustomAddress, setRecallCustomAddress] = useState("");
+  const [isRecalling, setIsRecalling] = useState(false);
+  const [recallError, setRecallError] = useState<string | null>(null);
   const [relayerStatus, setRelayerStatus] = useState<{
     available: boolean;
     warning?: boolean;
@@ -219,6 +227,91 @@ export function CreateLinkForm() {
     
     return null;
   }, [user]);
+
+  // Minimum balance needed to perform a transfer (tx fee + rent buffer)
+  const MIN_WITHDRAWABLE_BALANCE = 10000; // 0.00001 SOL - absolute minimum for tx fees
+  const DUST_THRESHOLD = 15000000; // 0.015 SOL - below this is dust (fees + minimum practical amount)
+  
+  // Check on-chain status of a single link
+  const checkLinkStatus = useCallback(async (link: SavedLink): Promise<SavedLink> => {
+    // If already marked as claimed or recalled, don't re-check
+    if (link.status === "claimed" || link.status === "recalled" || link.status === "dust") {
+      return link;
+    }
+    
+    // First check: if the saved amount is below dust threshold, mark as dust immediately
+    // This handles old link formats that can't be parsed
+    if (link.amount < DUST_THRESHOLD) {
+      return { ...link, status: "dust" };
+    }
+    
+    try {
+      const note = extractDoubleHopNoteFromUrl(link.claimUrl);
+      if (!note) {
+        // Can't parse link - if amount is small, mark as dust
+        if (link.amount < DUST_THRESHOLD) {
+          return { ...link, status: "dust" };
+        }
+        return link;
+      }
+      
+      const compositeSecret = decodeCompositeSecret(note.secret);
+      if (!compositeSecret) {
+        if (link.amount < DUST_THRESHOLD) {
+          return { ...link, status: "dust" };
+        }
+        return link;
+      }
+      
+      const rpcUrl = process.env.NEXT_PUBLIC_SOLANA_RPC_URL || "https://api.devnet.solana.com";
+      const connection = new Connection(rpcUrl, "confirmed");
+      
+      const ephemeralPubkey = compositeSecret.ephemeralKeypair.publicKey;
+      const balance = await connection.getBalance(ephemeralPubkey);
+      
+      // If balance is basically empty, it's been claimed
+      if (balance < MIN_WITHDRAWABLE_BALANCE) {
+        return { ...link, status: "claimed" };
+      }
+      
+      // If balance is too low to be worth withdrawing (dust)
+      if (balance < DUST_THRESHOLD) {
+        return { ...link, status: "dust" };
+      }
+      
+      return { ...link, status: "active" };
+    } catch {
+      // If we can't check, mark small amounts as dust
+      if (link.amount < DUST_THRESHOLD) {
+        return { ...link, status: "dust" };
+      }
+      return link;
+    }
+  }, []);
+
+  // Refresh status of all saved links
+  const [isRefreshingStatus, setIsRefreshingStatus] = useState(false);
+  const refreshAllLinkStatuses = useCallback(async () => {
+    const address = getSolanaAddress();
+    if (!address || savedLinks.length === 0) return;
+    
+    setIsRefreshingStatus(true);
+    try {
+      const updatedLinks = await Promise.all(
+        savedLinks.map(link => checkLinkStatus(link))
+      );
+      
+      setSavedLinks(updatedLinks);
+      
+      // Save updated statuses to localStorage
+      const encrypted = await encryptData(JSON.stringify(updatedLinks), address);
+      localStorage.setItem(STORAGE_KEY, encrypted);
+    } catch (error) {
+      console.error("Failed to refresh link statuses:", error);
+    } finally {
+      setIsRefreshingStatus(false);
+    }
+  }, [getSolanaAddress, savedLinks, checkLinkStatus]);
 
   // Load saved links on mount
   useEffect(() => {
@@ -758,6 +851,147 @@ export function CreateLinkForm() {
       setError(e instanceof Error ? e.message : "Reclaim failed");
     } finally {
       setIsReclaiming(false);
+    }
+  };
+
+  // Recall unclaimed payment - let sender get funds back
+  const handleRecall = async () => {
+    const senderWallet = getSolanaAddress();
+    if (!recallModalLink || !senderWallet) return;
+    setIsRecalling(true);
+    setRecallError(null);
+    
+    try {
+      const rpcUrl = process.env.NEXT_PUBLIC_SOLANA_RPC_URL || "https://api.devnet.solana.com";
+      const connection = new Connection(rpcUrl, "confirmed");
+      
+      // Parse the claim URL to get the ephemeral keypair
+      // The URL contains a serialized DoubleHopNote
+      const note = extractDoubleHopNoteFromUrl(recallModalLink.claimUrl);
+      if (!note) {
+        throw new Error("Invalid link format - could not parse note");
+      }
+      
+      // Decode the composite secret to get the ephemeral keypair
+      const compositeSecret = decodeCompositeSecret(note.secret);
+      if (!compositeSecret) {
+        throw new Error("Invalid link format - could not decode secret");
+      }
+      
+      const ephemeralKeypair = compositeSecret.ephemeralKeypair;
+      
+      // Determine destination address
+      let destinationPubkey: PublicKey;
+      if (recallDestination === "custom") {
+        if (!recallCustomAddress.trim()) {
+          throw new Error("Please enter a destination wallet address");
+        }
+        try {
+          destinationPubkey = new PublicKey(recallCustomAddress.trim());
+        } catch {
+          throw new Error("Invalid wallet address");
+        }
+      } else {
+        // Send back to sender (connected wallet)
+        destinationPubkey = new PublicKey(senderWallet);
+      }
+      
+      const tx = new Transaction();
+      let hasAnythingToRecall = false;
+      const recalledItems: string[] = [];
+      
+      // Check and recall SPL tokens (USDC, USDT)
+      for (const tokenSymbol of ["USDC", "USDT"] as SupportedToken[]) {
+        const tokenInfo = TOKEN_MINTS[tokenSymbol];
+        if (!tokenInfo.mint) continue;
+        
+        try {
+          const mintPubkey = new PublicKey(tokenInfo.mint);
+          const ephemeralAta = await getAssociatedTokenAddress(mintPubkey, ephemeralKeypair.publicKey);
+          const account = await getAccount(connection, ephemeralAta);
+          const tokenBalance = account.amount;
+          
+          if (tokenBalance > BigInt(0)) {
+            // Check if destination has ATA, create if not
+            const destAta = await getAssociatedTokenAddress(mintPubkey, destinationPubkey);
+            try {
+              await getAccount(connection, destAta);
+            } catch {
+              // Destination doesn't have ATA, create it
+              tx.add(
+                createAssociatedTokenAccountInstruction(
+                  ephemeralKeypair.publicKey, // payer
+                  destAta,
+                  destinationPubkey,
+                  mintPubkey
+                )
+              );
+            }
+            
+            // Transfer tokens
+            tx.add(
+              createTransferInstruction(
+                ephemeralAta,
+                destAta,
+                ephemeralKeypair.publicKey,
+                tokenBalance,
+                [],
+                TOKEN_PROGRAM_ID
+              )
+            );
+            
+            const displayAmount = Number(tokenBalance) / (10 ** tokenInfo.decimals);
+            recalledItems.push(`${displayAmount.toFixed(2)} ${tokenSymbol}`);
+            hasAnythingToRecall = true;
+          }
+        } catch {
+          // No token account or error, skip
+        }
+      }
+      
+      // Check and recall SOL
+      const solBalance = await connection.getBalance(ephemeralKeypair.publicKey);
+      const feeReserve = 10000; // leave for tx fees
+      const solToSend = Math.max(0, solBalance - feeReserve);
+      
+      if (solToSend > 0) {
+        tx.add(
+          SystemProgram.transfer({
+            fromPubkey: ephemeralKeypair.publicKey,
+            toPubkey: destinationPubkey,
+            lamports: solToSend,
+          })
+        );
+        recalledItems.push(`${(solToSend / 1e9).toFixed(4)} SOL`);
+        hasAnythingToRecall = true;
+      }
+      
+      if (!hasAnythingToRecall) {
+        throw new Error("No funds left in this payment link. It may have already been claimed.");
+      }
+      
+      const { blockhash } = await connection.getLatestBlockhash();
+      tx.recentBlockhash = blockhash;
+      tx.feePayer = ephemeralKeypair.publicKey;
+      tx.sign(ephemeralKeypair);
+      const sig = await connection.sendRawTransaction(tx.serialize(), { preflightCommitment: "confirmed" });
+      await connection.confirmTransaction(sig, "confirmed");
+      
+      // Update the link status to recalled
+      const updatedLink = { ...recallModalLink, status: "recalled" as const };
+      await saveLink(updatedLink, senderWallet);
+      const updatedLinks = await loadLinks(senderWallet);
+      setSavedLinks(updatedLinks);
+      
+      setReclaimSuccess(`Recalled: ${recalledItems.join(", ")} to ${recallDestination === "custom" ? recallCustomAddress.slice(0, 8) + "..." : "your wallet"}`);
+      setRecallModalLink(null);
+      setRecallCustomAddress("");
+      setRecallDestination("sender");
+      setTimeout(() => setReclaimSuccess(null), 10000);
+    } catch (e) {
+      setRecallError(e instanceof Error ? e.message : "Recall failed");
+    } finally {
+      setIsRecalling(false);
     }
   };
 
@@ -1447,23 +1681,47 @@ export function CreateLinkForm() {
         {/* Saved Links History */}
         {authenticated && savedLinks.length > 0 && step !== "depositing" && (
           <div className="mt-6 pt-6 border-t-2 border-border">
-            <button
-              onClick={() => setShowHistory(!showHistory)}
-              className="flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground transition-colors w-full"
-            >
-              <History className="w-4 h-4" />
-              <span>Your Saved Links ({savedLinks.length})</span>
-              <ArrowRight className={`w-4 h-4 ml-auto transition-transform ${showHistory ? "rotate-90" : ""}`} />
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => {
+                  const newShowHistory = !showHistory;
+                  setShowHistory(newShowHistory);
+                  // Auto-refresh when opening history
+                  if (newShowHistory && !isRefreshingStatus) {
+                    refreshAllLinkStatuses();
+                  }
+                }}
+                className="flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground transition-colors flex-1"
+              >
+                <History className="w-4 h-4" />
+                <span>Your Saved Links ({savedLinks.length})</span>
+                <ArrowRight className={`w-4 h-4 ml-auto transition-transform ${showHistory ? "rotate-90" : ""}`} />
+              </button>
+              {showHistory && (
+                <button
+                  onClick={refreshAllLinkStatuses}
+                  disabled={isRefreshingStatus}
+                  className="p-1.5 rounded-lg text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+                  title="Refresh link statuses"
+                >
+                  <RefreshCw className={`w-4 h-4 ${isRefreshingStatus ? "animate-spin" : ""}`} />
+                </button>
+              )}
+            </div>
             
             {showHistory && (
               <div className="mt-4 space-y-2 max-h-64 overflow-y-auto">
-                {/* Sort: unclaimed/active first, then by date */}
+                {/* Sort: unclaimed/active first, then dust, then claimed/recalled, then by date */}
                 {[...savedLinks]
                   .sort((a, b) => {
-                    // Active/unknown first
-                    if (a.status !== "claimed" && b.status === "claimed") return -1;
-                    if (a.status === "claimed" && b.status !== "claimed") return 1;
+                    // Priority: active > dust > claimed/recalled
+                    const getPriority = (status: string) => {
+                      if (status === "active" || status === "unknown") return 0;
+                      if (status === "dust") return 1;
+                      return 2; // claimed, recalled
+                    };
+                    const priorityDiff = getPriority(a.status) - getPriority(b.status);
+                    if (priorityDiff !== 0) return priorityDiff;
                     // Then by date (newest first)
                     return b.createdAt - a.createdAt;
                   })
@@ -1471,8 +1729,10 @@ export function CreateLinkForm() {
                   <div
                     key={link.id}
                     className={`p-3 rounded-xl bg-card border-2 ${
-                      link.status === "claimed" 
+                      link.status === "claimed" || link.status === "recalled"
                         ? "border-gray-300 dark:border-gray-600 opacity-60" 
+                        : link.status === "dust"
+                        ? "border-orange-300 dark:border-orange-600 opacity-75"
                         : "border-hop-400"
                     }`}
                   >
@@ -1485,10 +1745,20 @@ export function CreateLinkForm() {
                           ? "bg-hop-200 dark:bg-hop-500/20 text-hop-700 dark:text-hop-400"
                           : link.status === "claimed"
                           ? "bg-gray-200 dark:bg-gray-500/20 text-gray-600 dark:text-gray-400"
+                          : link.status === "recalled"
+                          ? "bg-amber-100 dark:bg-amber-500/20 text-amber-700 dark:text-amber-400"
+                          : link.status === "dust"
+                          ? "bg-orange-100 dark:bg-orange-500/20 text-orange-700 dark:text-orange-400"
                           : "bg-honey-100 dark:bg-yellow-500/20 text-honey-700 dark:text-yellow-400"
                       }`}>
                         {link.status === "claimed" && <Check className="w-3 h-3" />}
-                        {link.status === "claimed" ? "Claimed" : link.status === "active" ? "Unclaimed" : "Unknown"}
+                        {link.status === "recalled" && <Undo2 className="w-3 h-3" />}
+                        {link.status === "dust" && <AlertTriangle className="w-3 h-3" />}
+                        {link.status === "claimed" ? "Claimed" 
+                          : link.status === "recalled" ? "Recalled" 
+                          : link.status === "dust" ? "Dust" 
+                          : link.status === "active" ? "Unclaimed" 
+                          : "Unknown"}
                       </span>
                     </div>
                     {/* Claim Link - Priority */}
@@ -1514,6 +1784,21 @@ export function CreateLinkForm() {
                       >
                         <ExternalLink className="h-3 w-3" />
                       </a>
+                      {/* Recall button - only for unclaimed/active links */}
+                      {(link.status === "active" || link.status === "unknown") && (
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          onClick={() => {
+                            setRecallModalLink(link);
+                            setRecallError(null);
+                          }}
+                          className="h-7 w-7 flex-shrink-0 text-amber-600 dark:text-amber-400 hover:text-amber-700 dark:hover:text-amber-300"
+                          title="Recall payment"
+                        >
+                          <Undo2 className="h-3 w-3" />
+                        </Button>
+                      )}
                       <Button
                         variant="ghost"
                         size="icon"
@@ -1547,6 +1832,133 @@ export function CreateLinkForm() {
           </div>
         )}
       </CardContent>
+
+      {/* Recall Modal */}
+      {recallModalLink && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-card border-2 border-border rounded-2xl p-6 w-full max-w-md shadow-xl">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-lg font-bold flex items-center gap-2">
+                <Undo2 className="w-5 h-5 text-amber-500" />
+                Recall Payment
+              </h3>
+              <button
+                onClick={() => {
+                  setRecallModalLink(null);
+                  setRecallError(null);
+                  setRecallCustomAddress("");
+                  setRecallDestination("sender");
+                }}
+                className="text-muted-foreground hover:text-foreground"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="mb-4 p-3 rounded-xl bg-amber-50 dark:bg-amber-900/20 border-2 border-amber-200 dark:border-amber-800">
+              <div className="flex items-start gap-2 text-sm text-amber-800 dark:text-amber-200">
+                <AlertTriangle className="w-4 h-4 mt-0.5 flex-shrink-0" />
+                <p>
+                  This will send funds back from this unclaimed payment link. The link will no longer be claimable.
+                </p>
+              </div>
+            </div>
+
+            <div className="mb-4">
+              <p className="text-sm text-muted-foreground mb-1">Amount</p>
+              <p className="font-semibold">{lamportsToSol(recallModalLink.amount).toFixed(4)} SOL</p>
+            </div>
+
+            <div className="mb-4">
+              <p className="text-sm font-medium mb-2">Where should funds go?</p>
+              
+              <div className="space-y-2">
+                <button
+                  onClick={() => setRecallDestination("sender")}
+                  className={`w-full p-3 rounded-xl border-2 text-left transition-all ${
+                    recallDestination === "sender"
+                      ? "border-hop-500 bg-hop-50 dark:bg-hop-900/30"
+                      : "border-border hover:border-muted-foreground/50"
+                  }`}
+                >
+                  <div className="font-medium text-sm">Your Connected Wallet</div>
+                  <div className="text-xs text-muted-foreground truncate">
+                    {getSolanaAddress()?.slice(0, 8)}...{getSolanaAddress()?.slice(-8)}
+                  </div>
+                </button>
+
+                <button
+                  onClick={() => setRecallDestination("custom")}
+                  className={`w-full p-3 rounded-xl border-2 text-left transition-all ${
+                    recallDestination === "custom"
+                      ? "border-hop-500 bg-hop-50 dark:bg-hop-900/30"
+                      : "border-border hover:border-muted-foreground/50"
+                  }`}
+                >
+                  <div className="font-medium text-sm">Different Wallet</div>
+                  <div className="text-xs text-muted-foreground">
+                    Send to another wallet address
+                  </div>
+                </button>
+              </div>
+
+              {recallDestination === "custom" && (
+                <div className="mt-3">
+                  <Input
+                    type="text"
+                    placeholder="Enter Solana wallet address"
+                    value={recallCustomAddress}
+                    onChange={(e) => setRecallCustomAddress(e.target.value)}
+                    className="font-mono text-sm"
+                  />
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Use this if the sender wallet is not yours
+                  </p>
+                </div>
+              )}
+            </div>
+
+            {recallError && (
+              <div className="mb-4 p-3 rounded-xl bg-red-50 dark:bg-red-900/20 border-2 border-red-200 dark:border-red-800 text-sm text-red-700 dark:text-red-300">
+                {recallError}
+              </div>
+            )}
+
+            <div className="flex gap-3">
+              <Button
+                variant="outline"
+                onClick={() => {
+                  setRecallModalLink(null);
+                  setRecallError(null);
+                  setRecallCustomAddress("");
+                  setRecallDestination("sender");
+                }}
+                className="flex-1"
+                disabled={isRecalling}
+              >
+                Cancel
+              </Button>
+              <Button
+                onClick={handleRecall}
+                disabled={isRecalling}
+                className="flex-1 bg-amber-500 hover:bg-amber-600 text-white"
+              >
+                {isRecalling ? (
+                  <>
+                    <div className="animate-spin rounded-full h-4 w-4 border-2 border-white border-t-transparent mr-2" />
+                    Recalling...
+                  </>
+                ) : (
+                  <>
+                    <Undo2 className="w-4 h-4 mr-2" />
+                    Recall Funds
+                  </>
+                )}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
     </Card>
   );
 }

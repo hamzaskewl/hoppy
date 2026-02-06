@@ -272,6 +272,7 @@ hoppy/
 ## Roadmap
 
 ### Recently Completed
+- [x] **Cancel/Recall Payments** - February 4th, 2026 - Get back unclaimed funds, send to your wallet or a custom address
 - [x] **Partial Claims** - February 4th, 2026 - Claim only a portion, get a new link for the remainder
 - [x] **Multi-token support (USDC, USDT)** - February 3rd, 2026
 - [x] **Relayer for SPL gas fees** - February 3rd, 2026 - Automatic SOL subsidies for stablecoin claims
@@ -279,11 +280,10 @@ hoppy/
 ### In Progress
 - [ ] Virtual debit cards (using Reloadly) - Convert shielded crypto to Visa/Mastercard
 - [ ] Gift cards (using Reloadly) - Redeem to Amazon, Uber, DoorDash, and more
-- [ ] Claim expiration with auto-refund
 
 ### Up Next
+- [ ] Claim expiration with auto-refund
 - [ ] Split claims (one deposit → multiple links)
-- [ ] Recall unclaimed payments
 - [ ] Viewing keys for compliance
 - [ ] Conditional release
 

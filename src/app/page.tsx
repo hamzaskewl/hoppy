@@ -1,6 +1,6 @@
 import Link from "next/link";
 import Image from "next/image";
-import { ArrowRight, CreditCard } from "lucide-react";
+import { ArrowRight, CreditCard, Sparkles } from "lucide-react";
 import { NavHeader } from "@/components/nav-header";
 
 // Hoppy Logo Component - Uses the bunny image
@@ -26,6 +26,23 @@ export default function Home() {
   return (
     <div className="min-h-screen flex flex-col bg-background">
       <NavHeader />
+
+      {/* New Feature Banner */}
+      <div className="bg-gradient-to-r from-hop-500 to-hop-600 text-white py-3 px-4">
+        <div className="max-w-4xl mx-auto flex items-center justify-center gap-3 text-sm md:text-base">
+          <Sparkles className="w-5 h-5 flex-shrink-0" />
+          <span className="font-medium">
+            <strong>New:</strong> Partial Claims are here! Claim only what you need, get a new link for the rest.
+          </span>
+          <Link 
+            href="/create" 
+            className="inline-flex items-center gap-1 px-3 py-1 bg-white/20 hover:bg-white/30 rounded-full text-sm font-semibold transition-colors"
+          >
+            Try it
+            <ArrowRight className="w-4 h-4" />
+          </Link>
+        </div>
+      </div>
 
       {/* Hero Section */}
       <div
