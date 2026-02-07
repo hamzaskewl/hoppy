@@ -37,19 +37,23 @@ function HoppyLogo({ size = 36 }: { size?: number }) {
 export function NavHeader() {
   const pathname = usePathname();
   const [isDark, setIsDark] = useState(false);
+  const [mounted, setMounted] = useState(false);
 
-  // Check for stored preference on mount, default to light mode
+  // Sync state with actual DOM on mount (the script in layout.tsx already set the class)
   useEffect(() => {
-    const stored = localStorage.getItem("theme");
-    const shouldBeDark = stored === "dark";
-    setIsDark(shouldBeDark);
-    document.documentElement.classList.toggle("dark", shouldBeDark);
+    setMounted(true);
+    const hasDarkClass = document.documentElement.classList.contains("dark");
+    setIsDark(hasDarkClass);
   }, []);
 
   const toggleTheme = () => {
     const newIsDark = !isDark;
     setIsDark(newIsDark);
-    document.documentElement.classList.toggle("dark", newIsDark);
+    if (newIsDark) {
+      document.documentElement.classList.add("dark");
+    } else {
+      document.documentElement.classList.remove("dark");
+    }
     localStorage.setItem("theme", newIsDark ? "dark" : "light");
   };
 
@@ -101,8 +105,13 @@ export function NavHeader() {
             className="p-2 rounded-lg hover:bg-muted transition-colors"
             aria-label="Toggle theme"
           >
-            {isDark ? (
-              <Sun className="w-5 h-5 text-honey-500" />
+            {/* Only render the correct icon after mount to prevent hydration mismatch */}
+            {mounted ? (
+              isDark ? (
+                <Sun className="w-5 h-5 text-honey-500" />
+              ) : (
+                <Moon className="w-5 h-5 text-hop-600" />
+              )
             ) : (
               <Moon className="w-5 h-5 text-hop-600" />
             )}
