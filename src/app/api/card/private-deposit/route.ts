@@ -82,7 +82,7 @@ export async function POST(request: NextRequest) {
     const privacyCash = new PrivacyCash({
       RPC_url: rpcUrl,
       owner: ephemeralKeypair,
-      enableDebug: true,
+      enableDebug: false,
     });
 
     // Deposit grossWithdrawal to pool (buffer stays in wallet for SDK fees)

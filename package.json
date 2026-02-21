@@ -11,7 +11,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
-    "postinstall": "node -e \"const fs=require('fs');const p=require('path');const src='node_modules/@lightprotocol/hasher.rs/dist';const dst=p.join(src,'browser-fat/es');try{fs.copyFileSync(p.join(src,'hasher_wasm_simd_bg.wasm'),p.join(dst,'hasher_wasm_simd_bg.wasm'));fs.copyFileSync(p.join(src,'light_wasm_hasher_bg.wasm'),p.join(dst,'light_wasm_hasher_bg.wasm'));console.log('WASM files copied')}catch(e){console.log('WASM copy skipped:',e.message)}\""
+    "postinstall": "node -e \"const fs=require('fs');const p=require('path');const src='node_modules/@lightprotocol/hasher.rs/dist';const dst=p.join(src,'browser-fat/es');try{fs.copyFileSync(p.join(src,'hasher_wasm_simd_bg.wasm'),p.join(dst,'hasher_wasm_simd_bg.wasm'));fs.copyFileSync(p.join(src,'light_wasm_hasher_bg.wasm'),p.join(dst,'light_wasm_hasher_bg.wasm'));console.log('WASM files copied')}catch(e){console.log('WASM copy skipped:',e.message)}\"",
   },
   "dependencies": {
     "@lightprotocol/hasher.rs": "^0.2.1",
