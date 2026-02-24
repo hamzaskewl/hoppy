@@ -1,12 +1,62 @@
 "use client";
 
+import { useEffect } from "react";
 import { PrivyProvider } from "@privy-io/react-auth";
 import { toSolanaWalletConnectors } from "@privy-io/react-auth/solana";
 
 // Create Solana wallet connectors with Phantom first
 const solanaConnectors = toSolanaWalletConnectors({
-  shouldAutoConnect: false, // Disable auto-connect to prevent stale session issues
+  shouldAutoConnect: false,
 });
+
+// Clear stale Privy sessions on load to prevent auth errors
+function clearStalePrivySessions() {
+  if (typeof window === "undefined") return;
+  
+  try {
+    // Check if we have a stale session marker
+    const lastAuthError = sessionStorage.getItem("privy_auth_error");
+    if (lastAuthError) {
+      // Had an error last time - clear everything
+      Object.keys(localStorage).forEach(key => {
+        if (key.startsWith("privy:") || key.includes("privy")) {
+          localStorage.removeItem(key);
+        }
+      });
+      Object.keys(sessionStorage).forEach(key => {
+        if (key.startsWith("privy:") || key.includes("privy")) {
+          sessionStorage.removeItem(key);
+        }
+      });
+      sessionStorage.removeItem("privy_auth_error");
+      console.log("[Privy] Cleared stale session after previous auth error");
+    }
+  } catch (e) {
+    // Ignore storage errors
+  }
+}
+
+// Wrapper to catch auth errors and mark for clearing on next load
+function SessionErrorHandler({ children }: { children: React.ReactNode }) {
+  useEffect(() => {
+    // Clear stale sessions on mount
+    clearStalePrivySessions();
+    
+    // Listen for Privy auth errors
+    const handleError = (event: ErrorEvent) => {
+      if (event.message?.includes("authenticating session") || 
+          event.message?.includes("_authenticate")) {
+        console.log("[Privy] Auth error detected, marking for session clear");
+        sessionStorage.setItem("privy_auth_error", "true");
+      }
+    };
+    
+    window.addEventListener("error", handleError);
+    return () => window.removeEventListener("error", handleError);
+  }, []);
+  
+  return <>{children}</>;
+}
 
 export function Providers({ children }: { children: React.ReactNode }) {
   const appId = process.env.NEXT_PUBLIC_PRIVY_APP_ID || "cmkrr3rdw00dzl00c4te3gzfo";
@@ -15,19 +65,16 @@ export function Providers({ children }: { children: React.ReactNode }) {
     <PrivyProvider
       appId={appId}
       config={{
-        // Solana external wallets (Phantom, Solflare, Backpack)
         externalWallets: {
           solana: {
             connectors: solanaConnectors,
           },
         },
-        // Embedded wallets - creates Solana wallet for email users
         embeddedWallets: {
           solana: {
             createOnLogin: "users-without-wallets",
           },
         } as any,
-        // Login methods - wallet first, then email
         loginMethods: ["wallet", "email"],
         appearance: {
           theme: "light",
@@ -36,7 +83,9 @@ export function Providers({ children }: { children: React.ReactNode }) {
         } as any,
       }}
     >
-      {children}
+      <SessionErrorHandler>
+        {children}
+      </SessionErrorHandler>
     </PrivyProvider>
   );
 }
