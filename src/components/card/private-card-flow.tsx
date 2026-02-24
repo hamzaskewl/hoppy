@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { usePrivy } from "@privy-io/react-auth";
+import { useWallets, useSignAndSendTransaction } from "@privy-io/react-auth/solana";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   CreditCard,
@@ -10,12 +11,12 @@ import {
   Loader2,
   AlertTriangle,
   ArrowRight,
-  Shield,
   Gift,
   Link as LinkIcon,
   Eye,
   EyeOff,
 } from "lucide-react";
+import Image from "next/image";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -44,6 +45,9 @@ interface OrderData {
 
 export function PrivateCardFlow({ disabled = false }: { disabled?: boolean }) {
   const { authenticated, login, user } = usePrivy();
+  // Privy Solana wallet hooks for embedded wallet support
+  const { wallets: privyWallets } = useWallets();
+  const { signAndSendTransaction: privySignAndSend } = useSignAndSendTransaction();
 
   // Form state
   const [amount, setAmount] = useState<number>(50);
@@ -135,10 +139,26 @@ export function PrivateCardFlow({ disabled = false }: { disabled?: boolean }) {
       
       const rpcUrl = process.env.NEXT_PUBLIC_SOLANA_RPC_URL || "https://api.devnet.solana.com";
       
-      // Get the Solana provider from Privy
-      const solanaProvider = await (window as any).solana;
-      if (!solanaProvider) {
-        throw new Error("Solana wallet not found. Please use Phantom or similar.");
+      // Check for Privy embedded wallet first, then fall back to browser extensions
+      const privyWallet = privyWallets?.find(
+        (w) => w.address?.toLowerCase() === walletAddress.toLowerCase()
+      );
+      const isPrivyEmbeddedWallet = !!privyWallet;
+      
+      // Get browser extension provider as fallback
+      let solanaProvider: any = null;
+      if (!isPrivyEmbeddedWallet && typeof window !== "undefined") {
+        if ((window as any).phantom?.solana?.isPhantom) {
+          solanaProvider = (window as any).phantom.solana;
+        } else if ((window as any).solflare?.isSolflare) {
+          solanaProvider = (window as any).solflare;
+        } else if ((window as any).solana) {
+          solanaProvider = (window as any).solana;
+        }
+      }
+      
+      if (!isPrivyEmbeddedWallet && !solanaProvider) {
+        throw new Error("Solana wallet not found. Please connect a wallet or install Phantom.");
       }
 
       // Create ephemeral keypair for the deposit
@@ -174,12 +194,27 @@ export function PrivateCardFlow({ disabled = false }: { disabled?: boolean }) {
       fundingTx.recentBlockhash = blockhash;
       fundingTx.feePayer = new PublicKey(walletAddress);
       
-      // Sign with user's wallet
-      const signedFundingTx = await solanaProvider.signTransaction(fundingTx);
-      const fundingTxHash = await connection.sendRawTransaction(signedFundingTx.serialize());
-      await connection.confirmTransaction(fundingTxHash, "confirmed");
+      // Sign and send with user's wallet (Privy embedded or browser extension)
+      let fundingTxHash: string;
       
-      console.log("[PrivateCard] Funded ephemeral:", fundingTxHash);
+      if (isPrivyEmbeddedWallet && privyWallet) {
+        // Use Privy embedded wallet
+        const bs58 = (await import("bs58")).default;
+        const serializedTx = fundingTx.serialize({ requireAllSignatures: false });
+        const result = await privySignAndSend({
+          transaction: new Uint8Array(serializedTx),
+          wallet: privyWallet,
+        });
+        fundingTxHash = bs58.encode(result.signature);
+      } else if (solanaProvider) {
+        // Use browser extension wallet
+        const signedFundingTx = await solanaProvider.signTransaction(fundingTx);
+        fundingTxHash = await connection.sendRawTransaction(signedFundingTx.serialize());
+      } else {
+        throw new Error("No wallet available for signing");
+      }
+      
+      await connection.confirmTransaction(fundingTxHash, "confirmed");
 
       // Wait for balance
       await new Promise(r => setTimeout(r, 2000));
@@ -204,7 +239,6 @@ export function PrivateCardFlow({ disabled = false }: { disabled?: boolean }) {
       if (!privateDepositRes.ok) {
         // Check if recovery was successful
         if (depositData.recoverySuccess && depositData.recoverySweepTx) {
-          console.log("[PrivateCard] Funds recovered:", depositData.recoverySweepTx);
           setRecoveryInfo({
             success: true,
             txHash: depositData.recoverySweepTx,
@@ -307,7 +341,7 @@ export function PrivateCardFlow({ disabled = false }: { disabled?: boolean }) {
               <CardContent className="space-y-6">
                 {/* Privacy Badge */}
                 <div className="p-3 rounded-xl bg-hop-100 dark:bg-hop-500/10 border-2 border-hop-400 flex items-center gap-3">
-                  <Shield className="w-5 h-5 text-hop-600 dark:text-hop-400" />
+                  <Image src="/bunnypriv.png" alt="Privacy" width={28} height={28} className="w-7 h-7" />
                   <div>
                     <p className="text-sm font-medium text-hop-700 dark:text-hop-300">Maximum Privacy</p>
                     <p className="text-xs text-muted-foreground">Card provider cannot trace your wallet</p>
@@ -446,7 +480,7 @@ export function PrivateCardFlow({ disabled = false }: { disabled?: boolean }) {
             <Card>
               <CardContent className="py-16 text-center space-y-6">
                 <div className="w-16 h-16 rounded-full bg-hop-500 border-2 border-hop-600 mx-auto flex items-center justify-center animate-pulse">
-                  {step === "depositing" && <Shield className="w-8 h-8 text-white" />}
+                  {step === "depositing" && <Image src="/bunnypriv.png" alt="Privacy" width={36} height={36} className="w-9 h-9" />}
                   {step === "withdrawing" && <CreditCard className="w-8 h-8 text-white" />}
                   {step === "waiting" && <Gift className="w-8 h-8 text-white" />}
                 </div>

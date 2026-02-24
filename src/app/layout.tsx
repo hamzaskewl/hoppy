@@ -1,4 +1,5 @@
 import { Inter } from "next/font/google";
+import Script from "next/script";
 import "./globals.css";
 import { Providers } from "@/components/providers";
 import type { Metadata } from "next";
@@ -8,6 +9,7 @@ const inter = Inter({ subsets: ["latin"] });
 const APP_URL = process.env.NEXT_PUBLIC_APP_URL || "https://hoppy.cash";
 
 export const metadata: Metadata = {
+  metadataBase: new URL(APP_URL),
   title: "hoppy | Privacy-First Payments",
   description: "Load. Redeem. Privately. A privacy-first payment platform on Solana.",
   keywords: ["privacy", "solana", "payments", "crypto", "web3", "hoppy"],
@@ -46,6 +48,20 @@ export default function RootLayout({
   return (
     <html lang="en" suppressHydrationWarning>
       <body className={inter.className} suppressHydrationWarning>
+        {/* Theme initialization script - runs early to prevent flash */}
+        <Script
+          id="theme-init"
+          strategy="beforeInteractive"
+        >{`
+          (function() {
+            try {
+              var theme = localStorage.getItem('theme');
+              if (theme === 'dark') {
+                document.documentElement.classList.add('dark');
+              }
+            } catch (e) {}
+          })();
+        `}</Script>
         <Providers>
           <main className="min-h-screen pb-16">
             {children}

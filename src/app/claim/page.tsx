@@ -1,6 +1,6 @@
 import Link from "next/link";
 import Image from "next/image";
-import { ArrowLeft } from "lucide-react";
+import { Home } from "lucide-react";
 import { ClaimFlow } from "@/components/claim/claim-flow";
 import { WalletButton } from "@/components/wallet-button";
 
@@ -25,7 +25,7 @@ function HoppyLogo({ size = 40 }: { size?: number }) {
 
 export default function ClaimPage() {
   return (
-    <div className="min-h-screen py-12 px-4 bg-background relative">
+    <div className="min-h-screen py-12 px-4 relative">
       {/* Carrot background - light mode */}
       <div
         className="absolute inset-0 -z-10 dark:hidden"
@@ -52,10 +52,10 @@ export default function ClaimPage() {
         <div className="flex items-center justify-between mb-6">
           <Link
             href="/"
-            className="inline-flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground transition-colors"
+            className="inline-flex items-center gap-2 px-4 py-2 text-sm text-muted-foreground hover:text-foreground bg-card hover:bg-muted border border-border rounded-full transition-colors"
           >
-            <ArrowLeft className="w-4 h-4" />
-            Back to Home
+            <Home className="w-4 h-4" />
+            Home
           </Link>
           <WalletButton />
         </div>

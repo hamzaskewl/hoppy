@@ -40,5 +40,6 @@ tradeHistory*
 *.tsbuildinfo
 next-env.d.ts
 
-*.md
 *.card-orders.json
+
+check-funds.mjs

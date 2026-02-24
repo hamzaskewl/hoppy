@@ -1,7 +1,8 @@
 "use client";
 
+import Image from "next/image";
 import { motion } from "framer-motion";
-import { Shield, Lock, Loader2 } from "lucide-react";
+import { Lock, Loader2, AlertCircle } from "lucide-react";
 
 interface ShieldingAnimationProps {
   status: "detecting" | "shielding" | "complete" | "error";
@@ -13,11 +14,11 @@ export function ShieldingAnimation({ status, message }: ShieldingAnimationProps)
     <div className="flex flex-col items-center justify-center py-12">
       {/* Main Animation Container */}
       <div className="relative w-40 h-40 flex items-center justify-center">
-        {/* Outer Ring */}
+        {/* Outer Ring - pulsing */}
         <motion.div
           className="absolute inset-0 rounded-full border-2 border-hop-500/30"
           animate={
-            status === "shielding"
+            status === "shielding" || status === "detecting"
               ? {
                   scale: [1, 1.1, 1],
                   opacity: [0.3, 0.6, 0.3],
@@ -31,11 +32,11 @@ export function ShieldingAnimation({ status, message }: ShieldingAnimationProps)
           }}
         />
 
-        {/* Middle Ring */}
+        {/* Middle Ring - pulsing with offset */}
         <motion.div
           className="absolute inset-4 rounded-full border-2 border-hop-500/50"
           animate={
-            status === "shielding"
+            status === "shielding" || status === "detecting"
               ? {
                   scale: [1, 1.15, 1],
                   opacity: [0.5, 0.8, 0.5],
@@ -54,7 +55,7 @@ export function ShieldingAnimation({ status, message }: ShieldingAnimationProps)
         <motion.div
           className="absolute inset-8 rounded-full bg-hop-500/20"
           animate={
-            status === "shielding"
+            status === "shielding" || status === "detecting"
               ? {
                   scale: [1, 1.2, 1],
                   opacity: [0.2, 0.4, 0.2],
@@ -65,33 +66,65 @@ export function ShieldingAnimation({ status, message }: ShieldingAnimationProps)
           }
           transition={{
             duration: 1.5,
-            repeat: status === "shielding" ? Infinity : 0,
+            repeat: status === "shielding" || status === "detecting" ? Infinity : 0,
             ease: "easeInOut",
           }}
         />
 
-        {/* Center Icon */}
+        {/* Center Icon/Image */}
         <motion.div
-          className={`relative z-10 w-20 h-20 rounded-full flex items-center justify-center ${
+          className={`relative z-10 w-24 h-24 rounded-full flex items-center justify-center overflow-hidden ${
             status === "complete"
               ? "bg-hop-500"
               : status === "error"
               ? "bg-red-500/20"
-              : "bg-hop-500/20"
+              : "bg-transparent"
           }`}
           initial={{ scale: 0.8, opacity: 0 }}
           animate={{ scale: 1, opacity: 1 }}
           transition={{ duration: 0.5 }}
         >
           {status === "detecting" && (
-            <Loader2 className="w-8 h-8 text-hop-600 dark:text-hop-400 animate-spin" />
+            <motion.div
+              animate={{ 
+                y: [0, -8, 0],
+                scale: [1, 1.05, 1],
+              }}
+              transition={{ 
+                duration: 0.8, 
+                repeat: Infinity, 
+                ease: "easeInOut" 
+              }}
+            >
+              <Image
+                src="/bunnyspin.png"
+                alt="Loading"
+                width={80}
+                height={80}
+                className="object-contain"
+              />
+            </motion.div>
           )}
           {status === "shielding" && (
             <motion.div
-              animate={{ rotate: 360 }}
-              transition={{ duration: 3, repeat: Infinity, ease: "linear" }}
+              animate={{ 
+                y: [0, -10, 0],
+                rotate: [0, 5, -5, 0],
+                scale: [1, 1.1, 1],
+              }}
+              transition={{ 
+                duration: 1.2, 
+                repeat: Infinity, 
+                ease: "easeInOut" 
+              }}
             >
-              <Shield className="w-10 h-10 text-hop-600 dark:text-hop-400" />
+              <Image
+                src="/bunnyspin.png"
+                alt="Processing"
+                width={80}
+                height={80}
+                className="object-contain"
+              />
             </motion.div>
           )}
           {status === "complete" && (
@@ -104,7 +137,7 @@ export function ShieldingAnimation({ status, message }: ShieldingAnimationProps)
             </motion.div>
           )}
           {status === "error" && (
-            <span className="text-3xl">!</span>
+            <AlertCircle className="w-10 h-10 text-red-500" />
           )}
         </motion.div>
 
@@ -146,19 +179,19 @@ export function ShieldingAnimation({ status, message }: ShieldingAnimationProps)
         transition={{ delay: 0.3 }}
       >
         <h3 className="text-xl font-semibold mb-2">
-          {status === "detecting" && "Detecting Funds..."}
-          {status === "shielding" && "Shielding Funds..."}
-          {status === "complete" && "Funds Shielded!"}
-          {status === "error" && "Shielding Failed"}
+          {status === "detecting" && "Finding Your Funds..."}
+          {status === "shielding" && "Hopping Through Privacy..."}
+          {status === "complete" && "Claim Complete!"}
+          {status === "error" && "Something Went Wrong"}
         </h3>
         <p className="text-muted-foreground text-sm max-w-xs">
           {status === "detecting" &&
-            "Reading claim note and verifying..."}
+            "Reading your claim link..."}
           {status === "shielding" &&
-            "Processing your claim. This may take a moment..."}
+            "Processing your private claim. This may take a moment..."}
           {status === "complete" &&
-            "Funds verified. Ready to withdraw."}
-          {status === "error" && (message || "Something went wrong. Please try again.")}
+            "Funds are on their way to your wallet."}
+          {status === "error" && (message || "Please try again or contact support.")}
         </p>
       </motion.div>
     </div>

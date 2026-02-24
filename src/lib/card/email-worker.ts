@@ -112,31 +112,22 @@ async function processEmail(email: ParsedMail): Promise<boolean> {
   const from = fromArray[0]?.value?.[0]?.address || "";
   const subject = email.subject || "";
   
-  console.log(`[Email] Processing: "${subject}" from ${from}`);
-  
   // Check if it's from Starpay
   if (!from.toLowerCase().includes("starpay")) {
-    console.log("[Email] Not from Starpay, skipping");
     return false;
   }
   
   // Extract order ID from email address
   const orderId = extractOrderIdFromEmail(to);
   if (!orderId) {
-    console.log("[Email] Could not extract order ID from recipient");
     return false;
   }
-  
-  console.log(`[Email] Found order ID: ${orderId}`);
   
   // Parse card details
   const cardDetails = parseCardFromEmail(email);
   if (!cardDetails) {
-    console.log("[Email] Could not parse card details");
     return false;
   }
-  
-  console.log(`[Email] Parsed card: ****${cardDetails.number.slice(-4)}, exp: ${cardDetails.expiry}`);
   
   // Encrypt card details
   const encryptionKey = generateEncryptionKey();
@@ -152,13 +143,7 @@ async function processEmail(email: ParsedMail): Promise<boolean> {
     claimLink,
   });
   
-  if (updated) {
-    console.log(`[Email] Order ${orderId} updated with claim link`);
-    return true;
-  }
-  
-  console.log(`[Email] Order ${orderId} not found in storage`);
-  return false;
+  return updated !== null;
 }
 
 /**

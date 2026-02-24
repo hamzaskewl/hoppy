@@ -1,6 +1,15 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   serverExternalPackages: ['privacycash', '@solana/web3.js', '@lightprotocol/hasher.rs', 'imapflow', 'mailparser', 'pg'],
+  images: {
+    remotePatterns: [
+      {
+        protocol: 'https',
+        hostname: 'raw.githubusercontent.com',
+        pathname: '/solana-labs/token-list/**',
+      },
+    ],
+  },
   webpack: (config, { isServer }) => {
     config.resolve.fallback = {
       ...config.resolve.fallback,

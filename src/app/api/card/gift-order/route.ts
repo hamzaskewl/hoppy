@@ -44,8 +44,6 @@ export async function POST(request: NextRequest) {
     // Create proxy email for this order
     const proxyEmail = `${EMAIL_PREFIX}+${orderId}@${EMAIL_DOMAIN}`;
     
-    console.log(`[GiftOrder] Creating order ${orderId} with proxy email: ${proxyEmail}`);
-
     // Create Starpay order
     const apiToken = process.env.STARPAY_API_TOKEN;
     if (!apiToken) {
@@ -93,7 +91,6 @@ export async function POST(request: NextRequest) {
     };
 
     await createOrder(order);
-    console.log(`[GiftOrder] Order created: ${orderId}`);
 
     // Return order details for client
     return NextResponse.json({

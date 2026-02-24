@@ -64,7 +64,7 @@ export default function CreatePage() {
 
           {/* Layout: Centered form */}
           <div className="flex justify-center">
-            <div className="w-full max-w-xl">
+            <div className="w-full max-w-2xl">
               <CreateLinkForm />
             </div>
           </div>

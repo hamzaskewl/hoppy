@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:x.com)",
+      "Bash(npx remotion:*)",
+      "Bash(npx skills:*)",
+      "WebFetch(domain:www.reddit.com)",
+      "Bash(del /q srcscenesIntroScene.tsx srcscenesProblemScene.tsx srcscenesCreateScene.tsx srcscenesShareScene.tsx srcscenesClaimScene.tsx srcscenesOutroScene.tsx)",
+      "Bash(npx tsc:*)"
+    ],
+    "additionalDirectories": [
+      "c:\\Users\\wante\\Downloads\\hopy\\hoppy-demo"
+    ]
+  }
+}

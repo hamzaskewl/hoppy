@@ -4,7 +4,7 @@ import { useState, useEffect } from "react";
 import Link from "next/link";
 import Image from "next/image";
 import { motion, AnimatePresence } from "framer-motion";
-import { CreditCard, Copy, Check, ArrowLeft, AlertTriangle, Gift, Eye, EyeOff } from "lucide-react";
+import { CreditCard, Copy, Check, Home, AlertTriangle, Gift, Eye, EyeOff } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { 
@@ -90,10 +90,10 @@ export default function CardClaimPage() {
         <div className="flex items-center justify-between mb-6">
           <Link
             href="/"
-            className="inline-flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground transition-colors"
+            className="inline-flex items-center gap-2 px-4 py-2 text-sm text-muted-foreground hover:text-foreground bg-card hover:bg-muted border border-border rounded-full transition-colors"
           >
-            <ArrowLeft className="w-4 h-4" />
-            Back to Home
+            <Home className="w-4 h-4" />
+            Home
           </Link>
         </div>
 
