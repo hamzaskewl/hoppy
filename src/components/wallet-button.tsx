@@ -1,37 +1,13 @@
 "use client";
 
 import { usePrivy } from "@privy-io/react-auth";
-import { LogOut, User, Copy, Check, RefreshCw } from "lucide-react";
+import { LogOut, User, Copy, Check } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { shortenAddress } from "@/lib/utils";
 import { useState } from "react";
 
 export function WalletButton() {
   const { login, logout, authenticated, ready, user } = usePrivy();
-  
-  // Force clear Privy session on error
-  const handleClearAndLogin = async () => {
-    try {
-      // Clear all Privy-related localStorage
-      Object.keys(localStorage).forEach(key => {
-        if (key.startsWith('privy:') || key.includes('privy')) {
-          localStorage.removeItem(key);
-        }
-      });
-      // Also clear sessionStorage
-      Object.keys(sessionStorage).forEach(key => {
-        if (key.startsWith('privy:') || key.includes('privy')) {
-          sessionStorage.removeItem(key);
-        }
-      });
-      // Small delay then login fresh
-      await new Promise(r => setTimeout(r, 100));
-      login();
-    } catch (e) {
-      console.error('Clear session error:', e);
-      login();
-    }
-  };
   const [copied, setCopied] = useState(false);
 
   // Get Solana wallet address - look for chainType: 'solana'
@@ -64,21 +40,10 @@ export function WalletButton() {
 
   if (!authenticated) {
     return (
-      <div className="flex items-center gap-1">
-        <Button onClick={login} size="sm" variant="outline">
-          <User className="w-4 h-4 mr-2" />
-          Connect
-        </Button>
-        <Button 
-          onClick={handleClearAndLogin} 
-          size="sm" 
-          variant="ghost" 
-          title="Clear session & reconnect (use if having issues)"
-          className="px-2"
-        >
-          <RefreshCw className="w-3 h-3" />
-        </Button>
-      </div>
+      <Button onClick={login} size="sm" variant="outline">
+        <User className="w-4 h-4 mr-2" />
+        Connect
+      </Button>
     );
   }
   

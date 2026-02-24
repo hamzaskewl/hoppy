@@ -201,6 +201,7 @@ export function CreateLinkForm() {
   const [walletBalance, setWalletBalance] = useState<number | null>(null);
   const [isLoadingBalance, setIsLoadingBalance] = useState(false);
   const [amount, setAmount] = useState<string>("0.1");
+  const [displayAmount, setDisplayAmount] = useState<string>("0.1");
   const [currency, setCurrency] = useState<"SOL" | "USD">("SOL");
   const [selectedToken, setSelectedToken] = useState<SupportedToken>("SOL");
   const [solPrice, setSolPrice] = useState<number | null>(null);
@@ -860,6 +861,7 @@ export function CreateLinkForm() {
     setFundingTxHash(null);
     setDepositTxHash(null);
     setAmount("0.1");
+    setDisplayAmount("0.1");
     setError(null);
     setFailedDepositRecovery(null);
     setReclaimSuccess(null);
@@ -1271,14 +1273,20 @@ export function CreateLinkForm() {
                       <div className="flex rounded-lg border-2 border-border overflow-hidden">
                         <button
                           type="button"
-                          onClick={() => setCurrency("SOL")}
+                          onClick={() => {
+                            setCurrency("SOL");
+                            setDisplayAmount(amount);
+                          }}
                           className={`px-3 py-1 text-xs font-medium transition-colors ${currency === "SOL" ? "bg-hop-500 text-white" : "bg-card text-muted-foreground hover:bg-secondary"}`}
                         >
                           SOL
                         </button>
                         <button
                           type="button"
-                          onClick={() => setCurrency("USD")}
+                          onClick={() => {
+                            setCurrency("USD");
+                            if (solPrice) setDisplayAmount(((parseFloat(amount) || 0) * solPrice).toFixed(2));
+                          }}
                           className={`px-3 py-1 text-xs font-medium transition-colors ${currency === "USD" ? "bg-hop-500 text-white" : "bg-card text-muted-foreground hover:bg-secondary"}`}
                         >
                           USD
@@ -1290,33 +1298,29 @@ export function CreateLinkForm() {
                     <Input
                       type="text"
                       inputMode="decimal"
-                      value={currency === "USD" && solPrice && selectedToken === "SOL"
-                        ? ((parseFloat(amount) || 0) * solPrice).toFixed(2)
-                        : amount
-                      }
+                      value={displayAmount}
                       onChange={(e) => {
                         const v = e.target.value;
-                        // Allow empty, numbers, and single decimal point
                         if (v === "" || /^\d*\.?\d*$/.test(v)) {
-                          if (currency === "SOL" || selectedToken !== "SOL") {
-                            setAmount(v); // Allow empty
-                          } else {
+                          setDisplayAmount(v);
+                          if (currency === "USD" && solPrice && solPrice > 0 && selectedToken === "SOL") {
                             const usd = parseFloat(v) || 0;
-                            if (solPrice && solPrice > 0) setAmount((usd / solPrice).toFixed(6));
-                            else setAmount(v); // Allow empty
+                            setAmount((usd / solPrice).toFixed(6));
+                          } else {
+                            setAmount(v || "0");
                           }
                         }
                       }}
-                      onBlur={(e) => {
-                        const v = e.target.value;
-                        if (v === "" || parseFloat(v) === 0) {
-                          // Leave empty or set default
-                          const defaultAmount = selectedToken === "SOL" ? "0.1" : "1";
-                          setAmount(v === "" ? "" : defaultAmount);
-                        } else {
-                          // Remove leading zeros: 010 → 10
-                          const num = parseFloat(v);
-                          if (!isNaN(num)) setAmount(num.toString());
+                      onFocus={(e) => {
+                        if (e.target.value === "0") {
+                          setDisplayAmount("");
+                        }
+                      }}
+                      onBlur={() => {
+                        if (displayAmount === "" || displayAmount === ".") {
+                          const defaultVal = selectedToken === "SOL" ? "0.1" : "1";
+                          setDisplayAmount(defaultVal);
+                          setAmount(defaultVal);
                         }
                       }}
                       placeholder={selectedToken === "SOL" ? "0.00" : "0"}
@@ -1357,11 +1361,12 @@ export function CreateLinkForm() {
                                 setSelectedToken(token);
                                 setShowTokenDropdown(false);
                                 if (token !== "SOL") setCurrency("SOL");
-                                // Set appropriate default amount
                                 if (token === "SOL" && parseFloat(amount) >= 100) {
                                   setAmount("0.1");
+                                  setDisplayAmount("0.1");
                                 } else if (token !== "SOL" && parseFloat(amount) < 1) {
                                   setAmount("1");
+                                  setDisplayAmount("1");
                                 }
                               }}
                               className={`w-full flex items-center gap-2 px-3 py-2.5 hover:bg-secondary transition-colors ${
@@ -1393,11 +1398,16 @@ export function CreateLinkForm() {
                       ≈ {(parseFloat(amount) || 0).toFixed(4)} SOL · 1 SOL = ${solPrice.toFixed(2)}
                     </p>
                   )}
+                  {currency === "SOL" && solPrice && selectedToken === "SOL" && parseFloat(amount) > 0 && (
+                    <p className="text-xs text-muted-foreground">
+                      ≈ ${((parseFloat(amount) || 0) * solPrice).toFixed(2)} USD
+                    </p>
+                  )}
                   {/* Quick amounts */}
                   <div className="flex gap-2">
                     {(selectedToken === "SOL" 
                       ? (currency === "USD" && solPrice ? ["10", "50", "100", "500"] : ["0.1", "0.5", "1", "5"])
-                      : ["1", "5", "10", "50"] // USDC/USDT amounts
+                      : ["1", "5", "10", "50"]
                     ).map((val) => {
                       const isUsd = selectedToken === "SOL" && currency === "USD" && solPrice;
                       const actualAmount = isUsd ? (parseFloat(val) / solPrice!).toFixed(6) : val;
@@ -1406,7 +1416,10 @@ export function CreateLinkForm() {
                         <button
                           key={val}
                           type="button"
-                          onClick={() => setAmount(actualAmount)}
+                          onClick={() => {
+                            setAmount(actualAmount);
+                            setDisplayAmount(isUsd ? val : actualAmount);
+                          }}
                           className={`flex-1 py-1.5 rounded-lg text-xs font-medium transition-all border-2 ${
                             isSelected ? "bg-hop-500 text-white border-hop-600" : "bg-card border-border hover:border-hop-400"
                           }`}

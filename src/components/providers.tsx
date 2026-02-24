@@ -1,60 +1,71 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { PrivyProvider } from "@privy-io/react-auth";
 import { toSolanaWalletConnectors } from "@privy-io/react-auth/solana";
 
-// Create Solana wallet connectors with Phantom first
 const solanaConnectors = toSolanaWalletConnectors({
-  shouldAutoConnect: false,
+  shouldAutoConnect: true,
 });
 
-// Clear stale Privy sessions on load to prevent auth errors
-function clearStalePrivySessions() {
-  if (typeof window === "undefined") return;
-  
+function clearPrivyStorage() {
   try {
-    // Check if we have a stale session marker
-    const lastAuthError = sessionStorage.getItem("privy_auth_error");
-    if (lastAuthError) {
-      // Had an error last time - clear everything
-      Object.keys(localStorage).forEach(key => {
-        if (key.startsWith("privy:") || key.includes("privy")) {
-          localStorage.removeItem(key);
-        }
-      });
-      Object.keys(sessionStorage).forEach(key => {
-        if (key.startsWith("privy:") || key.includes("privy")) {
-          sessionStorage.removeItem(key);
-        }
-      });
-      sessionStorage.removeItem("privy_auth_error");
-      console.log("[Privy] Cleared stale session after previous auth error");
-    }
-  } catch (e) {
+    Object.keys(localStorage).forEach(key => {
+      if (key.startsWith("privy:") || key.includes("privy")) {
+        localStorage.removeItem(key);
+      }
+    });
+    Object.keys(sessionStorage).forEach(key => {
+      if (key.startsWith("privy:") || key.includes("privy")) {
+        sessionStorage.removeItem(key);
+      }
+    });
+  } catch {
     // Ignore storage errors
   }
 }
 
-// Wrapper to catch auth errors and mark for clearing on next load
 function SessionErrorHandler({ children }: { children: React.ReactNode }) {
+  const [hasCleared, setHasCleared] = useState(false);
+
+  const handleAuthError = useCallback(() => {
+    if (hasCleared) return;
+    console.log("[Privy] Auth error detected, clearing session and reloading");
+    clearPrivyStorage();
+    setHasCleared(true);
+    // Reload once to get a fresh session
+    window.location.reload();
+  }, [hasCleared]);
+
   useEffect(() => {
-    // Clear stale sessions on mount
-    clearStalePrivySessions();
-    
-    // Listen for Privy auth errors
+    // Catch "Error authenticating session" from Privy's minified code
     const handleError = (event: ErrorEvent) => {
-      if (event.message?.includes("authenticating session") || 
+      if (event.message?.includes("authenticating session") ||
           event.message?.includes("_authenticate")) {
-        console.log("[Privy] Auth error detected, marking for session clear");
-        sessionStorage.setItem("privy_auth_error", "true");
+        event.preventDefault();
+        handleAuthError();
       }
     };
-    
+
+    // Also catch unhandled promise rejections from Privy
+    const handleRejection = (event: PromiseRejectionEvent) => {
+      const msg = event.reason?.message || String(event.reason || "");
+      if (msg.includes("authenticating session") ||
+          msg.includes("_authenticate") ||
+          msg.includes("Failed to fetch") && msg.includes("privy")) {
+        event.preventDefault();
+        handleAuthError();
+      }
+    };
+
     window.addEventListener("error", handleError);
-    return () => window.removeEventListener("error", handleError);
-  }, []);
-  
+    window.addEventListener("unhandledrejection", handleRejection);
+    return () => {
+      window.removeEventListener("error", handleError);
+      window.removeEventListener("unhandledrejection", handleRejection);
+    };
+  }, [handleAuthError]);
+
   return <>{children}</>;
 }
 
