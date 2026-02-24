@@ -2,34 +2,19 @@
 
 import { PrivyProvider } from "@privy-io/react-auth";
 import { toSolanaWalletConnectors } from "@privy-io/react-auth/solana";
-import { createSolanaRpc, createSolanaRpcSubscriptions } from "@solana/kit";
 
 // Create Solana wallet connectors with Phantom first
 const solanaConnectors = toSolanaWalletConnectors({
-  shouldAutoConnect: true,
+  shouldAutoConnect: false, // Disable auto-connect to prevent stale session issues
 });
 
-// Build Solana RPC config from env
-const rpcUrl = process.env.NEXT_PUBLIC_SOLANA_RPC_URL || "https://api.mainnet-beta.solana.com";
-// Derive WSS URL from HTTPS URL for subscriptions
-const wssUrl = rpcUrl.replace(/^https:\/\//, "wss://");
-
 export function Providers({ children }: { children: React.ReactNode }) {
-  const appId = process.env.NEXT_PUBLIC_PRIVY_APP_ID || "clzne91y501b62a3w90qwfwq1";
+  const appId = process.env.NEXT_PUBLIC_PRIVY_APP_ID || "cmkrr3rdw00dzl00c4te3gzfo";
 
   return (
     <PrivyProvider
       appId={appId}
       config={{
-        // Solana RPC config - uses your Helius RPC from .env
-        solana: {
-          rpcs: {
-            "solana:mainnet": {
-              rpc: createSolanaRpc(rpcUrl as Parameters<typeof createSolanaRpc>[0]),
-              rpcSubscriptions: createSolanaRpcSubscriptions(wssUrl as Parameters<typeof createSolanaRpcSubscriptions>[0]),
-            },
-          } as any,
-        },
         // Solana external wallets (Phantom, Solflare, Backpack)
         externalWallets: {
           solana: {
