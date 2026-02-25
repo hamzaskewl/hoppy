@@ -41,6 +41,9 @@ import {
 } from "@/lib/privacy/privacy-cash-adapter";
 
 const RPC_URL = process.env.NEXT_PUBLIC_SOLANA_RPC_URL || "https://api.devnet.solana.com";
+const APP_URL = process.env.NEXT_PUBLIC_APP_URL || process.env.RAILWAY_PUBLIC_DOMAIN ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}` : "http://localhost:3000";
+
+console.log("[TG Bot] APP_URL resolved to:", APP_URL);
 
 // SOL threshold above which we require confirmation before sending
 const SEND_CONFIRM_THRESHOLD_SOL = 1;
@@ -401,7 +404,7 @@ async function executeSend(ctx: Context, text: string) {
       { commitment: "confirmed" }
     );
 
-    const baseUrl = process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000";
+    const baseUrl = APP_URL;
     const response = await fetch(`${baseUrl}/api/privacy-cash/create-link`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -507,7 +510,7 @@ async function handleClaim(ctx: Context, urlOrText: string) {
   await ctx.reply(escapeMarkdown("Claiming payment..."), { parse_mode: "HTML" });
 
   try {
-    const baseUrl = process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000";
+    const baseUrl = APP_URL;
     const response = await fetch(`${baseUrl}/api/privacy-cash/claim`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
