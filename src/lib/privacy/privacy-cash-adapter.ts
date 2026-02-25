@@ -645,13 +645,22 @@ export function createDoubleHopClaimUrl(note: DoubleHopNote, baseUrl?: string): 
  * Extract double hop note from URL
  */
 export function extractDoubleHopNoteFromUrl(url?: string): DoubleHopNote | null {
-  const hash = url 
-    ? new URL(url).hash.slice(1) 
-    : (typeof window !== "undefined" ? window.location.hash.slice(1) : "");
-  
+  let hash = "";
+
+  if (url) {
+    try {
+      hash = new URL(url).hash.slice(1);
+    } catch {
+      // Not a valid URL — treat input as raw hash fragment or note string
+      hash = url.startsWith("#") ? url.slice(1) : url;
+    }
+  } else if (typeof window !== "undefined") {
+    hash = window.location.hash.slice(1);
+  }
+
   if (!hash || hash.length < 10) {
     return null;
   }
-  
+
   return deserializeDoubleHopNote(hash);
 }
