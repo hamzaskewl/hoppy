@@ -86,7 +86,7 @@ function registerHandlers(bot: Bot) {
     const existing = await getWallet(tgUserId);
     if (existing) {
       await ctx.reply(walletExistsMessage(existing.wallet_address), {
-        parse_mode: "MarkdownV2",
+        parse_mode: "HTML",
       });
       if (tgUsername) await deliverPendingPayments(ctx, tgUsername);
       return;
@@ -97,7 +97,7 @@ function registerHandlers(bot: Bot) {
     await upsertWallet(tgUserId, tgUsername, wallet.publicKey, encrypted);
 
     const msg = await ctx.reply(welcomeMessage(wallet.publicKey, wallet.secretKey), {
-      parse_mode: "MarkdownV2",
+      parse_mode: "HTML",
     });
     autoDelete(ctx, msg.message_id, 120_000);
 
@@ -111,14 +111,14 @@ function registerHandlers(bot: Bot) {
     const wallet = await getWallet(tgUserId);
     if (!wallet) {
       await ctx.reply(errorMessage("No wallet found. Use /start first."), {
-        parse_mode: "MarkdownV2",
+        parse_mode: "HTML",
       });
       return;
     }
 
     const secretKey = decryptSecretKey(wallet.encrypted_secret_key, tgUserId);
     const msg = await ctx.reply(exportMessage(secretKey), {
-      parse_mode: "MarkdownV2",
+      parse_mode: "HTML",
     });
     autoDelete(ctx, msg.message_id, 60_000);
   });
@@ -132,13 +132,13 @@ function registerHandlers(bot: Bot) {
     await upsertWallet(tgUserId, tgUsername, wallet.publicKey, encrypted);
 
     const msg = await ctx.reply(welcomeMessage(wallet.publicKey, wallet.secretKey), {
-      parse_mode: "MarkdownV2",
+      parse_mode: "HTML",
     });
     autoDelete(ctx, msg.message_id, 120_000);
   });
 
   bot.command("help", async (ctx) => {
-    await ctx.reply(helpMessage(), { parse_mode: "MarkdownV2" });
+    await ctx.reply(helpMessage(), { parse_mode: "HTML" });
   });
 
   bot.command("send", async (ctx) => {
@@ -147,7 +147,7 @@ function registerHandlers(bot: Bot) {
     if (!rest) {
       await ctx.reply(
         escapeMarkdown("Usage: /send 0.5 SOL to @username [privately]\n\nOr just type naturally: \"send 0.5 sol to @alice privately\""),
-        { parse_mode: "MarkdownV2" }
+        { parse_mode: "HTML" }
       );
       return;
     }
@@ -159,7 +159,7 @@ function registerHandlers(bot: Bot) {
     const rest = text.replace(/^\/claim\s*/i, "").trim();
     if (!rest) {
       await ctx.reply(errorMessage("Paste a hoppy.cash claim link after /claim"), {
-        parse_mode: "MarkdownV2",
+        parse_mode: "HTML",
       });
       return;
     }
@@ -169,7 +169,7 @@ function registerHandlers(bot: Bot) {
   bot.command("history", async (ctx) => {
     const tgUserId = ctx.from!.id;
     const payments = await getPaymentsByUser(tgUserId, 15);
-    await ctx.reply(historyMessage(payments), { parse_mode: "MarkdownV2" });
+    await ctx.reply(historyMessage(payments), { parse_mode: "HTML" });
   });
 
   bot.command("recall", async (ctx) => {
@@ -177,7 +177,7 @@ function registerHandlers(bot: Bot) {
     const idMatch = text.match(/(\d+)/);
     if (!idMatch) {
       await ctx.reply(errorMessage("Usage: /recall <payment_id>\n\nCheck /history for payment IDs."), {
-        parse_mode: "MarkdownV2",
+        parse_mode: "HTML",
       });
       return;
     }
@@ -191,7 +191,7 @@ function registerHandlers(bot: Bot) {
 
     // Skip unrecognized slash commands
     if (rawText.startsWith("/")) {
-      await ctx.reply(helpMessage(), { parse_mode: "MarkdownV2" });
+      await ctx.reply(helpMessage(), { parse_mode: "HTML" });
       return;
     }
 
@@ -205,7 +205,7 @@ function registerHandlers(bot: Bot) {
         return;
       } else if (lower === "no" || lower === "n" || lower === "cancel") {
         pendingConfirmations.delete(tgUserId);
-        await ctx.reply(escapeMarkdown("Payment cancelled."), { parse_mode: "MarkdownV2" });
+        await ctx.reply(escapeMarkdown("Payment cancelled."), { parse_mode: "HTML" });
         return;
       }
       // Not a yes/no -- clear stale confirmation and continue
@@ -217,7 +217,7 @@ function registerHandlers(bot: Bot) {
     if (sanitized.blocked) {
       await ctx.reply(
         escapeMarkdown(sanitized.reason || "Message could not be processed."),
-        { parse_mode: "MarkdownV2" }
+        { parse_mode: "HTML" }
       );
       return;
     }
@@ -247,26 +247,26 @@ function registerHandlers(bot: Bot) {
         break;
       case "HISTORY": {
         const payments = await getPaymentsByUser(tgUserId, 15);
-        await ctx.reply(historyMessage(payments), { parse_mode: "MarkdownV2" });
+        await ctx.reply(historyMessage(payments), { parse_mode: "HTML" });
         break;
       }
       case "RECALL":
         if (parsed.paymentId) await handleRecall(ctx, parsed.paymentId);
-        else await ctx.reply(errorMessage("Which payment? Use /recall <id> or check /history."), { parse_mode: "MarkdownV2" });
+        else await ctx.reply(errorMessage("Which payment? Use /recall <id> or check /history."), { parse_mode: "HTML" });
         break;
       case "EXPORT": {
         const wallet = await getWallet(tgUserId);
         if (!wallet) {
-          await ctx.reply(errorMessage("No wallet found. Use /start first."), { parse_mode: "MarkdownV2" });
+          await ctx.reply(errorMessage("No wallet found. Use /start first."), { parse_mode: "HTML" });
           return;
         }
         const sk = decryptSecretKey(wallet.encrypted_secret_key, tgUserId);
-        const msg = await ctx.reply(exportMessage(sk), { parse_mode: "MarkdownV2" });
+        const msg = await ctx.reply(exportMessage(sk), { parse_mode: "HTML" });
         autoDelete(ctx, msg.message_id, 60_000);
         break;
       }
       case "HELP":
-        await ctx.reply(helpMessage(), { parse_mode: "MarkdownV2" });
+        await ctx.reply(helpMessage(), { parse_mode: "HTML" });
         break;
       default:
         await ctx.reply(
@@ -274,7 +274,7 @@ function registerHandlers(bot: Bot) {
             "I didn't understand that. Type /help to see what I can do, or just tell me what you need!\n\n" +
             "Examples:\n• \"send 0.5 sol to @alice privately\"\n• \"what's my balance?\"\n• Paste a hoppy.cash claim link"
           ),
-          { parse_mode: "MarkdownV2" }
+          { parse_mode: "HTML" }
         );
     }
   });
@@ -287,14 +287,14 @@ async function handleBalance(ctx: Context) {
   const wallet = await getWallet(tgUserId);
   if (!wallet) {
     await ctx.reply(errorMessage("No wallet found. Use /start first."), {
-      parse_mode: "MarkdownV2",
+      parse_mode: "HTML",
     });
     return;
   }
 
   const balance = await getBalance(wallet.wallet_address);
   await ctx.reply(balanceMessage(wallet.wallet_address, balance), {
-    parse_mode: "MarkdownV2",
+    parse_mode: "HTML",
   });
 }
 
@@ -305,7 +305,7 @@ async function handleSend(ctx: Context, text: string) {
   if (parsed.intent !== "SEND" || !parsed.amount || !parsed.recipient) {
     await ctx.reply(
       escapeMarkdown("I couldn't parse that. Try: \"send 0.5 SOL to @username privately\""),
-      { parse_mode: "MarkdownV2" }
+      { parse_mode: "HTML" }
     );
     return;
   }
@@ -323,7 +323,7 @@ async function handleSend(ctx: Context, text: string) {
         `⚠️ Confirm: Send ${parsed.amount} SOL to ${parsed.recipient} ${privacyLabel}?\n\n` +
         `Reply "yes" to confirm or "no" to cancel. Expires in 60 seconds.`
       ),
-      { parse_mode: "MarkdownV2" }
+      { parse_mode: "HTML" }
     );
     return;
   }
@@ -336,14 +336,14 @@ async function executeSend(ctx: Context, text: string) {
   const parsed = await parseIntent(text);
 
   if (parsed.intent !== "SEND" || !parsed.amount || !parsed.recipient) {
-    await ctx.reply(errorMessage("Failed to re-parse send command."), { parse_mode: "MarkdownV2" });
+    await ctx.reply(errorMessage("Failed to re-parse send command."), { parse_mode: "HTML" });
     return;
   }
 
   const wallet = await getWallet(tgUserId);
   if (!wallet) {
     await ctx.reply(errorMessage("No wallet found. Use /start first."), {
-      parse_mode: "MarkdownV2",
+      parse_mode: "HTML",
     });
     return;
   }
@@ -353,7 +353,7 @@ async function executeSend(ctx: Context, text: string) {
 
   if (token !== "SOL") {
     await ctx.reply(errorMessage("Only SOL is supported in the bot for now."), {
-      parse_mode: "MarkdownV2",
+      parse_mode: "HTML",
     });
     return;
   }
@@ -365,14 +365,14 @@ async function executeSend(ctx: Context, text: string) {
   if (balance < amountLamports + MIN_BUFFER) {
     await ctx.reply(
       errorMessage(`Insufficient balance. You have ${lamportsToSol(balance).toFixed(4)} SOL but need ~${lamportsToSol(amountLamports + MIN_BUFFER).toFixed(4)} SOL.`),
-      { parse_mode: "MarkdownV2" }
+      { parse_mode: "HTML" }
     );
     return;
   }
 
   await ctx.reply(
     sendConfirmMessage(parsed.amount, token, parsed.recipient, privacy),
-    { parse_mode: "MarkdownV2" }
+    { parse_mode: "HTML" }
   );
 
   try {
@@ -433,12 +433,12 @@ async function executeSend(ctx: Context, text: string) {
         try {
           await ctx.api.sendMessage(
             recipientWallet.tg_user_id,
-            `🐰 *You received a private payment\\!*\n\n` +
-            `Amount: *${parsed.amount} SOL*\n` +
-            `From: ${ctx.from?.username ? `@${escapeMarkdown(ctx.from.username)}` : "someone"}\n\n` +
-            `Claim link:\n\`${claimUrl}\`\n\n` +
-            `Or paste this link on hoppy\\.cash/claim to claim with any wallet\\.`,
-            { parse_mode: "MarkdownV2" }
+            `🐰 <b>You received a private payment!</b>\n\n` +
+            `Amount: <b>${parsed.amount} SOL</b>\n` +
+            `From: ${ctx.from?.username ? `@${ctx.from.username}` : "someone"}\n\n` +
+            `Claim link:\n<code>${claimUrl}</code>\n\n` +
+            `Or paste this link on hoppy.cash/claim to claim with any wallet.`,
+            { parse_mode: "HTML" }
           );
           delivered = true;
         } catch {
@@ -471,18 +471,18 @@ async function executeSend(ctx: Context, text: string) {
 
     await ctx.reply(
       sendSuccessMessage(parsed.amount, token, recipientId, claimUrl, delivered),
-      { parse_mode: "MarkdownV2" }
+      { parse_mode: "HTML" }
     );
 
     if (!delivered && recipientId.startsWith("@")) {
       await ctx.reply(
         escapeMarkdown(`Note: ${recipientId} hasn't started the bot yet. The payment will be delivered when they do. Or share the link above manually.`),
-        { parse_mode: "MarkdownV2" }
+        { parse_mode: "HTML" }
       );
     }
   } catch (err) {
     const msg = err instanceof Error ? err.message : "Payment failed";
-    await ctx.reply(errorMessage(msg), { parse_mode: "MarkdownV2" });
+    await ctx.reply(errorMessage(msg), { parse_mode: "HTML" });
   }
 }
 
@@ -491,7 +491,7 @@ async function handleClaim(ctx: Context, urlOrText: string) {
   const wallet = await getWallet(tgUserId);
   if (!wallet) {
     await ctx.reply(errorMessage("No wallet found. Use /start first."), {
-      parse_mode: "MarkdownV2",
+      parse_mode: "HTML",
     });
     return;
   }
@@ -499,12 +499,12 @@ async function handleClaim(ctx: Context, urlOrText: string) {
   const note = extractDoubleHopNoteFromUrl(urlOrText);
   if (!note) {
     await ctx.reply(errorMessage("Invalid claim link. Make sure you pasted the full hoppy.cash URL."), {
-      parse_mode: "MarkdownV2",
+      parse_mode: "HTML",
     });
     return;
   }
 
-  await ctx.reply(escapeMarkdown("Claiming payment..."), { parse_mode: "MarkdownV2" });
+  await ctx.reply(escapeMarkdown("Claiming payment..."), { parse_mode: "HTML" });
 
   try {
     const baseUrl = process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000";
@@ -524,11 +524,11 @@ async function handleClaim(ctx: Context, urlOrText: string) {
     }
 
     await ctx.reply(claimSuccessMessage(result.amountReceived || note.amount), {
-      parse_mode: "MarkdownV2",
+      parse_mode: "HTML",
     });
   } catch (err) {
     const msg = err instanceof Error ? err.message : "Claim failed";
-    await ctx.reply(errorMessage(msg), { parse_mode: "MarkdownV2" });
+    await ctx.reply(errorMessage(msg), { parse_mode: "HTML" });
   }
 }
 
@@ -537,7 +537,7 @@ async function handleRecall(ctx: Context, paymentId: number) {
   const wallet = await getWallet(tgUserId);
   if (!wallet) {
     await ctx.reply(errorMessage("No wallet found. Use /start first."), {
-      parse_mode: "MarkdownV2",
+      parse_mode: "HTML",
     });
     return;
   }
@@ -547,19 +547,19 @@ async function handleRecall(ctx: Context, paymentId: number) {
 
   if (!payment) {
     await ctx.reply(errorMessage(`Payment #${paymentId} not found. Check /history.`), {
-      parse_mode: "MarkdownV2",
+      parse_mode: "HTML",
     });
     return;
   }
 
   if (payment.status !== "pending") {
     await ctx.reply(errorMessage(`Payment #${paymentId} is already ${payment.status}.`), {
-      parse_mode: "MarkdownV2",
+      parse_mode: "HTML",
     });
     return;
   }
 
-  await ctx.reply(escapeMarkdown("Recalling payment..."), { parse_mode: "MarkdownV2" });
+  await ctx.reply(escapeMarkdown("Recalling payment..."), { parse_mode: "HTML" });
 
   try {
     const note = extractDoubleHopNoteFromUrl(payment.claim_url);
@@ -577,7 +577,7 @@ async function handleRecall(ctx: Context, paymentId: number) {
     if (transferAmount <= 0) {
       await updatePaymentStatus(paymentId, "claimed");
       await ctx.reply(errorMessage("No funds left - payment may have already been claimed."), {
-        parse_mode: "MarkdownV2",
+        parse_mode: "HTML",
       });
       return;
     }
@@ -598,11 +598,11 @@ async function handleRecall(ctx: Context, paymentId: number) {
 
     await ctx.reply(
       escapeMarkdown(`✅ Recalled ${lamportsToSol(transferAmount).toFixed(4)} SOL from payment #${paymentId} back to your wallet.`),
-      { parse_mode: "MarkdownV2" }
+      { parse_mode: "HTML" }
     );
   } catch (err) {
     const msg = err instanceof Error ? err.message : "Recall failed";
-    await ctx.reply(errorMessage(msg), { parse_mode: "MarkdownV2" });
+    await ctx.reply(errorMessage(msg), { parse_mode: "HTML" });
   }
 }
 
@@ -613,11 +613,11 @@ async function deliverPendingPayments(ctx: Context, username: string) {
   for (const payment of pending) {
     try {
       await ctx.reply(
-        `🎉 *Pending payment found\\!*\n\n` +
-        `Amount: *${lamportsToSol(payment.amount).toFixed(4)} SOL*\n\n` +
-        `Claim link:\n\`${payment.claim_url}\`\n\n` +
-        `Use /claim followed by the link above, or paste it to auto\\-claim\\.`,
-        { parse_mode: "MarkdownV2" }
+        `🎉 <b>Pending payment found!</b>\n\n` +
+        `Amount: <b>${lamportsToSol(payment.amount).toFixed(4)} SOL</b>\n\n` +
+        `Claim link:\n<code>${payment.claim_url}</code>\n\n` +
+        `Use /claim followed by the link above, or paste it to auto-claim.`,
+        { parse_mode: "HTML" }
       );
       await updatePaymentStatus(payment.id, "delivered");
     } catch {

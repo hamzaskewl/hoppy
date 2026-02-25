@@ -1,82 +1,86 @@
 import { lamportsToSol } from "./wallet";
 
+function esc(text: string): string {
+  return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
 export function welcomeMessage(address: string, secretKey: string): string {
   return [
-    "Welcome to *Hoppy* \\- Private payments on Solana\\! 🐰",
+    "Welcome to <b>Hoppy</b> - Private payments on Solana!",
     "",
     "Your wallet has been created:",
-    `\`${address}\``,
+    `<code>${esc(address)}</code>`,
     "",
-    "Your private key \\(SAVE THIS NOW\\):",
-    `\`${secretKey}\``,
+    "Your private key (SAVE THIS NOW):",
+    `<code>${esc(secretKey)}</code>`,
     "",
-    "⚠️ *This message will self\\-destruct in 2 minutes\\.*",
-    "Write down your key and delete this message\\.",
+    "⚠️ <b>This message will self-destruct in 2 minutes.</b>",
+    "Write down your key and delete this message.",
     "",
-    "Fund your wallet by sending SOL to the address above\\.",
-    "Type /help to see what I can do\\.",
+    "Fund your wallet by sending SOL to the address above.",
+    "Type /help to see what I can do.",
   ].join("\n");
 }
 
 export function walletExistsMessage(address: string): string {
   return [
     "You already have a wallet:",
-    `\`${address}\``,
+    `<code>${esc(address)}</code>`,
     "",
-    "Use /export to see your private key\\.",
-    "Use /newwallet to generate a fresh one\\.",
+    "Use /export to see your private key.",
+    "Use /newwallet to generate a fresh one.",
   ].join("\n");
 }
 
 export function balanceMessage(address: string, lamports: number): string {
   const sol = lamportsToSol(lamports).toFixed(4);
   return [
-    `*Wallet Balance*`,
+    `<b>Wallet Balance</b>`,
     "",
-    `Address: \`${address}\``,
-    `Balance: *${sol} SOL*`,
+    `Address: <code>${esc(address)}</code>`,
+    `Balance: <b>${sol} SOL</b>`,
     "",
     lamports < 10_000_000
-      ? "Fund your wallet by sending SOL to the address above\\."
-      : "Use /send to create a private payment\\.",
+      ? "Fund your wallet by sending SOL to the address above."
+      : "Use /send to create a private payment.",
   ].join("\n");
 }
 
 export function exportMessage(secretKey: string): string {
   return [
-    "🔑 *Your Private Key*",
+    "🔑 <b>Your Private Key</b>",
     "",
-    `\`${secretKey}\``,
+    `<code>${esc(secretKey)}</code>`,
     "",
-    "Import this into Phantom or Solflare for self\\-custody\\.",
-    "⚠️ *This message will self\\-destruct in 60 seconds\\.*",
+    "Import this into Phantom or Solflare for self-custody.",
+    "⚠️ <b>This message will self-destruct in 60 seconds.</b>",
   ].join("\n");
 }
 
 export function helpMessage(): string {
   return [
-    "🐰 *Hoppy Bot \\- Commands*",
+    "🐰 <b>Hoppy Bot - Commands</b>",
     "",
-    "*Basics:*",
-    "/start \\- Create your wallet",
-    "/balance \\- Check your balance",
-    "/export \\- Show your private key",
-    "/newwallet \\- Generate a new wallet",
+    "<b>Basics:</b>",
+    "/start - Create your wallet",
+    "/balance - Check your balance",
+    "/export - Show your private key",
+    "/newwallet - Generate a new wallet",
     "",
-    "*Payments:*",
-    '/send \\- Send a private payment',
-    '  Example: `send 0.5 sol to @alice privately`',
-    "/claim \\- Claim a payment link",
-    "  Or just paste any hoppy\\.cash link",
-    "/recall \\- Get back unclaimed funds",
+    "<b>Payments:</b>",
+    "/send - Send a private payment",
+    "  Example: <code>send 0.5 sol to @alice privately</code>",
+    "/claim - Claim a payment link",
+    "  Or just paste any hoppy.cash link",
+    "/recall - Get back unclaimed funds",
     "",
-    "*History:*",
-    "/history \\- View your payment history",
+    "<b>History:</b>",
+    "/history - View your payment history",
     "",
-    "*Tips:*",
-    "\\- You can type naturally: \"pay @bob 1 SOL\"",
-    "\\- Add \"privately\" for sender privacy",
-    '\\- Paste any hoppy\\.cash link to auto\\-claim',
+    "<b>Tips:</b>",
+    '- You can type naturally: "pay @bob 1 SOL"',
+    '- Add "privately" for sender privacy',
+    "- Paste any hoppy.cash link to auto-claim",
   ].join("\n");
 }
 
@@ -86,15 +90,15 @@ export function sendConfirmMessage(
   recipient: string,
   privacy: string,
 ): string {
-  const privacyLabel = privacy === "private" ? "Private \\(sender hidden\\)" : "Basic \\(cheaper\\)";
+  const privacyLabel = privacy === "private" ? "Private (sender hidden)" : "Basic (cheaper)";
   return [
-    "*Payment Summary*",
+    "<b>Payment Summary</b>",
     "",
-    `Amount: *${amount} ${token}*`,
-    `Recipient: *${escapeMarkdown(recipient)}*`,
-    `Privacy: *${privacyLabel}*`,
+    `Amount: <b>${amount} ${esc(token)}</b>`,
+    `Recipient: <b>${esc(recipient)}</b>`,
+    `Privacy: <b>${esc(privacyLabel)}</b>`,
     "",
-    "Processing\\.\\.\\.",
+    "Processing...",
   ].join("\n");
 }
 
@@ -106,36 +110,36 @@ export function sendSuccessMessage(
   delivered: boolean,
 ): string {
   const deliveryStatus = delivered
-    ? `Sent to *${escapeMarkdown(recipient)}* via DM\\.`
-    : "Link returned below \\(share it yourself\\)\\.";
+    ? `Sent to <b>${esc(recipient)}</b> via DM.`
+    : "Link returned below (share it yourself).";
 
   return [
-    "✅ *Payment Created\\!*",
+    "✅ <b>Payment Created!</b>",
     "",
-    `Amount: *${amount} ${token}*`,
+    `Amount: <b>${amount} ${esc(token)}</b>`,
     deliveryStatus,
     "",
     `Claim link:`,
-    `\`${claimUrl}\``,
+    `<code>${esc(claimUrl)}</code>`,
   ].join("\n");
 }
 
 export function claimSuccessMessage(amountLamports: number): string {
   const sol = lamportsToSol(amountLamports).toFixed(4);
-  return `✅ *Claimed ${sol} SOL* to your Hoppy wallet\\!`;
+  return `✅ <b>Claimed ${sol} SOL</b> to your Hoppy wallet!`;
 }
 
 export function pendingPaymentNotification(
   amount: number,
   senderUsername: string | undefined,
 ): string {
-  const from = senderUsername ? `@${escapeMarkdown(senderUsername)}` : "someone";
+  const from = senderUsername ? `@${esc(senderUsername)}` : "someone";
   const sol = lamportsToSol(amount).toFixed(4);
   return [
-    `🎉 *You received a payment\\!*`,
+    `🎉 <b>You received a payment!</b>`,
     "",
     `${sol} SOL from ${from}`,
-    "It has been auto\\-claimed to your wallet\\.",
+    "It has been auto-claimed to your wallet.",
   ].join("\n");
 }
 
@@ -150,10 +154,10 @@ export function historyMessage(
   }>,
 ): string {
   if (payments.length === 0) {
-    return "No payment history yet\\. Use /send to create your first payment\\!";
+    return "No payment history yet. Use /send to create your first payment!";
   }
 
-  const lines = ["*Payment History*", ""];
+  const lines = ["<b>Payment History</b>", ""];
   for (const p of payments) {
     const sol = lamportsToSol(p.amount).toFixed(4);
     const date = new Date(p.created_at).toLocaleDateString();
@@ -162,9 +166,9 @@ export function historyMessage(
       p.status === "recalled" ? "↩️" :
       p.status === "expired" ? "⏰" : "⏳";
     const privacy = p.sender_privacy === "private" ? "🔒" : "👁";
-    
+
     lines.push(
-      `${statusIcon} \\#${p.id} \\| ${sol} SOL → ${escapeMarkdown(p.recipient_identifier)} ${privacy} \\(${escapeMarkdown(date)}\\)`
+      `${statusIcon} #${p.id} | ${sol} SOL → ${esc(p.recipient_identifier)} ${privacy} (${esc(date)})`
     );
   }
 
@@ -172,9 +176,7 @@ export function historyMessage(
 }
 
 export function errorMessage(msg: string): string {
-  return `❌ ${escapeMarkdown(msg)}`;
+  return `❌ ${esc(msg)}`;
 }
 
-export function escapeMarkdown(text: string): string {
-  return text.replace(/([_*\[\]()~`>#+\-=|{}.!\\])/g, "\\$1");
-}
+export { esc as escapeMarkdown };
