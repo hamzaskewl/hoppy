@@ -23,12 +23,12 @@ export async function POST(request: NextRequest) {
     await ensureInitialized();
 
     const bot = getBot();
-    const handler = webhookCallback(bot, "next-js", {
+    const handler = webhookCallback(bot, "std/http", {
       timeoutMilliseconds: 60_000,
       secretToken: secret,
     });
 
-    return handler(request);
+    return handler(request) as Promise<Response>;
   } catch (error) {
     console.error("[TG Webhook] Error:", error);
     return NextResponse.json({ ok: true });
