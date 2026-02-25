@@ -179,4 +179,108 @@ export function errorMessage(msg: string): string {
   return `❌ ${esc(msg)}`;
 }
 
+// ============ New UI Messages ============
+
+export function startMessage(address: string, balanceSol: string): string {
+  return [
+    `🐰 <b>Hoppy</b> — Private Payments on Solana`,
+    ``,
+    `<b>Your Wallet</b>`,
+    `<code>${esc(address)}</code>`,
+    ``,
+    `💰 Balance: <b>${balanceSol} SOL</b>`,
+    ``,
+    `Tap a button below or just type naturally!`,
+  ].join("\n");
+}
+
+export function startNewUserMessage(
+  address: string,
+  secretKey: string,
+): string {
+  return [
+    `🐰 <b>Welcome to Hoppy!</b>`,
+    ``,
+    `Your wallet has been created:`,
+    `<code>${esc(address)}</code>`,
+    ``,
+    `🔑 Your private key (tap to reveal):`,
+    `<tg-spoiler>${esc(secretKey)}</tg-spoiler>`,
+    ``,
+    `⚠️ <b>Save this key securely!</b>`,
+    `This message will self-destruct in 2 minutes.`,
+    ``,
+    `Fund your wallet by sending SOL to your address above.`,
+  ].join("\n");
+}
+
+export function sendFlowPrivacyMessage(): string {
+  return [
+    `💸 <b>New Payment</b>`,
+    ``,
+    `Choose your privacy level:`,
+    ``,
+    `🔒 <b>Private</b> — Sender hidden via ZK proof`,
+    `  Fee: ~0.006 SOL + 0.35%`,
+    ``,
+    `⚡ <b>Quick</b> — Fast & cheap, sender visible`,
+    `  Fee: ~0.000005 SOL`,
+  ].join("\n");
+}
+
+export function sendFlowRecipientMessage(privacy: string): string {
+  const label = privacy === "private" ? "🔒 Private" : "⚡ Quick";
+  return [
+    `💸 <b>New Payment</b> (${label})`,
+    ``,
+    `Who do you want to send to?`,
+    ``,
+    `Type the recipient's <b>@username</b>:`,
+  ].join("\n");
+}
+
+export function sendFlowAmountMessage(
+  privacy: string,
+  recipient: string,
+): string {
+  const label = privacy === "private" ? "🔒 Private" : "⚡ Quick";
+  return [
+    `💸 <b>New Payment</b> (${label})`,
+    ``,
+    `To: <b>${esc(recipient)}</b>`,
+    ``,
+    `How much SOL do you want to send?`,
+    `Type the amount (e.g. <code>0.5</code>):`,
+  ].join("\n");
+}
+
+export function sendFlowConfirmMessage(
+  amount: number,
+  recipient: string,
+  privacy: string,
+): string {
+  const label =
+    privacy === "private"
+      ? "🔒 Private (sender hidden)"
+      : "⚡ Quick (sender visible)";
+  return [
+    `💸 <b>Confirm Payment</b>`,
+    ``,
+    `Amount: <b>${amount} SOL</b>`,
+    `To: <b>${esc(recipient)}</b>`,
+    `Mode: <b>${label}</b>`,
+    ``,
+    `Tap ✅ to confirm or ❌ to cancel.`,
+  ].join("\n");
+}
+
+export function settingsMessage(): string {
+  return [
+    `⚙️ <b>Settings</b>`,
+    ``,
+    `🔑 <b>Export</b> — View your private key`,
+    `🆕 <b>New Wallet</b> — Generate a fresh wallet`,
+  ].join("\n");
+}
+
 export { esc as escapeMarkdown };

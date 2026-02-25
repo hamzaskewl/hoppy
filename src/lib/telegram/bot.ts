@@ -1,4 +1,4 @@
-import { Bot, Context } from "grammy";
+import { Bot, Context, InlineKeyboard } from "grammy";
 import { parseIntent } from "./intents";
 import { sanitizeInput, checkLLMRateLimit } from "./sanitize";
 import {
@@ -20,19 +20,48 @@ import {
   updatePaymentStatus,
 } from "./db";
 import {
-  welcomeMessage,
-  walletExistsMessage,
+  startMessage,
+  startNewUserMessage,
   balanceMessage,
   exportMessage,
   helpMessage,
   sendConfirmMessage,
   sendSuccessMessage,
+  sendFlowPrivacyMessage,
+  sendFlowRecipientMessage,
+  sendFlowAmountMessage,
+  sendFlowConfirmMessage,
+  settingsMessage,
   claimSuccessMessage,
   historyMessage,
   errorMessage,
   escapeMarkdown,
 } from "./messages";
-import { Connection, Transaction, SystemProgram, PublicKey, sendAndConfirmTransaction } from "@solana/web3.js";
+import {
+  mainMenuKeyboard,
+  sendPrivacyKeyboard,
+  confirmSendKeyboard,
+  settingsKeyboard,
+  backToHomeKeyboard,
+  cancelKeyboard,
+  historyWithRecallKeyboard,
+  CB,
+} from "./keyboards";
+import {
+  getSendFlow,
+  setSendFlow,
+  clearSendFlow,
+  getPendingConfirmation,
+  setPendingConfirmation,
+  clearPendingConfirmation,
+} from "./state";
+import {
+  Connection,
+  Transaction,
+  SystemProgram,
+  PublicKey,
+  sendAndConfirmTransaction,
+} from "@solana/web3.js";
 import {
   generateCompositeSecret,
   createDoubleHopClaimUrl,
@@ -40,19 +69,17 @@ import {
   decodeCompositeSecret,
 } from "@/lib/privacy/privacy-cash-adapter";
 
-const RPC_URL = process.env.NEXT_PUBLIC_SOLANA_RPC_URL || "https://api.devnet.solana.com";
-const APP_URL = process.env.NEXT_PUBLIC_APP_URL || (process.env.RAILWAY_PUBLIC_DOMAIN ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}` : "http://localhost:3000");
+const RPC_URL =
+  process.env.NEXT_PUBLIC_SOLANA_RPC_URL || "https://api.devnet.solana.com";
+const APP_URL =
+  process.env.NEXT_PUBLIC_APP_URL ||
+  (process.env.RAILWAY_PUBLIC_DOMAIN
+    ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}`
+    : "http://localhost:3000");
 
 console.log("[TG Bot] APP_URL resolved to:", APP_URL);
 
-// SOL threshold above which we require confirmation before sending
 const SEND_CONFIRM_THRESHOLD_SOL = 1;
-
-// In-memory pending confirmations: tgUserId -> pending send details
-const pendingConfirmations = new Map<number, {
-  text: string;
-  expiresAt: number;
-}>();
 
 function createBot(): Bot {
   const token = process.env.TELEGRAM_BOT_TOKEN;
@@ -66,8 +93,22 @@ export function getBot(): Bot {
   if (!botInstance) {
     botInstance = createBot();
     registerHandlers(botInstance);
+    setupCommands(botInstance).catch((err) =>
+      console.error("[TG Bot] Failed to set commands:", err)
+    );
   }
   return botInstance;
+}
+
+async function setupCommands(bot: Bot) {
+  await bot.api.setMyCommands([
+    { command: "start", description: "Open wallet & main menu" },
+    { command: "send", description: "Send SOL to someone" },
+    { command: "balance", description: "Check your balance" },
+    { command: "history", description: "View payment history" },
+    { command: "claim", description: "Claim a payment link" },
+    { command: "help", description: "Show help & commands" },
+  ]);
 }
 
 async function autoDelete(ctx: Context, messageId: number, delayMs: number) {
@@ -80,28 +121,75 @@ async function autoDelete(ctx: Context, messageId: number, delayMs: number) {
   }, delayMs);
 }
 
+/** Send the home screen (photo + interactive menu) */
+async function sendHomeScreen(
+  ctx: Context,
+  address: string,
+  balanceSol: string
+) {
+  await ctx.replyWithPhoto(`${APP_URL}/hopbunny.png`);
+  await ctx.reply(startMessage(address, balanceSol), {
+    parse_mode: "HTML",
+    reply_markup: mainMenuKeyboard(),
+  });
+}
+
+/** Edit an existing message back to home screen */
+async function editToHomeScreen(ctx: Context) {
+  const wallet = await getWallet(ctx.from!.id);
+  if (!wallet) return;
+  let balanceSol = "—";
+  try {
+    const bal = await getBalance(wallet.wallet_address);
+    balanceSol = lamportsToSol(bal).toFixed(4);
+  } catch {
+    // Balance fetch failed, show placeholder
+  }
+  await ctx.editMessageText(startMessage(wallet.wallet_address, balanceSol), {
+    parse_mode: "HTML",
+    reply_markup: mainMenuKeyboard(),
+  });
+}
+
+// ================================================================
+// Handler Registration
+// ================================================================
+
 function registerHandlers(bot: Bot) {
-  // /start - Create wallet
+  // ============ Commands ============
+
   bot.command("start", async (ctx) => {
     const tgUserId = ctx.from!.id;
     const tgUsername = ctx.from?.username;
 
     const existing = await getWallet(tgUserId);
+
     if (existing) {
-      await ctx.reply(walletExistsMessage(existing.wallet_address), {
-        parse_mode: "HTML",
-      });
+      let balanceSol = "—";
+      try {
+        const bal = await getBalance(existing.wallet_address);
+        balanceSol = lamportsToSol(bal).toFixed(4);
+      } catch {
+        // Balance fetch failed
+      }
+      await sendHomeScreen(ctx, existing.wallet_address, balanceSol);
       if (tgUsername) await deliverPendingPayments(ctx, tgUsername);
       return;
     }
 
+    // New user
     const wallet = generateWallet();
     const encrypted = encryptSecretKey(wallet.secretKey, tgUserId);
     await upsertWallet(tgUserId, tgUsername, wallet.publicKey, encrypted);
 
-    const msg = await ctx.reply(welcomeMessage(wallet.publicKey, wallet.secretKey), {
-      parse_mode: "HTML",
-    });
+    await ctx.replyWithPhoto(`${APP_URL}/hopbunny.png`);
+    const msg = await ctx.reply(
+      startNewUserMessage(wallet.publicKey, wallet.secretKey),
+      {
+        parse_mode: "HTML",
+        reply_markup: mainMenuKeyboard(),
+      }
+    );
     autoDelete(ctx, msg.message_id, 120_000);
 
     if (tgUsername) await deliverPendingPayments(ctx, tgUsername);
@@ -118,7 +206,6 @@ function registerHandlers(bot: Bot) {
       });
       return;
     }
-
     const secretKey = decryptSecretKey(wallet.encrypted_secret_key, tgUserId);
     const msg = await ctx.reply(exportMessage(secretKey), {
       parse_mode: "HTML",
@@ -129,14 +216,17 @@ function registerHandlers(bot: Bot) {
   bot.command("newwallet", async (ctx) => {
     const tgUserId = ctx.from!.id;
     const tgUsername = ctx.from?.username;
-
     const wallet = generateWallet();
     const encrypted = encryptSecretKey(wallet.secretKey, tgUserId);
     await upsertWallet(tgUserId, tgUsername, wallet.publicKey, encrypted);
 
-    const msg = await ctx.reply(welcomeMessage(wallet.publicKey, wallet.secretKey), {
-      parse_mode: "HTML",
-    });
+    const msg = await ctx.reply(
+      startNewUserMessage(wallet.publicKey, wallet.secretKey),
+      {
+        parse_mode: "HTML",
+        reply_markup: mainMenuKeyboard(),
+      }
+    );
     autoDelete(ctx, msg.message_id, 120_000);
   });
 
@@ -148,10 +238,17 @@ function registerHandlers(bot: Bot) {
     const text = ctx.message?.text || "";
     const rest = text.replace(/^\/send\s*/i, "").trim();
     if (!rest) {
-      await ctx.reply(
-        escapeMarkdown("Usage: /send 0.5 SOL to @username [privately]\n\nOr just type naturally: \"send 0.5 sol to @alice privately\""),
-        { parse_mode: "HTML" }
-      );
+      // No args — start interactive send flow
+      clearSendFlow(ctx.from!.id);
+      const replyMsg = await ctx.reply(sendFlowPrivacyMessage(), {
+        parse_mode: "HTML",
+        reply_markup: sendPrivacyKeyboard(),
+      });
+      setSendFlow(ctx.from!.id, {
+        step: "awaiting_privacy",
+        startedAt: Date.now(),
+        messageId: replyMsg.message_id,
+      });
       return;
     }
     await handleSend(ctx, `send ${rest}`);
@@ -161,9 +258,10 @@ function registerHandlers(bot: Bot) {
     const text = ctx.message?.text || "";
     const rest = text.replace(/^\/claim\s*/i, "").trim();
     if (!rest) {
-      await ctx.reply(errorMessage("Paste a hoppy.cash claim link after /claim"), {
-        parse_mode: "HTML",
-      });
+      await ctx.reply(
+        errorMessage("Paste a hoppy.cash claim link after /claim"),
+        { parse_mode: "HTML" }
+      );
       return;
     }
     await handleClaim(ctx, rest);
@@ -172,22 +270,222 @@ function registerHandlers(bot: Bot) {
   bot.command("history", async (ctx) => {
     const tgUserId = ctx.from!.id;
     const payments = await getPaymentsByUser(tgUserId, 15);
-    await ctx.reply(historyMessage(payments), { parse_mode: "HTML" });
+    await ctx.reply(historyMessage(payments), {
+      parse_mode: "HTML",
+      reply_markup: historyWithRecallKeyboard(payments),
+    });
   });
 
   bot.command("recall", async (ctx) => {
     const text = ctx.message?.text || "";
     const idMatch = text.match(/(\d+)/);
     if (!idMatch) {
-      await ctx.reply(errorMessage("Usage: /recall <payment_id>\n\nCheck /history for payment IDs."), {
-        parse_mode: "HTML",
-      });
+      await ctx.reply(
+        errorMessage("Usage: /recall <payment_id>\n\nCheck /history for IDs."),
+        { parse_mode: "HTML" }
+      );
       return;
     }
     await handleRecall(ctx, parseInt(idMatch[1]));
   });
 
-  // Free-text NLP handler
+  // ============ Callback Queries — Main Menu ============
+
+  bot.callbackQuery(CB.SEND, async (ctx) => {
+    await ctx.answerCallbackQuery();
+    clearSendFlow(ctx.from.id);
+    setSendFlow(ctx.from.id, {
+      step: "awaiting_privacy",
+      startedAt: Date.now(),
+      messageId: ctx.callbackQuery.message?.message_id,
+    });
+    await ctx.editMessageText(sendFlowPrivacyMessage(), {
+      parse_mode: "HTML",
+      reply_markup: sendPrivacyKeyboard(),
+    });
+  });
+
+  bot.callbackQuery(CB.HISTORY, async (ctx) => {
+    await ctx.answerCallbackQuery();
+    const payments = await getPaymentsByUser(ctx.from.id, 15);
+    await ctx.editMessageText(historyMessage(payments), {
+      parse_mode: "HTML",
+      reply_markup: historyWithRecallKeyboard(payments),
+    });
+  });
+
+  bot.callbackQuery(CB.BALANCE, async (ctx) => {
+    await ctx.answerCallbackQuery();
+    const wallet = await getWallet(ctx.from.id);
+    if (!wallet) {
+      await ctx.editMessageText(
+        errorMessage("No wallet found. Use /start."),
+        { parse_mode: "HTML" }
+      );
+      return;
+    }
+    const balance = await getBalance(wallet.wallet_address);
+    await ctx.editMessageText(
+      balanceMessage(wallet.wallet_address, balance),
+      {
+        parse_mode: "HTML",
+        reply_markup: backToHomeKeyboard(),
+      }
+    );
+  });
+
+  bot.callbackQuery(CB.CLAIM, async (ctx) => {
+    await ctx.answerCallbackQuery();
+    await ctx.editMessageText(
+      "📥 <b>Claim a Payment</b>\n\nPaste your hoppy.cash claim link below:",
+      { parse_mode: "HTML", reply_markup: backToHomeKeyboard() }
+    );
+  });
+
+  bot.callbackQuery(CB.SETTINGS, async (ctx) => {
+    await ctx.answerCallbackQuery();
+    await ctx.editMessageText(settingsMessage(), {
+      parse_mode: "HTML",
+      reply_markup: settingsKeyboard(),
+    });
+  });
+
+  bot.callbackQuery(CB.HOME, async (ctx) => {
+    await ctx.answerCallbackQuery();
+    await editToHomeScreen(ctx);
+  });
+
+  // ============ Callback Queries — Settings ============
+
+  bot.callbackQuery(CB.SET_EXPORT, async (ctx) => {
+    await ctx.answerCallbackQuery();
+    const wallet = await getWallet(ctx.from.id);
+    if (!wallet) return;
+    const secretKey = decryptSecretKey(
+      wallet.encrypted_secret_key,
+      ctx.from.id
+    );
+    const msg = await ctx.reply(exportMessage(secretKey), {
+      parse_mode: "HTML",
+    });
+    autoDelete(ctx, msg.message_id, 60_000);
+  });
+
+  bot.callbackQuery(CB.SET_NEWWALLET, async (ctx) => {
+    await ctx.answerCallbackQuery();
+    const wallet = generateWallet();
+    const encrypted = encryptSecretKey(wallet.secretKey, ctx.from.id);
+    await upsertWallet(
+      ctx.from.id,
+      ctx.from.username,
+      wallet.publicKey,
+      encrypted
+    );
+    const msg = await ctx.reply(
+      startNewUserMessage(wallet.publicKey, wallet.secretKey),
+      {
+        parse_mode: "HTML",
+        reply_markup: mainMenuKeyboard(),
+      }
+    );
+    autoDelete(ctx, msg.message_id, 120_000);
+  });
+
+  bot.callbackQuery(CB.SET_BACK, async (ctx) => {
+    await ctx.answerCallbackQuery();
+    await editToHomeScreen(ctx);
+  });
+
+  // ============ Callback Queries — Send Flow ============
+
+  bot.callbackQuery(CB.SEND_PRIV, async (ctx) => {
+    await ctx.answerCallbackQuery();
+    const flow = getSendFlow(ctx.from.id);
+    if (!flow || flow.step !== "awaiting_privacy") {
+      await ctx.answerCallbackQuery("Session expired. Use /start.");
+      return;
+    }
+    setSendFlow(ctx.from.id, {
+      ...flow,
+      step: "awaiting_recipient",
+      privacy: "private",
+    });
+    await ctx.editMessageText(sendFlowRecipientMessage("private"), {
+      parse_mode: "HTML",
+      reply_markup: cancelKeyboard(),
+    });
+  });
+
+  bot.callbackQuery(CB.SEND_QUICK, async (ctx) => {
+    await ctx.answerCallbackQuery();
+    const flow = getSendFlow(ctx.from.id);
+    if (!flow || flow.step !== "awaiting_privacy") {
+      await ctx.answerCallbackQuery("Session expired. Use /start.");
+      return;
+    }
+    setSendFlow(ctx.from.id, {
+      ...flow,
+      step: "awaiting_recipient",
+      privacy: "basic",
+    });
+    await ctx.editMessageText(sendFlowRecipientMessage("basic"), {
+      parse_mode: "HTML",
+      reply_markup: cancelKeyboard(),
+    });
+  });
+
+  bot.callbackQuery(CB.SEND_CANCEL, async (ctx) => {
+    await ctx.answerCallbackQuery("Cancelled");
+    clearSendFlow(ctx.from.id);
+    await editToHomeScreen(ctx);
+  });
+
+  bot.callbackQuery(CB.CONFIRM_YES, async (ctx) => {
+    await ctx.answerCallbackQuery("Processing...");
+    const flow = getSendFlow(ctx.from.id);
+    if (
+      !flow ||
+      flow.step !== "awaiting_confirm" ||
+      !flow.recipient ||
+      !flow.amount ||
+      !flow.privacy
+    ) {
+      return;
+    }
+    clearSendFlow(ctx.from.id);
+
+    // Remove buttons to prevent double-tap
+    try {
+      await ctx.editMessageReplyMarkup({
+        reply_markup: { inline_keyboard: [] },
+      });
+    } catch {
+      // Message may not be editable
+    }
+
+    const privacyWord = flow.privacy === "private" ? "privately" : "";
+    const sendText =
+      `send ${flow.amount} SOL to ${flow.recipient} ${privacyWord}`.trim();
+    await executeSend(ctx, sendText);
+  });
+
+  bot.callbackQuery(CB.CONFIRM_NO, async (ctx) => {
+    await ctx.answerCallbackQuery("Cancelled");
+    clearSendFlow(ctx.from.id);
+    clearPendingConfirmation(ctx.from.id);
+    await editToHomeScreen(ctx);
+  });
+
+  // ============ Callback Queries — Recall from History ============
+
+  bot.callbackQuery(/^recall:\d+$/, async (ctx) => {
+    await ctx.answerCallbackQuery();
+    const paymentId = parseInt(ctx.callbackQuery.data.split(":")[1]);
+    await handleRecall(ctx, paymentId);
+  });
+
+  // ============ Free-Text NLP Handler ============
+
   bot.on("message:text", async (ctx) => {
     const rawText = ctx.message.text;
     const tgUserId = ctx.from!.id;
@@ -198,24 +496,109 @@ function registerHandlers(bot: Bot) {
       return;
     }
 
-    // Check for pending confirmation ("yes" / "no")
-    const pending = pendingConfirmations.get(tgUserId);
-    if (pending && Date.now() < pending.expiresAt) {
+    // ---- Interactive send flow interception ----
+    const flow = getSendFlow(tgUserId);
+    if (flow) {
+      if (flow.step === "awaiting_recipient") {
+        const input = rawText.trim();
+        const recipientMatch = input.match(/^@?(\w{3,32})$/);
+        if (!recipientMatch) {
+          await ctx.reply(
+            "Please enter a valid @username (e.g. <code>@alice</code>).",
+            { parse_mode: "HTML" }
+          );
+          return;
+        }
+        const recipient = input.startsWith("@") ? input : `@${input}`;
+        setSendFlow(tgUserId, {
+          ...flow,
+          step: "awaiting_amount",
+          recipient,
+        });
+
+        // Try to edit the flow message in-place
+        if (flow.messageId) {
+          try {
+            await ctx.api.editMessageText(
+              ctx.chat!.id,
+              flow.messageId,
+              sendFlowAmountMessage(flow.privacy!, recipient),
+              { parse_mode: "HTML", reply_markup: cancelKeyboard() }
+            );
+            return;
+          } catch {
+            // Message too old to edit, send new
+          }
+        }
+        await ctx.reply(
+          sendFlowAmountMessage(flow.privacy!, recipient),
+          { parse_mode: "HTML", reply_markup: cancelKeyboard() }
+        );
+        return;
+      }
+
+      if (flow.step === "awaiting_amount") {
+        const amount = parseFloat(rawText.trim());
+        if (isNaN(amount) || amount <= 0 || amount > 1000) {
+          await ctx.reply(
+            "Please enter a valid amount (e.g. <code>0.5</code>).",
+            { parse_mode: "HTML" }
+          );
+          return;
+        }
+        setSendFlow(tgUserId, {
+          ...flow,
+          step: "awaiting_confirm",
+          amount,
+        });
+
+        const confirmText = sendFlowConfirmMessage(
+          amount,
+          flow.recipient!,
+          flow.privacy!
+        );
+        if (flow.messageId) {
+          try {
+            await ctx.api.editMessageText(
+              ctx.chat!.id,
+              flow.messageId,
+              confirmText,
+              { parse_mode: "HTML", reply_markup: confirmSendKeyboard() }
+            );
+            return;
+          } catch {
+            // Message too old to edit
+          }
+        }
+        await ctx.reply(confirmText, {
+          parse_mode: "HTML",
+          reply_markup: confirmSendKeyboard(),
+        });
+        return;
+      }
+
+      // If awaiting_confirm, buttons handle it — fall through to NLP
+    }
+
+    // ---- Legacy text-based pending confirmation ----
+    const pending = getPendingConfirmation(tgUserId);
+    if (pending) {
       const lower = rawText.trim().toLowerCase();
       if (lower === "yes" || lower === "y" || lower === "confirm") {
-        pendingConfirmations.delete(tgUserId);
+        clearPendingConfirmation(tgUserId);
         await executeSend(ctx, pending.text);
         return;
       } else if (lower === "no" || lower === "n" || lower === "cancel") {
-        pendingConfirmations.delete(tgUserId);
-        await ctx.reply(escapeMarkdown("Payment cancelled."), { parse_mode: "HTML" });
+        clearPendingConfirmation(tgUserId);
+        await ctx.reply(escapeMarkdown("Payment cancelled."), {
+          parse_mode: "HTML",
+        });
         return;
       }
-      // Not a yes/no -- clear stale confirmation and continue
-      pendingConfirmations.delete(tgUserId);
+      clearPendingConfirmation(tgUserId);
     }
 
-    // Sanitize input
+    // ---- Sanitize input ----
     const sanitized = sanitizeInput(rawText);
     if (sanitized.blocked) {
       await ctx.reply(
@@ -225,15 +608,13 @@ function registerHandlers(bot: Bot) {
       return;
     }
 
-    // Rate limit check for LLM path
+    // ---- Rate limit check for LLM path ----
     const withinLimit = checkLLMRateLimit(tgUserId);
 
-    // Parse intent (hybrid: regex first, LLM fallback)
     let parsed;
     if (withinLimit) {
       parsed = await parseIntent(sanitized.text);
     } else {
-      // Rate limited -- use regex only, no LLM
       const { parseIntentSync } = await import("./intents");
       parsed = parseIntentSync(sanitized.text);
     }
@@ -250,21 +631,33 @@ function registerHandlers(bot: Bot) {
         break;
       case "HISTORY": {
         const payments = await getPaymentsByUser(tgUserId, 15);
-        await ctx.reply(historyMessage(payments), { parse_mode: "HTML" });
+        await ctx.reply(historyMessage(payments), {
+          parse_mode: "HTML",
+          reply_markup: historyWithRecallKeyboard(payments),
+        });
         break;
       }
       case "RECALL":
         if (parsed.paymentId) await handleRecall(ctx, parsed.paymentId);
-        else await ctx.reply(errorMessage("Which payment? Use /recall <id> or check /history."), { parse_mode: "HTML" });
+        else
+          await ctx.reply(
+            errorMessage("Which payment? Use /recall <id> or check /history."),
+            { parse_mode: "HTML" }
+          );
         break;
       case "EXPORT": {
         const wallet = await getWallet(tgUserId);
         if (!wallet) {
-          await ctx.reply(errorMessage("No wallet found. Use /start first."), { parse_mode: "HTML" });
+          await ctx.reply(
+            errorMessage("No wallet found. Use /start first."),
+            { parse_mode: "HTML" }
+          );
           return;
         }
         const sk = decryptSecretKey(wallet.encrypted_secret_key, tgUserId);
-        const msg = await ctx.reply(exportMessage(sk), { parse_mode: "HTML" });
+        const msg = await ctx.reply(exportMessage(sk), {
+          parse_mode: "HTML",
+        });
         autoDelete(ctx, msg.message_id, 60_000);
         break;
       }
@@ -275,7 +668,7 @@ function registerHandlers(bot: Bot) {
         await ctx.reply(
           escapeMarkdown(
             "I didn't understand that. Type /help to see what I can do, or just tell me what you need!\n\n" +
-            "Examples:\n• \"send 0.5 sol to @alice privately\"\n• \"what's my balance?\"\n• Paste a hoppy.cash claim link"
+              'Examples:\n- "send 0.5 sol to @alice privately"\n- "what\'s my balance?"\n- Paste a hoppy.cash claim link'
           ),
           { parse_mode: "HTML" }
         );
@@ -283,7 +676,9 @@ function registerHandlers(bot: Bot) {
   });
 }
 
-// ======== Command Handlers ========
+// ================================================================
+// Command Handlers
+// ================================================================
 
 async function handleBalance(ctx: Context) {
   const tgUserId = ctx.from!.id;
@@ -294,10 +689,10 @@ async function handleBalance(ctx: Context) {
     });
     return;
   }
-
   const balance = await getBalance(wallet.wallet_address);
   await ctx.reply(balanceMessage(wallet.wallet_address, balance), {
     parse_mode: "HTML",
+    reply_markup: backToHomeKeyboard(),
   });
 }
 
@@ -307,26 +702,35 @@ async function handleSend(ctx: Context, text: string) {
 
   if (parsed.intent !== "SEND" || !parsed.amount || !parsed.recipient) {
     await ctx.reply(
-      escapeMarkdown("I couldn't parse that. Try: \"send 0.5 SOL to @username privately\""),
+      escapeMarkdown(
+        'I couldn\'t parse that. Try: "send 0.5 SOL to @username privately"'
+      ),
       { parse_mode: "HTML" }
     );
     return;
   }
 
-  // Confirmation gate for high-value sends
+  // Confirmation gate for high-value sends — now with inline buttons
   if (parsed.amount >= SEND_CONFIRM_THRESHOLD_SOL) {
-    const privacyLabel = parsed.privacy === "private" ? "privately" : "normally";
-    pendingConfirmations.set(tgUserId, {
+    setPendingConfirmation(tgUserId, {
       text,
-      expiresAt: Date.now() + 60_000, // 1 minute to confirm
+      expiresAt: Date.now() + 60_000,
+    });
+    setSendFlow(tgUserId, {
+      step: "awaiting_confirm",
+      privacy: parsed.privacy || "basic",
+      recipient: parsed.recipient,
+      amount: parsed.amount,
+      startedAt: Date.now(),
     });
 
     await ctx.reply(
-      escapeMarkdown(
-        `⚠️ Confirm: Send ${parsed.amount} SOL to ${parsed.recipient} ${privacyLabel}?\n\n` +
-        `Reply "yes" to confirm or "no" to cancel. Expires in 60 seconds.`
+      sendFlowConfirmMessage(
+        parsed.amount,
+        parsed.recipient,
+        parsed.privacy || "basic"
       ),
-      { parse_mode: "HTML" }
+      { parse_mode: "HTML", reply_markup: confirmSendKeyboard() }
     );
     return;
   }
@@ -339,7 +743,9 @@ async function executeSend(ctx: Context, text: string) {
   const parsed = await parseIntent(text);
 
   if (parsed.intent !== "SEND" || !parsed.amount || !parsed.recipient) {
-    await ctx.reply(errorMessage("Failed to re-parse send command."), { parse_mode: "HTML" });
+    await ctx.reply(errorMessage("Failed to re-parse send command."), {
+      parse_mode: "HTML",
+    });
     return;
   }
 
@@ -355,9 +761,10 @@ async function executeSend(ctx: Context, text: string) {
   const privacy = parsed.privacy || "basic";
 
   if (token !== "SOL") {
-    await ctx.reply(errorMessage("Only SOL is supported in the bot for now."), {
-      parse_mode: "HTML",
-    });
+    await ctx.reply(
+      errorMessage("Only SOL is supported in the bot for now."),
+      { parse_mode: "HTML" }
+    );
     return;
   }
 
@@ -367,7 +774,9 @@ async function executeSend(ctx: Context, text: string) {
   const MIN_BUFFER = privacy === "private" ? 10_000_000 : 1_000_000;
   if (balance < amountLamports + MIN_BUFFER) {
     await ctx.reply(
-      errorMessage(`Insufficient balance. You have ${lamportsToSol(balance).toFixed(4)} SOL but need ~${lamportsToSol(amountLamports + MIN_BUFFER).toFixed(4)} SOL.`),
+      errorMessage(
+        `Insufficient balance. You have ${lamportsToSol(balance).toFixed(4)} SOL but need ~${lamportsToSol(amountLamports + MIN_BUFFER).toFixed(4)} SOL.`
+      ),
       { parse_mode: "HTML" }
     );
     return;
@@ -380,7 +789,8 @@ async function executeSend(ctx: Context, text: string) {
 
   try {
     const compositeSecret = generateCompositeSecret();
-    const ephemeralAddress = compositeSecret.ephemeralKeypair.publicKey.toBase58();
+    const ephemeralAddress =
+      compositeSecret.ephemeralKeypair.publicKey.toBase58();
 
     const connection = new Connection(RPC_URL, "confirmed");
     const secretKey = decryptSecretKey(wallet.encrypted_secret_key, tgUserId);
@@ -437,10 +847,10 @@ async function executeSend(ctx: Context, text: string) {
           await ctx.api.sendMessage(
             recipientWallet.tg_user_id,
             `🐰 <b>You received a private payment!</b>\n\n` +
-            `Amount: <b>${parsed.amount} SOL</b>\n` +
-            `From: ${ctx.from?.username ? `@${ctx.from.username}` : "someone"}\n\n` +
-            `Claim link:\n<code>${claimUrl}</code>\n\n` +
-            `Or paste this link on hoppy.cash/claim to claim with any wallet.`,
+              `Amount: <b>${parsed.amount} SOL</b>\n` +
+              `From: ${ctx.from?.username ? `@${ctx.from.username}` : "someone"}\n\n` +
+              `Claim link:\n<code>${claimUrl}</code>\n\n` +
+              `Or paste this link on hoppy.cash/claim to claim with any wallet.`,
             { parse_mode: "HTML" }
           );
           delivered = true;
@@ -473,13 +883,21 @@ async function executeSend(ctx: Context, text: string) {
     }
 
     await ctx.reply(
-      sendSuccessMessage(parsed.amount, token, recipientId, claimUrl, delivered),
+      sendSuccessMessage(
+        parsed.amount,
+        token,
+        recipientId,
+        claimUrl,
+        delivered
+      ),
       { parse_mode: "HTML" }
     );
 
     if (!delivered && recipientId.startsWith("@")) {
       await ctx.reply(
-        escapeMarkdown(`Note: ${recipientId} hasn't started the bot yet. The payment will be delivered when they do. Or share the link above manually.`),
+        escapeMarkdown(
+          `Note: ${recipientId} hasn't started the bot yet. The payment will be delivered when they do. Or share the link above manually.`
+        ),
         { parse_mode: "HTML" }
       );
     }
@@ -501,13 +919,18 @@ async function handleClaim(ctx: Context, urlOrText: string) {
 
   const note = extractDoubleHopNoteFromUrl(urlOrText);
   if (!note) {
-    await ctx.reply(errorMessage("Invalid claim link. Make sure you pasted the full hoppy.cash URL."), {
-      parse_mode: "HTML",
-    });
+    await ctx.reply(
+      errorMessage(
+        "Invalid claim link. Make sure you pasted the full hoppy.cash URL."
+      ),
+      { parse_mode: "HTML" }
+    );
     return;
   }
 
-  await ctx.reply(escapeMarkdown("Claiming payment..."), { parse_mode: "HTML" });
+  await ctx.reply(escapeMarkdown("Claiming payment..."), {
+    parse_mode: "HTML",
+  });
 
   try {
     const baseUrl = APP_URL;
@@ -526,9 +949,10 @@ async function handleClaim(ctx: Context, urlOrText: string) {
       throw new Error(result.error || "Claim failed");
     }
 
-    await ctx.reply(claimSuccessMessage(result.amountReceived || note.amount), {
-      parse_mode: "HTML",
-    });
+    await ctx.reply(
+      claimSuccessMessage(result.amountReceived || note.amount),
+      { parse_mode: "HTML" }
+    );
   } catch (err) {
     const msg = err instanceof Error ? err.message : "Claim failed";
     await ctx.reply(errorMessage(msg), { parse_mode: "HTML" });
@@ -549,20 +973,24 @@ async function handleRecall(ctx: Context, paymentId: number) {
   const payment = payments.find((p: any) => p.id === paymentId);
 
   if (!payment) {
-    await ctx.reply(errorMessage(`Payment #${paymentId} not found. Check /history.`), {
-      parse_mode: "HTML",
-    });
+    await ctx.reply(
+      errorMessage(`Payment #${paymentId} not found. Check /history.`),
+      { parse_mode: "HTML" }
+    );
     return;
   }
 
   if (payment.status !== "pending") {
-    await ctx.reply(errorMessage(`Payment #${paymentId} is already ${payment.status}.`), {
-      parse_mode: "HTML",
-    });
+    await ctx.reply(
+      errorMessage(`Payment #${paymentId} is already ${payment.status}.`),
+      { parse_mode: "HTML" }
+    );
     return;
   }
 
-  await ctx.reply(escapeMarkdown("Recalling payment..."), { parse_mode: "HTML" });
+  await ctx.reply(escapeMarkdown("Recalling payment..."), {
+    parse_mode: "HTML",
+  });
 
   try {
     const note = extractDoubleHopNoteFromUrl(payment.claim_url);
@@ -579,9 +1007,12 @@ async function handleRecall(ctx: Context, paymentId: number) {
 
     if (transferAmount <= 0) {
       await updatePaymentStatus(paymentId, "claimed");
-      await ctx.reply(errorMessage("No funds left - payment may have already been claimed."), {
-        parse_mode: "HTML",
-      });
+      await ctx.reply(
+        errorMessage(
+          "No funds left - payment may have already been claimed."
+        ),
+        { parse_mode: "HTML" }
+      );
       return;
     }
 
@@ -600,7 +1031,9 @@ async function handleRecall(ctx: Context, paymentId: number) {
     await updatePaymentStatus(paymentId, "recalled");
 
     await ctx.reply(
-      escapeMarkdown(`✅ Recalled ${lamportsToSol(transferAmount).toFixed(4)} SOL from payment #${paymentId} back to your wallet.`),
+      escapeMarkdown(
+        `✅ Recalled ${lamportsToSol(transferAmount).toFixed(4)} SOL from payment #${paymentId} back to your wallet.`
+      ),
       { parse_mode: "HTML" }
     );
   } catch (err) {
@@ -617,9 +1050,9 @@ async function deliverPendingPayments(ctx: Context, username: string) {
     try {
       await ctx.reply(
         `🎉 <b>Pending payment found!</b>\n\n` +
-        `Amount: <b>${lamportsToSol(payment.amount).toFixed(4)} SOL</b>\n\n` +
-        `Claim link:\n<code>${payment.claim_url}</code>\n\n` +
-        `Use /claim followed by the link above, or paste it to auto-claim.`,
+          `Amount: <b>${lamportsToSol(payment.amount).toFixed(4)} SOL</b>\n\n` +
+          `Claim link:\n<code>${payment.claim_url}</code>\n\n` +
+          `Use /claim followed by the link above, or paste it to auto-claim.`,
         { parse_mode: "HTML" }
       );
       await updatePaymentStatus(payment.id, "delivered");
