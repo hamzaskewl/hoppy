@@ -214,7 +214,7 @@ function regexParseIntent(text: string): ParsedIntent | null {
 async function llmParseIntent(text: string): Promise<ParsedIntent> {
   try {
     const { object } = await generateObject({
-      model: anthropic("claude-3-5-haiku-latest"),
+      model: anthropic("claude-haiku-4-5-20251001"),
       schema: IntentSchema,
       system: CLASSIFIER_SYSTEM_PROMPT,
       prompt: text,
