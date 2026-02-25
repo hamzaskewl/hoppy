@@ -420,7 +420,7 @@ async function executeSend(ctx: Context, text: string) {
       throw new Error(result.error || "Failed to create payment link");
     }
 
-    const claimUrl = createDoubleHopClaimUrl(result.note);
+    const claimUrl = createDoubleHopClaimUrl(result.note, baseUrl);
 
     let delivered = false;
     const recipientId = parsed.recipient;
