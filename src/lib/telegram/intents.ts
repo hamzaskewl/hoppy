@@ -219,7 +219,7 @@ async function llmParseIntent(text: string): Promise<ParsedIntent> {
       system: CLASSIFIER_SYSTEM_PROMPT,
       prompt: text,
       temperature: 0,
-      maxTokens: 200,
+      maxOutputTokens: 200,
     });
 
     // Post-LLM validation: enforce constraints the schema alone can't catch
