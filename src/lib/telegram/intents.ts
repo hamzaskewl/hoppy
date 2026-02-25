@@ -44,29 +44,24 @@ const IntentSchema = z.object({
   ]),
   amount: z
     .number()
-    .positive()
-    .max(1000)
     .optional()
-    .describe("Amount of SOL to send, if this is a SEND intent"),
+    .describe("Amount of SOL to send (must be > 0 and <= 1000), if this is a SEND intent"),
   token: z
     .enum(["SOL"])
     .optional()
     .describe("Token type, always SOL for now"),
   recipient: z
     .string()
-    .max(64)
     .optional()
-    .describe("Telegram @username or identifier of the recipient"),
+    .describe("Telegram @username or identifier of the recipient (max 64 chars)"),
   privacy: z
     .enum(["basic", "private"])
     .optional()
     .describe("Privacy level: basic (default) or private (sender hidden via ZK)"),
   paymentId: z
     .number()
-    .int()
-    .positive()
     .optional()
-    .describe("Payment ID for recall intents"),
+    .describe("Payment ID for recall intents (positive integer)"),
 });
 
 // ============================================================================
