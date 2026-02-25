@@ -4,8 +4,11 @@
 [phases.setup]
 nixPkgs = ["nodejs_22"]
 
+[phases.install]
+cmds = ["npm install --legacy-peer-deps"]
+
 [phases.build]
-cmds = ["npm install", "npm run build"]
+cmds = ["npm run build"]
 
 [start]
 cmd = "npm run start"
