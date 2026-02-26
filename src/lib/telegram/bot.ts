@@ -104,7 +104,6 @@ const APP_URL =
 
 console.log("[TG Bot] APP_URL resolved to:", APP_URL);
 
-const SEND_CONFIRM_THRESHOLD_SOL = 1;
 
 function createBot(): Bot {
   const token = process.env.TELEGRAM_BOT_TOKEN;
@@ -1033,31 +1032,27 @@ async function handleSend(ctx: Context, text: string) {
     return;
   }
 
-  if (parsed.amount >= SEND_CONFIRM_THRESHOLD_SOL) {
-    setPendingConfirmation(tgUserId, {
-      text,
-      expiresAt: Date.now() + 60_000,
-    });
-    setSendFlow(tgUserId, {
-      step: "awaiting_confirm",
-      privacy: parsed.privacy || "basic",
-      recipient: parsed.recipient,
-      amount: parsed.amount,
-      startedAt: Date.now(),
-    });
+  // Always confirm before sending
+  setPendingConfirmation(tgUserId, {
+    text,
+    expiresAt: Date.now() + 60_000,
+  });
+  setSendFlow(tgUserId, {
+    step: "awaiting_confirm",
+    privacy: parsed.privacy || "basic",
+    recipient: parsed.recipient,
+    amount: parsed.amount,
+    startedAt: Date.now(),
+  });
 
-    await ctx.reply(
-      sendFlowConfirmMessage(
-        parsed.amount,
-        parsed.recipient,
-        parsed.privacy || "basic"
-      ),
-      { parse_mode: "HTML", reply_markup: confirmSendKeyboard() }
-    );
-    return;
-  }
-
-  await executeSend(ctx, text);
+  await ctx.reply(
+    sendFlowConfirmMessage(
+      parsed.amount,
+      parsed.recipient,
+      parsed.privacy || "basic"
+    ),
+    { parse_mode: "HTML", reply_markup: confirmSendKeyboard() }
+  );
 }
 
 async function executeSend(ctx: Context, text: string) {
@@ -1141,47 +1136,52 @@ async function executeSend(ctx: Context, text: string) {
 
     const baseUrl = APP_URL;
 
-    // Retry create-link once on failure
-    let result: any;
+    // Retry create-link once on failure (with 55s timeout per attempt)
+    let result: any = null;
     for (let attempt = 0; attempt < 2; attempt++) {
-      const response = await fetch(
-        `${baseUrl}/api/privacy-cash/create-link`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            amount: amountLamports,
-            compositeSecret: compositeSecret.full,
-            ephemeralAddress,
-            fundingTxHash,
-            senderPrivacy: privacy,
-            senderAddress: wallet.wallet_address,
-          }),
-        }
-      );
-      result = await response.json();
-      if (result.success && result.note) break;
+      try {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 55_000);
+        const response = await fetch(
+          `${baseUrl}/api/privacy-cash/create-link`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              amount: amountLamports,
+              compositeSecret: compositeSecret.full,
+              ephemeralAddress,
+              fundingTxHash,
+              senderPrivacy: privacy,
+              senderAddress: wallet.wallet_address,
+            }),
+            signal: controller.signal,
+          }
+        );
+        clearTimeout(timeout);
+        result = await response.json();
+        if (result.success && result.note) break;
+      } catch (fetchErr) {
+        console.error(`[TG Bot] create-link attempt ${attempt} failed:`, fetchErr);
+        result = { success: false, error: "Network error calling create-link" };
+      }
       if (attempt === 0) await sleep(3000); // Wait before retry
     }
 
-    // Handle create-link failure with recovery info
-    if (!result.success || !result.note) {
-      if (result.recoverySuccess && result.sweptAmount) {
+    // Handle create-link failure — always show ephemeral address for manual recovery
+    if (!result || !result.success || !result.note) {
+      if (result?.recoverySuccess && result?.sweptAmount) {
         const sweptSol = lamportsToSol(result.sweptAmount).toFixed(4);
         await ctx.reply(recoverySuccessMessage(sweptSol), {
           parse_mode: "HTML",
         });
-      } else if (result.ephemeralAddress) {
+      } else {
+        // Always show ephemeral address so user can recover via /recall
         await ctx.reply(
           recoveryFailedMessage(
-            result.ephemeralAddress,
-            result.error || "Payment link creation failed"
+            ephemeralAddress,
+            result?.error || "Payment link creation failed or timed out"
           ),
-          { parse_mode: "HTML" }
-        );
-      } else {
-        await ctx.reply(
-          errorMessage(result.error || "Failed to create payment link"),
           { parse_mode: "HTML" }
         );
       }
@@ -1213,7 +1213,7 @@ async function executeSend(ctx: Context, text: string) {
           // Send image + message with claim buttons
           await ctx.api.sendPhoto(
             recipientWallet.tg_user_id,
-            `${APP_URL}/hoppy-carrot.png`,
+            `${APP_URL}/hoppy-tgcarrot.png`,
             {
               caption: receivedPaymentMessage(
                 amountLamports,
@@ -1473,7 +1473,7 @@ async function deliverPendingPayments(ctx: Context, username: string) {
 
   for (const payment of pending) {
     try {
-      await ctx.replyWithPhoto(`${APP_URL}/hoppy-carrot.png`, {
+      await ctx.replyWithPhoto(`${APP_URL}/hoppy-tgcarrot.png`, {
         caption: receivedPaymentDeliveredMessage(payment.amount),
         parse_mode: "HTML",
         reply_markup: receivedPaymentKeyboard(payment.id),
