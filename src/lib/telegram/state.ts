@@ -13,6 +13,19 @@ export interface SendFlowState {
   startedAt: number;
 }
 
+export type TransferFlowStep =
+  | "awaiting_address"
+  | "awaiting_amount"
+  | "awaiting_confirm";
+
+export interface TransferFlowState {
+  step: TransferFlowStep;
+  address?: string;
+  amount?: number;
+  messageId?: number;
+  startedAt: number;
+}
+
 export interface PendingConfirmation {
   text: string;
   expiresAt: number;
@@ -21,7 +34,10 @@ export interface PendingConfirmation {
 const FLOW_TIMEOUT_MS = 5 * 60_000; // 5 minutes
 
 const sendFlows = new Map<number, SendFlowState>();
+const transferFlows = new Map<number, TransferFlowState>();
 const pendingConfirmations = new Map<number, PendingConfirmation>();
+
+// ============ Send Flow ============
 
 export function getSendFlow(tgUserId: number): SendFlowState | null {
   const flow = sendFlows.get(tgUserId);
@@ -40,6 +56,31 @@ export function setSendFlow(tgUserId: number, state: SendFlowState): void {
 export function clearSendFlow(tgUserId: number): void {
   sendFlows.delete(tgUserId);
 }
+
+// ============ Transfer Flow ============
+
+export function getTransferFlow(tgUserId: number): TransferFlowState | null {
+  const flow = transferFlows.get(tgUserId);
+  if (!flow) return null;
+  if (Date.now() - flow.startedAt > FLOW_TIMEOUT_MS) {
+    transferFlows.delete(tgUserId);
+    return null;
+  }
+  return flow;
+}
+
+export function setTransferFlow(
+  tgUserId: number,
+  state: TransferFlowState
+): void {
+  transferFlows.set(tgUserId, state);
+}
+
+export function clearTransferFlow(tgUserId: number): void {
+  transferFlows.delete(tgUserId);
+}
+
+// ============ Pending Confirmation ============
 
 export function getPendingConfirmation(
   tgUserId: number
@@ -69,6 +110,9 @@ if (typeof setInterval !== "undefined") {
     const now = Date.now();
     for (const [id, flow] of sendFlows) {
       if (now - flow.startedAt > FLOW_TIMEOUT_MS) sendFlows.delete(id);
+    }
+    for (const [id, flow] of transferFlows) {
+      if (now - flow.startedAt > FLOW_TIMEOUT_MS) transferFlows.delete(id);
     }
     for (const [id, conf] of pendingConfirmations) {
       if (now >= conf.expiresAt) pendingConfirmations.delete(id);

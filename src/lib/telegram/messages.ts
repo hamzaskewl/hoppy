@@ -57,33 +57,6 @@ export function exportMessage(secretKey: string): string {
   ].join("\n");
 }
 
-export function helpMessage(): string {
-  return [
-    "🐰 <b>Hoppy Bot - Commands</b>",
-    "",
-    "<b>Basics:</b>",
-    "/start - Create your wallet",
-    "/balance - Check your balance",
-    "/export - Show your private key",
-    "/newwallet - Generate a new wallet",
-    "",
-    "<b>Payments:</b>",
-    "/send - Send a private payment",
-    "  Example: <code>send 0.5 sol to @alice privately</code>",
-    "/claim - Claim a payment link",
-    "  Or just paste any hoppy.cash link",
-    "/recall - Get back unclaimed funds",
-    "",
-    "<b>History:</b>",
-    "/history - View your payment history",
-    "",
-    "<b>Tips:</b>",
-    '- You can type naturally: "pay @bob 1 SOL"',
-    '- Add "privately" for sender privacy',
-    "- Paste any hoppy.cash link to auto-claim",
-  ].join("\n");
-}
-
 export function sendConfirmMessage(
   amount: number,
   token: string,
@@ -280,6 +253,146 @@ export function settingsMessage(): string {
     ``,
     `🔑 <b>Export</b> — View your private key`,
     `🆕 <b>New Wallet</b> — Generate a fresh wallet`,
+  ].join("\n");
+}
+
+// ============ Receive / Claim Messages ============
+
+export function receivedPaymentMessage(
+  amountLamports: number,
+  senderUsername: string | undefined,
+): string {
+  const sol = lamportsToSol(amountLamports).toFixed(4);
+  const from = senderUsername ? `@${esc(senderUsername)}` : "someone";
+  return [
+    `🎉 <b>You received a payment!</b>`,
+    ``,
+    `Amount: <b>${sol} SOL</b>`,
+    `From: ${from}`,
+    ``,
+    `Tap below to claim to your wallet:`,
+  ].join("\n");
+}
+
+export function receivedPaymentDeliveredMessage(
+  amountLamports: number,
+): string {
+  const sol = lamportsToSol(amountLamports).toFixed(4);
+  return [
+    `🎉 <b>Pending payment found!</b>`,
+    ``,
+    `Amount: <b>${sol} SOL</b>`,
+    ``,
+    `Tap below to claim to your wallet:`,
+  ].join("\n");
+}
+
+// ============ Transfer Messages ============
+
+export function transferAddressMessage(): string {
+  return [
+    `📤 <b>Transfer SOL</b>`,
+    ``,
+    `Paste the destination <b>Solana address</b>:`,
+    ``,
+    `<i>(base58 public key, e.g. CsRE...cezz)</i>`,
+  ].join("\n");
+}
+
+export function transferAmountMessage(address: string): string {
+  const short = address.length > 12
+    ? `${address.slice(0, 6)}...${address.slice(-4)}`
+    : address;
+  return [
+    `📤 <b>Transfer SOL</b>`,
+    ``,
+    `To: <code>${esc(address)}</code>`,
+    ``,
+    `How much SOL do you want to send?`,
+    `Type the amount (e.g. <code>0.5</code>):`,
+  ].join("\n");
+}
+
+export function transferConfirmMessage(
+  address: string,
+  amount: number,
+): string {
+  return [
+    `📤 <b>Confirm Transfer</b>`,
+    ``,
+    `Amount: <b>${amount} SOL</b>`,
+    `To: <code>${esc(address)}</code>`,
+    ``,
+    `Tap ✅ to confirm or ❌ to cancel.`,
+  ].join("\n");
+}
+
+export function transferSuccessMessage(
+  amount: number,
+  address: string,
+  txHash: string,
+): string {
+  const short = address.length > 12
+    ? `${address.slice(0, 6)}...${address.slice(-4)}`
+    : address;
+  return [
+    `✅ <b>Transfer Complete!</b>`,
+    ``,
+    `Sent <b>${amount} SOL</b> to <code>${esc(short)}</code>`,
+    ``,
+    `Tx: <code>${esc(txHash)}</code>`,
+  ].join("\n");
+}
+
+// ============ Recovery Messages ============
+
+export function recoverySuccessMessage(sweptSol: string): string {
+  return [
+    `⚠️ <b>Payment failed</b> — but your funds were recovered!`,
+    ``,
+    `<b>${sweptSol} SOL</b> was automatically returned to your wallet.`,
+  ].join("\n");
+}
+
+export function recoveryFailedMessage(
+  ephemeralAddress: string,
+  errorMsg: string,
+): string {
+  return [
+    `⚠️ <b>Payment failed</b>`,
+    ``,
+    `${esc(errorMsg)}`,
+    ``,
+    `Funds may be on ephemeral address:`,
+    `<code>${esc(ephemeralAddress)}</code>`,
+    ``,
+    `Try /recall or contact support.`,
+  ].join("\n");
+}
+
+export function helpMessage(): string {
+  return [
+    "🐰 <b>Hoppy Bot - Commands</b>",
+    "",
+    "<b>Basics:</b>",
+    "/start - Open wallet & main menu",
+    "/balance - Check your balance",
+    "/transfer - Send SOL to any address",
+    "",
+    "<b>Privacy Payments:</b>",
+    "/send - Send a private payment",
+    "  Example: <code>send 0.5 sol to @alice privately</code>",
+    "/claim - Claim a payment link",
+    "  Or just paste any hoppy.cash link",
+    "/recall - Get back unclaimed funds",
+    "",
+    "<b>History:</b>",
+    "/history - View your payment history",
+    "",
+    "<b>Tips:</b>",
+    '- You can type naturally: "pay @bob 1 SOL"',
+    '- Add "privately" for sender privacy',
+    "- Paste any hoppy.cash link to auto-claim",
   ].join("\n");
 }
 

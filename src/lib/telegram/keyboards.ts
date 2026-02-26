@@ -4,6 +4,7 @@ import { InlineKeyboard } from "grammy";
 export const CB = {
   // Main menu
   SEND: "main:send",
+  TRANSFER: "main:transfer",
   HISTORY: "main:history",
   SETTINGS: "main:settings",
   BALANCE: "main:balance",
@@ -12,9 +13,12 @@ export const CB = {
   SEND_PRIV: "send:priv",
   SEND_QUICK: "send:quick",
   SEND_CANCEL: "send:cancel",
-  // Confirmation
+  // Confirmation (shared by send + transfer)
   CONFIRM_YES: "confirm:yes",
   CONFIRM_NO: "confirm:no",
+  // Transfer flow
+  TRANSFER_CONFIRM: "xfer:yes",
+  TRANSFER_CANCEL: "xfer:cancel",
   // Settings
   SET_EXPORT: "set:export",
   SET_NEWWALLET: "set:newwallet",
@@ -23,14 +27,20 @@ export const CB = {
   HOME: "home",
 } as const;
 
+// Receive claim prefixes (used with regex matching)
+export const RCV_QUICK_PREFIX = "rcv:quick:";
+export const RCV_PRIV_PREFIX = "rcv:priv:";
+export const RCV_LINK_PREFIX = "rcv:link:";
+
 export function mainMenuKeyboard(): InlineKeyboard {
   return new InlineKeyboard()
     .text("💸 Send", CB.SEND)
+    .text("📤 Transfer", CB.TRANSFER)
+    .row()
     .text("📥 Claim", CB.CLAIM)
-    .row()
     .text("📊 History", CB.HISTORY)
-    .text("💰 Balance", CB.BALANCE)
     .row()
+    .text("💰 Balance", CB.BALANCE)
     .text("⚙️ Settings", CB.SETTINGS);
 }
 
@@ -48,6 +58,12 @@ export function confirmSendKeyboard(): InlineKeyboard {
     .text("❌ Cancel", CB.CONFIRM_NO);
 }
 
+export function confirmTransferKeyboard(): InlineKeyboard {
+  return new InlineKeyboard()
+    .text("✅ Confirm", CB.TRANSFER_CONFIRM)
+    .text("❌ Cancel", CB.TRANSFER_CANCEL);
+}
+
 export function settingsKeyboard(): InlineKeyboard {
   return new InlineKeyboard()
     .text("🔑 Export Private Key", CB.SET_EXPORT)
@@ -63,6 +79,18 @@ export function backToHomeKeyboard(): InlineKeyboard {
 
 export function cancelKeyboard(): InlineKeyboard {
   return new InlineKeyboard().text("❌ Cancel", CB.SEND_CANCEL);
+}
+
+export function transferCancelKeyboard(): InlineKeyboard {
+  return new InlineKeyboard().text("❌ Cancel", CB.TRANSFER_CANCEL);
+}
+
+export function receivedPaymentKeyboard(paymentId: number): InlineKeyboard {
+  return new InlineKeyboard()
+    .text("🚀 Claim (Quick)", `${RCV_QUICK_PREFIX}${paymentId}`)
+    .text("🔒 Claim (Private)", `${RCV_PRIV_PREFIX}${paymentId}`)
+    .row()
+    .text("🔗 Show Link", `${RCV_LINK_PREFIX}${paymentId}`);
 }
 
 export function historyWithRecallKeyboard(

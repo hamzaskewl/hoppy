@@ -114,6 +114,14 @@ export async function getPendingPaymentsForUser(username: string) {
   return result.rows;
 }
 
+export async function getPaymentById(id: number) {
+  const result = await pool.query(
+    "SELECT * FROM tg_payments WHERE id = $1",
+    [id]
+  );
+  return result.rows[0] || null;
+}
+
 export async function updatePaymentStatus(id: number, status: string) {
   await pool.query(
     "UPDATE tg_payments SET status = $1 WHERE id = $2",

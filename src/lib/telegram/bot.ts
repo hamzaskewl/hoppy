@@ -15,6 +15,7 @@ import {
   getWalletByUsername,
   upsertWallet,
   savePayment,
+  getPaymentById,
   getPaymentsByUser,
   getPendingPaymentsForUser,
   updatePaymentStatus,
@@ -36,21 +37,38 @@ import {
   historyMessage,
   errorMessage,
   escapeMarkdown,
+  receivedPaymentMessage,
+  receivedPaymentDeliveredMessage,
+  transferAddressMessage,
+  transferAmountMessage,
+  transferConfirmMessage,
+  transferSuccessMessage,
+  recoverySuccessMessage,
+  recoveryFailedMessage,
 } from "./messages";
 import {
   mainMenuKeyboard,
   sendPrivacyKeyboard,
   confirmSendKeyboard,
+  confirmTransferKeyboard,
   settingsKeyboard,
   backToHomeKeyboard,
   cancelKeyboard,
+  transferCancelKeyboard,
+  receivedPaymentKeyboard,
   historyWithRecallKeyboard,
   CB,
+  RCV_QUICK_PREFIX,
+  RCV_PRIV_PREFIX,
+  RCV_LINK_PREFIX,
 } from "./keyboards";
 import {
   getSendFlow,
   setSendFlow,
   clearSendFlow,
+  getTransferFlow,
+  setTransferFlow,
+  clearTransferFlow,
   getPendingConfirmation,
   setPendingConfirmation,
   clearPendingConfirmation,
@@ -103,7 +121,8 @@ export function getBot(): Bot {
 async function setupCommands(bot: Bot) {
   await bot.api.setMyCommands([
     { command: "start", description: "Open wallet & main menu" },
-    { command: "send", description: "Send SOL to someone" },
+    { command: "send", description: "Send SOL privately to @user" },
+    { command: "transfer", description: "Transfer SOL to any address" },
     { command: "balance", description: "Check your balance" },
     { command: "history", description: "View payment history" },
     { command: "claim", description: "Claim a payment link" },
@@ -119,6 +138,11 @@ async function autoDelete(ctx: Context, messageId: number, delayMs: number) {
       // Message may already be deleted
     }
   }, delayMs);
+}
+
+/** Small delay helper */
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 /** Send the home screen (photo + interactive menu) */
@@ -143,12 +167,45 @@ async function editToHomeScreen(ctx: Context) {
     const bal = await getBalance(wallet.wallet_address);
     balanceSol = lamportsToSol(bal).toFixed(4);
   } catch {
-    // Balance fetch failed, show placeholder
+    // Balance fetch failed
   }
   await ctx.editMessageText(startMessage(wallet.wallet_address, balanceSol), {
     parse_mode: "HTML",
     reply_markup: mainMenuKeyboard(),
   });
+}
+
+/** Claim a payment on behalf of a user (used by receive buttons) */
+async function claimPaymentForUser(
+  paymentId: number,
+  recipientWalletAddress: string,
+  recipientPrivacy: string
+): Promise<{ success: boolean; amountReceived?: number; error?: string }> {
+  const payment = await getPaymentById(paymentId);
+  if (!payment) return { success: false, error: "Payment not found" };
+  if (payment.status === "claimed")
+    return { success: false, error: "Already claimed" };
+
+  const note = extractDoubleHopNoteFromUrl(payment.claim_url);
+  if (!note) return { success: false, error: "Invalid claim link" };
+
+  const response = await fetch(`${APP_URL}/api/privacy-cash/claim`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      note,
+      recipientAddress: recipientWalletAddress,
+      recipientPrivacy,
+    }),
+  });
+
+  const result = await response.json();
+  if (!result.success) {
+    return { success: false, error: result.error || "Claim failed" };
+  }
+
+  await updatePaymentStatus(paymentId, "claimed");
+  return { success: true, amountReceived: result.amountReceived || note.amount };
 }
 
 // ================================================================
@@ -238,7 +295,6 @@ function registerHandlers(bot: Bot) {
     const text = ctx.message?.text || "";
     const rest = text.replace(/^\/send\s*/i, "").trim();
     if (!rest) {
-      // No args — start interactive send flow
       clearSendFlow(ctx.from!.id);
       const replyMsg = await ctx.reply(sendFlowPrivacyMessage(), {
         parse_mode: "HTML",
@@ -252,6 +308,20 @@ function registerHandlers(bot: Bot) {
       return;
     }
     await handleSend(ctx, `send ${rest}`);
+  });
+
+  bot.command("transfer", async (ctx) => {
+    const tgUserId = ctx.from!.id;
+    clearTransferFlow(tgUserId);
+    const replyMsg = await ctx.reply(transferAddressMessage(), {
+      parse_mode: "HTML",
+      reply_markup: transferCancelKeyboard(),
+    });
+    setTransferFlow(tgUserId, {
+      step: "awaiting_address",
+      startedAt: Date.now(),
+      messageId: replyMsg.message_id,
+    });
   });
 
   bot.command("claim", async (ctx) => {
@@ -302,6 +372,20 @@ function registerHandlers(bot: Bot) {
     await ctx.editMessageText(sendFlowPrivacyMessage(), {
       parse_mode: "HTML",
       reply_markup: sendPrivacyKeyboard(),
+    });
+  });
+
+  bot.callbackQuery(CB.TRANSFER, async (ctx) => {
+    await ctx.answerCallbackQuery();
+    clearTransferFlow(ctx.from.id);
+    setTransferFlow(ctx.from.id, {
+      step: "awaiting_address",
+      startedAt: Date.now(),
+      messageId: ctx.callbackQuery.message?.message_id,
+    });
+    await ctx.editMessageText(transferAddressMessage(), {
+      parse_mode: "HTML",
+      reply_markup: transferCancelKeyboard(),
     });
   });
 
@@ -401,10 +485,7 @@ function registerHandlers(bot: Bot) {
   bot.callbackQuery(CB.SEND_PRIV, async (ctx) => {
     await ctx.answerCallbackQuery();
     const flow = getSendFlow(ctx.from.id);
-    if (!flow || flow.step !== "awaiting_privacy") {
-      await ctx.answerCallbackQuery("Session expired. Use /start.");
-      return;
-    }
+    if (!flow || flow.step !== "awaiting_privacy") return;
     setSendFlow(ctx.from.id, {
       ...flow,
       step: "awaiting_recipient",
@@ -419,10 +500,7 @@ function registerHandlers(bot: Bot) {
   bot.callbackQuery(CB.SEND_QUICK, async (ctx) => {
     await ctx.answerCallbackQuery();
     const flow = getSendFlow(ctx.from.id);
-    if (!flow || flow.step !== "awaiting_privacy") {
-      await ctx.answerCallbackQuery("Session expired. Use /start.");
-      return;
-    }
+    if (!flow || flow.step !== "awaiting_privacy") return;
     setSendFlow(ctx.from.id, {
       ...flow,
       step: "awaiting_recipient",
@@ -454,7 +532,6 @@ function registerHandlers(bot: Bot) {
     }
     clearSendFlow(ctx.from.id);
 
-    // Remove buttons to prevent double-tap
     try {
       await ctx.editMessageReplyMarkup({
         reply_markup: { inline_keyboard: [] },
@@ -474,6 +551,124 @@ function registerHandlers(bot: Bot) {
     clearSendFlow(ctx.from.id);
     clearPendingConfirmation(ctx.from.id);
     await editToHomeScreen(ctx);
+  });
+
+  // ============ Callback Queries — Transfer Flow ============
+
+  bot.callbackQuery(CB.TRANSFER_CONFIRM, async (ctx) => {
+    await ctx.answerCallbackQuery("Processing...");
+    const flow = getTransferFlow(ctx.from.id);
+    if (
+      !flow ||
+      flow.step !== "awaiting_confirm" ||
+      !flow.address ||
+      !flow.amount
+    ) {
+      return;
+    }
+    clearTransferFlow(ctx.from.id);
+
+    try {
+      await ctx.editMessageReplyMarkup({
+        reply_markup: { inline_keyboard: [] },
+      });
+    } catch {
+      // Message may not be editable
+    }
+
+    await executeTransfer(ctx, flow.address, flow.amount);
+  });
+
+  bot.callbackQuery(CB.TRANSFER_CANCEL, async (ctx) => {
+    await ctx.answerCallbackQuery("Cancelled");
+    clearTransferFlow(ctx.from.id);
+    await editToHomeScreen(ctx);
+  });
+
+  // ============ Callback Queries — Receive / Claim Buttons ============
+
+  bot.callbackQuery(/^rcv:quick:\d+$/, async (ctx) => {
+    await ctx.answerCallbackQuery("Claiming...");
+    const paymentId = parseInt(ctx.callbackQuery.data.split(":")[2]);
+    const wallet = await getWallet(ctx.from.id);
+    if (!wallet) {
+      await ctx.reply(errorMessage("No wallet found. Use /start first."), {
+        parse_mode: "HTML",
+      });
+      return;
+    }
+
+    try {
+      await ctx.editMessageReplyMarkup({
+        reply_markup: { inline_keyboard: [] },
+      });
+    } catch {}
+
+    const result = await claimPaymentForUser(
+      paymentId,
+      wallet.wallet_address,
+      "quick"
+    );
+    if (result.success) {
+      await ctx.reply(
+        claimSuccessMessage(result.amountReceived || 0),
+        { parse_mode: "HTML" }
+      );
+    } else {
+      await ctx.reply(errorMessage(result.error || "Claim failed"), {
+        parse_mode: "HTML",
+      });
+    }
+  });
+
+  bot.callbackQuery(/^rcv:priv:\d+$/, async (ctx) => {
+    await ctx.answerCallbackQuery("Claiming privately...");
+    const paymentId = parseInt(ctx.callbackQuery.data.split(":")[2]);
+    const wallet = await getWallet(ctx.from.id);
+    if (!wallet) {
+      await ctx.reply(errorMessage("No wallet found. Use /start first."), {
+        parse_mode: "HTML",
+      });
+      return;
+    }
+
+    try {
+      await ctx.editMessageReplyMarkup({
+        reply_markup: { inline_keyboard: [] },
+      });
+    } catch {}
+
+    const result = await claimPaymentForUser(
+      paymentId,
+      wallet.wallet_address,
+      "private"
+    );
+    if (result.success) {
+      await ctx.reply(
+        claimSuccessMessage(result.amountReceived || 0),
+        { parse_mode: "HTML" }
+      );
+    } else {
+      await ctx.reply(errorMessage(result.error || "Claim failed"), {
+        parse_mode: "HTML",
+      });
+    }
+  });
+
+  bot.callbackQuery(/^rcv:link:\d+$/, async (ctx) => {
+    await ctx.answerCallbackQuery();
+    const paymentId = parseInt(ctx.callbackQuery.data.split(":")[2]);
+    const payment = await getPaymentById(paymentId);
+    if (!payment) {
+      await ctx.reply(errorMessage("Payment not found."), {
+        parse_mode: "HTML",
+      });
+      return;
+    }
+    await ctx.reply(
+      `🔗 <b>Claim Link</b>\n\n<code>${payment.claim_url}</code>\n\nPaste this on hoppy.cash/claim or use /claim in this chat.`,
+      { parse_mode: "HTML" }
+    );
   });
 
   // ============ Callback Queries — Recall from History ============
@@ -496,6 +691,86 @@ function registerHandlers(bot: Bot) {
       return;
     }
 
+    // ---- Transfer flow interception (check first) ----
+    const xferFlow = getTransferFlow(tgUserId);
+    if (xferFlow) {
+      if (xferFlow.step === "awaiting_address") {
+        const input = rawText.trim();
+        // Validate Solana address (base58, 32-44 chars)
+        if (!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(input)) {
+          await ctx.reply(
+            "Please enter a valid Solana address (base58 public key).",
+            { parse_mode: "HTML" }
+          );
+          return;
+        }
+        // Verify it's a valid public key
+        try {
+          new PublicKey(input);
+        } catch {
+          await ctx.reply(
+            "Invalid Solana address. Please try again.",
+            { parse_mode: "HTML" }
+          );
+          return;
+        }
+        setTransferFlow(tgUserId, {
+          ...xferFlow,
+          step: "awaiting_amount",
+          address: input,
+        });
+        if (xferFlow.messageId) {
+          try {
+            await ctx.api.editMessageText(
+              ctx.chat!.id,
+              xferFlow.messageId,
+              transferAmountMessage(input),
+              { parse_mode: "HTML", reply_markup: transferCancelKeyboard() }
+            );
+            return;
+          } catch {}
+        }
+        await ctx.reply(transferAmountMessage(input), {
+          parse_mode: "HTML",
+          reply_markup: transferCancelKeyboard(),
+        });
+        return;
+      }
+
+      if (xferFlow.step === "awaiting_amount") {
+        const amount = parseFloat(rawText.trim());
+        if (isNaN(amount) || amount <= 0 || amount > 1000) {
+          await ctx.reply(
+            "Please enter a valid amount (e.g. <code>0.5</code>).",
+            { parse_mode: "HTML" }
+          );
+          return;
+        }
+        setTransferFlow(tgUserId, {
+          ...xferFlow,
+          step: "awaiting_confirm",
+          amount,
+        });
+        const confirmText = transferConfirmMessage(xferFlow.address!, amount);
+        if (xferFlow.messageId) {
+          try {
+            await ctx.api.editMessageText(
+              ctx.chat!.id,
+              xferFlow.messageId,
+              confirmText,
+              { parse_mode: "HTML", reply_markup: confirmTransferKeyboard() }
+            );
+            return;
+          } catch {}
+        }
+        await ctx.reply(confirmText, {
+          parse_mode: "HTML",
+          reply_markup: confirmTransferKeyboard(),
+        });
+        return;
+      }
+    }
+
     // ---- Interactive send flow interception ----
     const flow = getSendFlow(tgUserId);
     if (flow) {
@@ -515,8 +790,6 @@ function registerHandlers(bot: Bot) {
           step: "awaiting_amount",
           recipient,
         });
-
-        // Try to edit the flow message in-place
         if (flow.messageId) {
           try {
             await ctx.api.editMessageText(
@@ -526,14 +799,12 @@ function registerHandlers(bot: Bot) {
               { parse_mode: "HTML", reply_markup: cancelKeyboard() }
             );
             return;
-          } catch {
-            // Message too old to edit, send new
-          }
+          } catch {}
         }
-        await ctx.reply(
-          sendFlowAmountMessage(flow.privacy!, recipient),
-          { parse_mode: "HTML", reply_markup: cancelKeyboard() }
-        );
+        await ctx.reply(sendFlowAmountMessage(flow.privacy!, recipient), {
+          parse_mode: "HTML",
+          reply_markup: cancelKeyboard(),
+        });
         return;
       }
 
@@ -551,7 +822,6 @@ function registerHandlers(bot: Bot) {
           step: "awaiting_confirm",
           amount,
         });
-
         const confirmText = sendFlowConfirmMessage(
           amount,
           flow.recipient!,
@@ -566,9 +836,7 @@ function registerHandlers(bot: Bot) {
               { parse_mode: "HTML", reply_markup: confirmSendKeyboard() }
             );
             return;
-          } catch {
-            // Message too old to edit
-          }
+          } catch {}
         }
         await ctx.reply(confirmText, {
           parse_mode: "HTML",
@@ -576,8 +844,6 @@ function registerHandlers(bot: Bot) {
         });
         return;
       }
-
-      // If awaiting_confirm, buttons handle it — fall through to NLP
     }
 
     // ---- Legacy text-based pending confirmation ----
@@ -710,7 +976,6 @@ async function handleSend(ctx: Context, text: string) {
     return;
   }
 
-  // Confirmation gate for high-value sends — now with inline buttons
   if (parsed.amount >= SEND_CONFIRM_THRESHOLD_SOL) {
     setPendingConfirmation(tgUserId, {
       text,
@@ -814,23 +1079,56 @@ async function executeSend(ctx: Context, text: string) {
       { commitment: "confirmed" }
     );
 
-    const baseUrl = APP_URL;
-    const response = await fetch(`${baseUrl}/api/privacy-cash/create-link`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        amount: amountLamports,
-        compositeSecret: compositeSecret.full,
-        ephemeralAddress,
-        fundingTxHash,
-        senderPrivacy: privacy,
-        senderAddress: wallet.wallet_address,
-      }),
-    });
+    // Wait for tx to propagate before calling create-link
+    await sleep(2000);
 
-    const result = await response.json();
+    const baseUrl = APP_URL;
+
+    // Retry create-link once on failure
+    let result: any;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const response = await fetch(
+        `${baseUrl}/api/privacy-cash/create-link`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            amount: amountLamports,
+            compositeSecret: compositeSecret.full,
+            ephemeralAddress,
+            fundingTxHash,
+            senderPrivacy: privacy,
+            senderAddress: wallet.wallet_address,
+          }),
+        }
+      );
+      result = await response.json();
+      if (result.success && result.note) break;
+      if (attempt === 0) await sleep(3000); // Wait before retry
+    }
+
+    // Handle create-link failure with recovery info
     if (!result.success || !result.note) {
-      throw new Error(result.error || "Failed to create payment link");
+      if (result.recoverySuccess && result.sweptAmount) {
+        const sweptSol = lamportsToSol(result.sweptAmount).toFixed(4);
+        await ctx.reply(recoverySuccessMessage(sweptSol), {
+          parse_mode: "HTML",
+        });
+      } else if (result.ephemeralAddress) {
+        await ctx.reply(
+          recoveryFailedMessage(
+            result.ephemeralAddress,
+            result.error || "Payment link creation failed"
+          ),
+          { parse_mode: "HTML" }
+        );
+      } else {
+        await ctx.reply(
+          errorMessage(result.error || "Failed to create payment link"),
+          { parse_mode: "HTML" }
+        );
+      }
+      return;
     }
 
     const claimUrl = createDoubleHopClaimUrl(result.note, baseUrl);
@@ -838,44 +1136,48 @@ async function executeSend(ctx: Context, text: string) {
     let delivered = false;
     const recipientId = parsed.recipient;
 
+    // Save payment FIRST so we have an ID for the receive buttons
     if (recipientId.startsWith("@")) {
       const recipientUsername = recipientId.slice(1);
       const recipientWallet = await getWalletByUsername(recipientUsername);
 
+      // Always save the payment record first
+      const paymentId = await savePayment({
+        senderTgId: tgUserId,
+        recipientIdentifier: recipientUsername.toLowerCase(),
+        deliveryMethod: "telegram",
+        claimUrl,
+        amount: amountLamports,
+        senderPrivacy: privacy,
+      });
+
       if (recipientWallet) {
         try {
-          await ctx.api.sendMessage(
+          // Send image + message with claim buttons
+          await ctx.api.sendPhoto(
             recipientWallet.tg_user_id,
-            `🐰 <b>You received a private payment!</b>\n\n` +
-              `Amount: <b>${parsed.amount} SOL</b>\n` +
-              `From: ${ctx.from?.username ? `@${ctx.from.username}` : "someone"}\n\n` +
-              `Claim link:\n<code>${claimUrl}</code>\n\n` +
-              `Or paste this link on hoppy.cash/claim to claim with any wallet.`,
-            { parse_mode: "HTML" }
+            `${APP_URL}/hoppy-carrot.png`,
+            {
+              caption: receivedPaymentMessage(
+                amountLamports,
+                ctx.from?.username
+              ),
+              parse_mode: "HTML",
+              reply_markup: receivedPaymentKeyboard(paymentId),
+            }
           );
           delivered = true;
+          await updatePaymentStatus(paymentId, "delivered");
         } catch {
-          // Couldn't DM
+          // Couldn't DM — stays pending for deliverPendingPayments
         }
       }
-
-      if (!delivered) {
-        await savePayment({
-          senderTgId: tgUserId,
-          recipientIdentifier: recipientUsername.toLowerCase(),
-          deliveryMethod: "telegram",
-          claimUrl,
-          amount: amountLamports,
-          senderPrivacy: privacy,
-        });
-      }
-    }
-
-    if (delivered || !recipientId.startsWith("@")) {
+    } else {
+      // Non-@ recipient (just a link)
       await savePayment({
         senderTgId: tgUserId,
         recipientIdentifier: recipientId,
-        deliveryMethod: delivered ? "telegram" : "link",
+        deliveryMethod: "link",
         claimUrl,
         amount: amountLamports,
         senderPrivacy: privacy,
@@ -907,7 +1209,73 @@ async function executeSend(ctx: Context, text: string) {
   }
 }
 
-async function handleClaim(ctx: Context, urlOrText: string) {
+async function executeTransfer(
+  ctx: Context,
+  destinationAddress: string,
+  amountSol: number
+) {
+  const tgUserId = ctx.from!.id;
+  const wallet = await getWallet(tgUserId);
+  if (!wallet) {
+    await ctx.reply(errorMessage("No wallet found. Use /start first."), {
+      parse_mode: "HTML",
+    });
+    return;
+  }
+
+  const amountLamports = solToLamports(amountSol);
+  const balance = await getBalance(wallet.wallet_address);
+  const TX_FEE = 5000;
+
+  if (balance < amountLamports + TX_FEE) {
+    await ctx.reply(
+      errorMessage(
+        `Insufficient balance. You have ${lamportsToSol(balance).toFixed(4)} SOL but need ~${lamportsToSol(amountLamports + TX_FEE).toFixed(4)} SOL.`
+      ),
+      { parse_mode: "HTML" }
+    );
+    return;
+  }
+
+  await ctx.reply(escapeMarkdown("Sending transfer..."), {
+    parse_mode: "HTML",
+  });
+
+  try {
+    const connection = new Connection(RPC_URL, "confirmed");
+    const secretKey = decryptSecretKey(wallet.encrypted_secret_key, tgUserId);
+    const userKeypair = keypairFromBase58(secretKey);
+
+    const tx = new Transaction().add(
+      SystemProgram.transfer({
+        fromPubkey: userKeypair.publicKey,
+        toPubkey: new PublicKey(destinationAddress),
+        lamports: amountLamports,
+      })
+    );
+
+    const txHash = await sendAndConfirmTransaction(
+      connection,
+      tx,
+      [userKeypair],
+      { commitment: "confirmed" }
+    );
+
+    await ctx.reply(
+      transferSuccessMessage(amountSol, destinationAddress, txHash),
+      { parse_mode: "HTML" }
+    );
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : "Transfer failed";
+    await ctx.reply(errorMessage(msg), { parse_mode: "HTML" });
+  }
+}
+
+async function handleClaim(
+  ctx: Context,
+  urlOrText: string,
+  recipientPrivacy: string = "quick"
+) {
   const tgUserId = ctx.from!.id;
   const wallet = await getWallet(tgUserId);
   if (!wallet) {
@@ -940,7 +1308,7 @@ async function handleClaim(ctx: Context, urlOrText: string) {
       body: JSON.stringify({
         note,
         recipientAddress: wallet.wallet_address,
-        recipientPrivacy: "quick",
+        recipientPrivacy,
       }),
     });
 
@@ -1048,13 +1416,11 @@ async function deliverPendingPayments(ctx: Context, username: string) {
 
   for (const payment of pending) {
     try {
-      await ctx.reply(
-        `🎉 <b>Pending payment found!</b>\n\n` +
-          `Amount: <b>${lamportsToSol(payment.amount).toFixed(4)} SOL</b>\n\n` +
-          `Claim link:\n<code>${payment.claim_url}</code>\n\n` +
-          `Use /claim followed by the link above, or paste it to auto-claim.`,
-        { parse_mode: "HTML" }
-      );
+      await ctx.replyWithPhoto(`${APP_URL}/hoppy-carrot.png`, {
+        caption: receivedPaymentDeliveredMessage(payment.amount),
+        parse_mode: "HTML",
+        reply_markup: receivedPaymentKeyboard(payment.id),
+      });
       await updatePaymentStatus(payment.id, "delivered");
     } catch {
       // Failed to deliver
