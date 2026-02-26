@@ -9,6 +9,7 @@ export interface SendFlowState {
   privacy?: "basic" | "private";
   recipient?: string;
   amount?: number;
+  anonymous?: boolean;
   messageId?: number;
   startedAt: number;
 }

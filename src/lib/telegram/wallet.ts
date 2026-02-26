@@ -1,5 +1,5 @@
 import { Keypair, Connection, PublicKey } from "@solana/web3.js";
-import { createCipheriv, createDecipheriv, createHmac, randomBytes } from "crypto";
+import { createCipheriv, createDecipheriv, createHmac, createHash, randomBytes } from "crypto";
 import bs58 from "bs58";
 
 const RPC_URL = process.env.NEXT_PUBLIC_SOLANA_RPC_URL || "https://api.devnet.solana.com";
@@ -70,4 +70,51 @@ export function lamportsToSol(lamports: number): number {
 
 export function solToLamports(sol: number): number {
   return Math.round(sol * 1e9);
+}
+
+// ============ Payment Claim URL Encryption ============
+
+/** System-level key for encrypting payment claim URLs (not per-user) */
+function derivePaymentKey(): Buffer {
+  return createHmac("sha256", getMasterKey())
+    .update("hoppy:tg:payments")
+    .digest();
+}
+
+/** Encrypt a claim URL for at-rest storage */
+export function encryptClaimUrl(claimUrl: string): string {
+  const key = derivePaymentKey();
+  const iv = randomBytes(12);
+  const cipher = createCipheriv("aes-256-gcm", key, iv);
+  let encrypted = cipher.update(claimUrl, "utf8", "hex");
+  encrypted += cipher.final("hex");
+  const tag = cipher.getAuthTag();
+  return `${iv.toString("hex")}:${tag.toString("hex")}:${encrypted}`;
+}
+
+/** Decrypt a claim URL from storage */
+export function decryptClaimUrl(encryptedData: string): string {
+  const key = derivePaymentKey();
+  const [ivHex, tagHex, ciphertext] = encryptedData.split(":");
+  const decipher = createDecipheriv("aes-256-gcm", key, Buffer.from(ivHex, "hex"));
+  decipher.setAuthTag(Buffer.from(tagHex, "hex"));
+  let decrypted = decipher.update(ciphertext, "hex", "utf8");
+  decrypted += decipher.final("utf8");
+  return decrypted;
+}
+
+/** Check if a value is in encrypted format (iv:tag:ciphertext) vs plaintext */
+export function isEncryptedClaimUrl(value: string): boolean {
+  const parts = value.split(":");
+  // iv=24 hex chars (12 bytes), tag=32 hex chars (16 bytes), ciphertext varies
+  return parts.length === 3 && parts[0].length === 24 && parts[1].length === 32;
+}
+
+// ============ Recipient Identifier Hashing ============
+
+/** Hash a recipient identifier (username) for privacy-preserving storage */
+export function hashIdentifier(identifier: string): string {
+  return createHash("sha256")
+    .update(identifier.toLowerCase())
+    .digest("hex");
 }

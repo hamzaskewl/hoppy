@@ -24,6 +24,8 @@ export const CB = {
   SET_NEWWALLET: "set:newwallet",
   SET_SWITCH: "set:switch",
   SET_BACK: "set:back",
+  // Sender anonymity toggle
+  SEND_ANON: "send:anon",
   // Navigation
   HOME: "home",
 } as const;
@@ -54,8 +56,13 @@ export function sendPrivacyKeyboard(): InlineKeyboard {
     .text("❌ Cancel", CB.SEND_CANCEL);
 }
 
-export function confirmSendKeyboard(): InlineKeyboard {
+export function confirmSendKeyboard(anonymous: boolean): InlineKeyboard {
+  const anonLabel = anonymous
+    ? "👻 Anonymous ✓"
+    : "👤 Show my username ✓";
   return new InlineKeyboard()
+    .text(anonLabel, CB.SEND_ANON)
+    .row()
     .text("✅ Confirm", CB.CONFIRM_YES)
     .text("❌ Cancel", CB.CONFIRM_NO);
 }

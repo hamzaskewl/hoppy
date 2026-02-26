@@ -1,4 +1,10 @@
 import pool from "@/lib/card/db";
+import {
+  encryptClaimUrl,
+  decryptClaimUrl,
+  isEncryptedClaimUrl,
+  hashIdentifier,
+} from "./wallet";
 
 export async function initTelegramTables(): Promise<void> {
   const client = await pool.connect();
@@ -24,6 +30,7 @@ export async function initTelegramTables(): Promise<void> {
         amount BIGINT NOT NULL,
         status TEXT NOT NULL DEFAULT 'pending',
         sender_privacy TEXT NOT NULL DEFAULT 'basic',
+        sender_anonymous BOOLEAN NOT NULL DEFAULT true,
         created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
         expires_at TIMESTAMP WITH TIME ZONE DEFAULT (NOW() + INTERVAL '7 days')
       );
@@ -52,6 +59,13 @@ export async function initTelegramTables(): Promise<void> {
           ALTER TABLE tg_wallets DROP CONSTRAINT tg_wallets_pkey;
           ALTER TABLE tg_wallets ADD COLUMN id SERIAL PRIMARY KEY;
         END IF;
+
+        IF NOT EXISTS (
+          SELECT 1 FROM information_schema.columns
+          WHERE table_name = 'tg_payments' AND column_name = 'sender_anonymous'
+        ) THEN
+          ALTER TABLE tg_payments ADD COLUMN sender_anonymous BOOLEAN NOT NULL DEFAULT true;
+        END IF;
       END $$;
     `);
 
@@ -65,7 +79,26 @@ export async function initTelegramTables(): Promise<void> {
   } finally {
     client.release();
   }
+
+  // Migrate existing plaintext data (idempotent)
+  try {
+    await migrateExistingPayments();
+  } catch (err) {
+    console.error("[TG DB] Migration failed (non-fatal):", err);
+  }
+
+  // Purge old records
+  try {
+    const purged = await purgeOldPayments();
+    if (purged > 0) {
+      console.log(`[TG DB] Purged ${purged} old payment records`);
+    }
+  } catch (err) {
+    console.error("[TG DB] Purge failed (non-fatal):", err);
+  }
 }
+
+// ============ Wallet Functions ============
 
 export async function getWallet(tgUserId: number) {
   const result = await pool.query(
@@ -193,6 +226,16 @@ export async function updateWalletUsername(
   );
 }
 
+// ============ Payment Functions (with encryption + hashing) ============
+
+/** Decrypt claim_url if encrypted; pass through legacy plaintext rows */
+function decryptPaymentRow(row: any): any {
+  if (row && row.claim_url && isEncryptedClaimUrl(row.claim_url)) {
+    return { ...row, claim_url: decryptClaimUrl(row.claim_url) };
+  }
+  return row;
+}
+
 export async function savePayment(payment: {
   senderTgId: number;
   recipientIdentifier: string;
@@ -200,18 +243,22 @@ export async function savePayment(payment: {
   claimUrl: string;
   amount: number;
   senderPrivacy: string;
+  senderAnonymous: boolean;
 }) {
+  const encryptedUrl = encryptClaimUrl(payment.claimUrl);
+  const hashedRecipient = hashIdentifier(payment.recipientIdentifier);
   const result = await pool.query(
-    `INSERT INTO tg_payments (sender_tg_id, recipient_identifier, delivery_method, claim_url, amount, sender_privacy)
-     VALUES ($1, $2, $3, $4, $5, $6)
+    `INSERT INTO tg_payments (sender_tg_id, recipient_identifier, delivery_method, claim_url, amount, sender_privacy, sender_anonymous)
+     VALUES ($1, $2, $3, $4, $5, $6, $7)
      RETURNING id`,
     [
       payment.senderTgId,
-      payment.recipientIdentifier,
+      hashedRecipient,
       payment.deliveryMethod,
-      payment.claimUrl,
+      encryptedUrl,
       payment.amount,
       payment.senderPrivacy,
+      payment.senderAnonymous,
     ]
   );
   return result.rows[0].id as number;
@@ -225,17 +272,18 @@ export async function getPaymentsByUser(tgUserId: number, limit = 10) {
      LIMIT $2`,
     [tgUserId, limit]
   );
-  return result.rows;
+  return result.rows.map(decryptPaymentRow);
 }
 
 export async function getPendingPaymentsForUser(username: string) {
+  const hashedIdentifier = hashIdentifier(username);
   const result = await pool.query(
     `SELECT * FROM tg_payments
      WHERE recipient_identifier = $1 AND status = 'pending'
      ORDER BY created_at ASC`,
-    [username.toLowerCase()]
+    [hashedIdentifier]
   );
-  return result.rows;
+  return result.rows.map(decryptPaymentRow);
 }
 
 export async function getPaymentById(id: number) {
@@ -243,7 +291,7 @@ export async function getPaymentById(id: number) {
     "SELECT * FROM tg_payments WHERE id = $1",
     [id]
   );
-  return result.rows[0] || null;
+  return result.rows[0] ? decryptPaymentRow(result.rows[0]) : null;
 }
 
 export async function updatePaymentStatus(id: number, status: string) {
@@ -251,4 +299,66 @@ export async function updatePaymentStatus(id: number, status: string) {
     "UPDATE tg_payments SET status = $1 WHERE id = $2",
     [status, id]
   );
+}
+
+// ============ Migration & Purge ============
+
+/** Encrypt plaintext claim_urls and hash plaintext recipient_identifiers (idempotent) */
+async function migrateExistingPayments(): Promise<void> {
+  const rows = await pool.query(
+    "SELECT id, claim_url, recipient_identifier FROM tg_payments"
+  );
+
+  let encCount = 0;
+  let hashCount = 0;
+
+  for (const row of rows.rows) {
+    const updates: string[] = [];
+    const values: any[] = [];
+    let paramIdx = 1;
+
+    // Encrypt plaintext claim_urls
+    if (row.claim_url && !isEncryptedClaimUrl(row.claim_url)) {
+      const encrypted = encryptClaimUrl(row.claim_url);
+      updates.push(`claim_url = $${paramIdx++}`);
+      values.push(encrypted);
+      encCount++;
+    }
+
+    // Hash plaintext recipient_identifiers
+    if (row.recipient_identifier) {
+      const ri = row.recipient_identifier;
+      const isAlreadyHashed = ri.length === 64 && /^[a-f0-9]+$/.test(ri);
+      if (!isAlreadyHashed) {
+        const hashed = hashIdentifier(ri);
+        updates.push(`recipient_identifier = $${paramIdx++}`);
+        values.push(hashed);
+        hashCount++;
+      }
+    }
+
+    if (updates.length > 0) {
+      values.push(row.id);
+      await pool.query(
+        `UPDATE tg_payments SET ${updates.join(", ")} WHERE id = $${paramIdx}`,
+        values
+      );
+    }
+  }
+
+  if (encCount > 0) console.log(`[TG DB] Migrated ${encCount} claim_urls to encrypted format`);
+  if (hashCount > 0) console.log(`[TG DB] Migrated ${hashCount} recipient_identifiers to hashed format`);
+}
+
+/** Purge claimed/recalled/expired payment records older than 48 hours */
+async function purgeOldPayments(): Promise<number> {
+  const result = await pool.query(`
+    DELETE FROM tg_payments
+    WHERE
+      (status IN ('claimed', 'recalled') AND created_at < NOW() - INTERVAL '48 hours')
+      OR status = 'expired'
+      OR (status = 'pending' AND expires_at IS NOT NULL AND expires_at < NOW())
+    RETURNING id
+  `);
+  return result.rowCount || 0;
 }

@@ -586,6 +586,7 @@ function registerHandlers(bot: Bot) {
     ) {
       return;
     }
+    const anonymous = flow.anonymous ?? true;
     clearSendFlow(ctx.from.id);
 
     try {
@@ -599,7 +600,27 @@ function registerHandlers(bot: Bot) {
     const privacyWord = flow.privacy === "private" ? "privately" : "";
     const sendText =
       `send ${flow.amount} SOL to ${flow.recipient} ${privacyWord}`.trim();
-    await executeSend(ctx, sendText);
+    await executeSend(ctx, sendText, anonymous);
+  });
+
+  bot.callbackQuery(CB.SEND_ANON, async (ctx) => {
+    await ctx.answerCallbackQuery();
+    const flow = getSendFlow(ctx.from.id);
+    if (!flow || flow.step !== "awaiting_confirm") return;
+    const toggled = !(flow.anonymous ?? true);
+    setSendFlow(ctx.from.id, { ...flow, anonymous: toggled });
+    const confirmText = sendFlowConfirmMessage(
+      flow.amount!,
+      flow.recipient!,
+      flow.privacy!,
+      toggled
+    );
+    try {
+      await ctx.editMessageText(confirmText, {
+        parse_mode: "HTML",
+        reply_markup: confirmSendKeyboard(toggled),
+      });
+    } catch {}
   });
 
   bot.callbackQuery(CB.CONFIRM_NO, async (ctx) => {
@@ -644,7 +665,7 @@ function registerHandlers(bot: Bot) {
   // ============ Callback Queries — Receive / Claim Buttons ============
 
   bot.callbackQuery(/^rcv:quick:\d+$/, async (ctx) => {
-    await ctx.answerCallbackQuery("Claiming...");
+    await ctx.answerCallbackQuery();
     const paymentId = parseInt(ctx.callbackQuery.data.split(":")[2]);
     const wallet = await getWallet(ctx.from.id);
     if (!wallet) {
@@ -660,25 +681,42 @@ function registerHandlers(bot: Bot) {
       });
     } catch {}
 
-    const result = await claimPaymentForUser(
-      paymentId,
-      wallet.wallet_address,
-      "quick"
-    );
-    if (result.success) {
-      await ctx.reply(
-        claimSuccessMessage(result.amountReceived || 0),
-        { parse_mode: "HTML" }
-      );
-    } else {
-      await ctx.reply(errorMessage(result.error || "Claim failed"), {
-        parse_mode: "HTML",
+    const statusMsg = await ctx.reply("⏳ Claiming payment...", {
+      parse_mode: "HTML",
+    });
+    const chatId = ctx.chat!.id;
+
+    // Fire and forget — don't block webhook response
+    claimPaymentForUser(paymentId, wallet.wallet_address, "quick")
+      .then(async (result) => {
+        if (result.success) {
+          await ctx.api.editMessageText(
+            chatId, statusMsg.message_id,
+            claimSuccessMessage(result.amountReceived || 0),
+            { parse_mode: "HTML" }
+          );
+        } else {
+          await ctx.api.editMessageText(
+            chatId, statusMsg.message_id,
+            errorMessage(result.error || "Claim failed"),
+            { parse_mode: "HTML" }
+          );
+        }
+      })
+      .catch(async (err) => {
+        console.error("[TG Bot] Background quick claim error:", err);
+        try {
+          await ctx.api.editMessageText(
+            chatId, statusMsg.message_id,
+            errorMessage("Claim failed unexpectedly"),
+            { parse_mode: "HTML" }
+          );
+        } catch {}
       });
-    }
   });
 
   bot.callbackQuery(/^rcv:priv:\d+$/, async (ctx) => {
-    await ctx.answerCallbackQuery("Claiming privately...");
+    await ctx.answerCallbackQuery();
     const paymentId = parseInt(ctx.callbackQuery.data.split(":")[2]);
     const wallet = await getWallet(ctx.from.id);
     if (!wallet) {
@@ -694,21 +732,39 @@ function registerHandlers(bot: Bot) {
       });
     } catch {}
 
-    const result = await claimPaymentForUser(
-      paymentId,
-      wallet.wallet_address,
-      "private"
+    const statusMsg = await ctx.reply(
+      "⏳ Claiming privately — generating ZK proof, this may take a minute...",
+      { parse_mode: "HTML" }
     );
-    if (result.success) {
-      await ctx.reply(
-        claimSuccessMessage(result.amountReceived || 0),
-        { parse_mode: "HTML" }
-      );
-    } else {
-      await ctx.reply(errorMessage(result.error || "Claim failed"), {
-        parse_mode: "HTML",
+    const chatId = ctx.chat!.id;
+
+    // Fire and forget — don't block webhook response
+    claimPaymentForUser(paymentId, wallet.wallet_address, "private")
+      .then(async (result) => {
+        if (result.success) {
+          await ctx.api.editMessageText(
+            chatId, statusMsg.message_id,
+            claimSuccessMessage(result.amountReceived || 0),
+            { parse_mode: "HTML" }
+          );
+        } else {
+          await ctx.api.editMessageText(
+            chatId, statusMsg.message_id,
+            errorMessage(result.error || "Claim failed"),
+            { parse_mode: "HTML" }
+          );
+        }
+      })
+      .catch(async (err) => {
+        console.error("[TG Bot] Background private claim error:", err);
+        try {
+          await ctx.api.editMessageText(
+            chatId, statusMsg.message_id,
+            errorMessage("Claim failed unexpectedly"),
+            { parse_mode: "HTML" }
+          );
+        } catch {}
       });
-    }
   });
 
   bot.callbackQuery(/^rcv:link:\d+$/, async (ctx) => {
@@ -873,15 +929,18 @@ function registerHandlers(bot: Bot) {
           );
           return;
         }
+        const defaultAnon = flow.privacy === "private";
         setSendFlow(tgUserId, {
           ...flow,
           step: "awaiting_confirm",
           amount,
+          anonymous: defaultAnon,
         });
         const confirmText = sendFlowConfirmMessage(
           amount,
           flow.recipient!,
-          flow.privacy!
+          flow.privacy!,
+          defaultAnon
         );
         if (flow.messageId) {
           try {
@@ -889,14 +948,14 @@ function registerHandlers(bot: Bot) {
               ctx.chat!.id,
               flow.messageId,
               confirmText,
-              { parse_mode: "HTML", reply_markup: confirmSendKeyboard() }
+              { parse_mode: "HTML", reply_markup: confirmSendKeyboard(defaultAnon) }
             );
             return;
           } catch {}
         }
         await ctx.reply(confirmText, {
           parse_mode: "HTML",
-          reply_markup: confirmSendKeyboard(),
+          reply_markup: confirmSendKeyboard(defaultAnon),
         });
         return;
       }
@@ -1033,6 +1092,7 @@ async function handleSend(ctx: Context, text: string) {
   }
 
   // Always confirm before sending
+  const defaultAnonymous = (parsed.privacy || "basic") === "private";
   setPendingConfirmation(tgUserId, {
     text,
     expiresAt: Date.now() + 60_000,
@@ -1042,6 +1102,7 @@ async function handleSend(ctx: Context, text: string) {
     privacy: parsed.privacy || "basic",
     recipient: parsed.recipient,
     amount: parsed.amount,
+    anonymous: defaultAnonymous,
     startedAt: Date.now(),
   });
 
@@ -1049,13 +1110,14 @@ async function handleSend(ctx: Context, text: string) {
     sendFlowConfirmMessage(
       parsed.amount,
       parsed.recipient,
-      parsed.privacy || "basic"
+      parsed.privacy || "basic",
+      defaultAnonymous
     ),
-    { parse_mode: "HTML", reply_markup: confirmSendKeyboard() }
+    { parse_mode: "HTML", reply_markup: confirmSendKeyboard(defaultAnonymous) }
   );
 }
 
-async function executeSend(ctx: Context, text: string) {
+async function executeSend(ctx: Context, text: string, anonymous = true) {
   const tgUserId = ctx.from!.id;
   const parsed = await parseIntent(text);
 
@@ -1206,10 +1268,12 @@ async function executeSend(ctx: Context, text: string) {
         claimUrl,
         amount: amountLamports,
         senderPrivacy: privacy,
+        senderAnonymous: anonymous,
       });
 
       if (recipientWallet) {
         try {
+          const senderName = anonymous ? undefined : ctx.from?.username;
           // Send image + message with claim buttons
           await ctx.api.sendPhoto(
             recipientWallet.tg_user_id,
@@ -1217,7 +1281,8 @@ async function executeSend(ctx: Context, text: string) {
             {
               caption: receivedPaymentMessage(
                 amountLamports,
-                ctx.from?.username
+                senderName,
+                recipientWallet.wallet_address
               ),
               parse_mode: "HTML",
               reply_markup: receivedPaymentKeyboard(paymentId),
@@ -1238,6 +1303,7 @@ async function executeSend(ctx: Context, text: string) {
         claimUrl,
         amount: amountLamports,
         senderPrivacy: privacy,
+        senderAnonymous: anonymous,
       });
     }
 
@@ -1471,10 +1537,20 @@ async function deliverPendingPayments(ctx: Context, username: string) {
   const pending = await getPendingPaymentsForUser(username);
   if (pending.length === 0) return;
 
+  const recipientWallet = await getWallet(ctx.from!.id);
+  const walletAddr = recipientWallet?.wallet_address || "unknown";
+
   for (const payment of pending) {
     try {
+      // Look up sender username if payment is not anonymous
+      let senderUsername: string | undefined;
+      if (!payment.sender_anonymous) {
+        const senderWallet = await getWallet(payment.sender_tg_id);
+        senderUsername = senderWallet?.tg_username || undefined;
+      }
+
       await ctx.replyWithPhoto(`${APP_URL}/hoppy-tgcarrot.png`, {
-        caption: receivedPaymentDeliveredMessage(payment.amount),
+        caption: receivedPaymentDeliveredMessage(payment.amount, walletAddr, senderUsername),
         parse_mode: "HTML",
         reply_markup: receivedPaymentKeyboard(payment.id),
       });

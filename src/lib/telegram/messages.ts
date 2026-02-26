@@ -140,8 +140,13 @@ export function historyMessage(
       p.status === "expired" ? "⏰" : "⏳";
     const privacy = p.sender_privacy === "private" ? "🔒" : "👁";
 
+    // Hashed identifiers are 64-char hex strings — show abbreviated
+    const recipient = p.recipient_identifier.length === 64 && /^[a-f0-9]+$/.test(p.recipient_identifier)
+      ? `${p.recipient_identifier.slice(0, 8)}...`
+      : esc(p.recipient_identifier);
+
     lines.push(
-      `${statusIcon} #${p.id} | ${sol} SOL → ${esc(p.recipient_identifier)} ${privacy} (${esc(date)})`
+      `${statusIcon} #${p.id} | ${sol} SOL → ${recipient} ${privacy} (${esc(date)})`
     );
   }
 
@@ -231,17 +236,22 @@ export function sendFlowConfirmMessage(
   amount: number,
   recipient: string,
   privacy: string,
+  anonymous: boolean,
 ): string {
   const label =
     privacy === "private"
       ? "🔒 Private (sender hidden)"
       : "⚡ Quick (sender visible)";
+  const anonLabel = anonymous
+    ? "👻 Anonymous — recipient won't see your username"
+    : "👤 Named — recipient will see your @username";
   return [
     `💸 <b>Confirm Payment</b>`,
     ``,
     `Amount: <b>${amount} SOL</b>`,
     `To: <b>${esc(recipient)}</b>`,
     `Mode: <b>${label}</b>`,
+    `Identity: <b>${anonLabel}</b>`,
     ``,
     `Tap ✅ to confirm or ❌ to cancel.`,
   ].join("\n");
@@ -282,14 +292,17 @@ export function switchWalletMessage(): string {
 export function receivedPaymentMessage(
   amountLamports: number,
   senderUsername: string | undefined,
+  walletAddress: string,
 ): string {
   const sol = lamportsToSol(amountLamports).toFixed(4);
   const from = senderUsername ? `@${esc(senderUsername)}` : "someone";
+  const short = `${walletAddress.slice(0, 6)}...${walletAddress.slice(-4)}`;
   return [
     `🎉 <b>You received a payment!</b>`,
     ``,
     `Amount: <b>${sol} SOL</b>`,
     `From: ${from}`,
+    `Wallet: <code>${short}</code>`,
     ``,
     `Tap below to claim to your wallet:`,
   ].join("\n");
@@ -297,12 +310,17 @@ export function receivedPaymentMessage(
 
 export function receivedPaymentDeliveredMessage(
   amountLamports: number,
+  walletAddress: string,
+  senderUsername?: string,
 ): string {
   const sol = lamportsToSol(amountLamports).toFixed(4);
+  const short = `${walletAddress.slice(0, 6)}...${walletAddress.slice(-4)}`;
+  const fromLine = senderUsername ? `From: @${esc(senderUsername)}\n` : "";
   return [
     `🎉 <b>Pending payment found!</b>`,
     ``,
     `Amount: <b>${sol} SOL</b>`,
+    `${fromLine}Wallet: <code>${short}</code>`,
     ``,
     `Tap below to claim to your wallet:`,
   ].join("\n");
