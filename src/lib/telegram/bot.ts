@@ -145,14 +145,14 @@ function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-/** Send the home screen (photo + interactive menu) */
+/** Send the home screen (single photo message with caption + buttons) */
 async function sendHomeScreen(
   ctx: Context,
   address: string,
   balanceSol: string
 ) {
-  await ctx.replyWithPhoto(`${APP_URL}/hopbunny.png`);
-  await ctx.reply(startMessage(address, balanceSol), {
+  await ctx.replyWithPhoto(`${APP_URL}/hoppy-bgblack.png`, {
+    caption: startMessage(address, balanceSol),
     parse_mode: "HTML",
     reply_markup: mainMenuKeyboard(),
   });
@@ -239,14 +239,11 @@ function registerHandlers(bot: Bot) {
     const encrypted = encryptSecretKey(wallet.secretKey, tgUserId);
     await upsertWallet(tgUserId, tgUsername, wallet.publicKey, encrypted);
 
-    await ctx.replyWithPhoto(`${APP_URL}/hopbunny.png`);
-    const msg = await ctx.reply(
-      startNewUserMessage(wallet.publicKey, wallet.secretKey),
-      {
-        parse_mode: "HTML",
-        reply_markup: mainMenuKeyboard(),
-      }
-    );
+    const msg = await ctx.replyWithPhoto(`${APP_URL}/hoppy-bgblack.png`, {
+      caption: startNewUserMessage(wallet.publicKey, wallet.secretKey),
+      parse_mode: "HTML",
+      reply_markup: mainMenuKeyboard(),
+    });
     autoDelete(ctx, msg.message_id, 120_000);
 
     if (tgUsername) await deliverPendingPayments(ctx, tgUsername);
@@ -364,35 +361,35 @@ function registerHandlers(bot: Bot) {
   bot.callbackQuery(CB.SEND, async (ctx) => {
     await ctx.answerCallbackQuery();
     clearSendFlow(ctx.from.id);
+    const replyMsg = await ctx.reply(sendFlowPrivacyMessage(), {
+      parse_mode: "HTML",
+      reply_markup: sendPrivacyKeyboard(),
+    });
     setSendFlow(ctx.from.id, {
       step: "awaiting_privacy",
       startedAt: Date.now(),
-      messageId: ctx.callbackQuery.message?.message_id,
-    });
-    await ctx.editMessageText(sendFlowPrivacyMessage(), {
-      parse_mode: "HTML",
-      reply_markup: sendPrivacyKeyboard(),
+      messageId: replyMsg.message_id,
     });
   });
 
   bot.callbackQuery(CB.TRANSFER, async (ctx) => {
     await ctx.answerCallbackQuery();
     clearTransferFlow(ctx.from.id);
+    const replyMsg = await ctx.reply(transferAddressMessage(), {
+      parse_mode: "HTML",
+      reply_markup: transferCancelKeyboard(),
+    });
     setTransferFlow(ctx.from.id, {
       step: "awaiting_address",
       startedAt: Date.now(),
-      messageId: ctx.callbackQuery.message?.message_id,
-    });
-    await ctx.editMessageText(transferAddressMessage(), {
-      parse_mode: "HTML",
-      reply_markup: transferCancelKeyboard(),
+      messageId: replyMsg.message_id,
     });
   });
 
   bot.callbackQuery(CB.HISTORY, async (ctx) => {
     await ctx.answerCallbackQuery();
     const payments = await getPaymentsByUser(ctx.from.id, 15);
-    await ctx.editMessageText(historyMessage(payments), {
+    await ctx.reply(historyMessage(payments), {
       parse_mode: "HTML",
       reply_markup: historyWithRecallKeyboard(payments),
     });
@@ -402,14 +399,14 @@ function registerHandlers(bot: Bot) {
     await ctx.answerCallbackQuery();
     const wallet = await getWallet(ctx.from.id);
     if (!wallet) {
-      await ctx.editMessageText(
+      await ctx.reply(
         errorMessage("No wallet found. Use /start."),
         { parse_mode: "HTML" }
       );
       return;
     }
     const balance = await getBalance(wallet.wallet_address);
-    await ctx.editMessageText(
+    await ctx.reply(
       balanceMessage(wallet.wallet_address, balance),
       {
         parse_mode: "HTML",
@@ -420,7 +417,7 @@ function registerHandlers(bot: Bot) {
 
   bot.callbackQuery(CB.CLAIM, async (ctx) => {
     await ctx.answerCallbackQuery();
-    await ctx.editMessageText(
+    await ctx.reply(
       "📥 <b>Claim a Payment</b>\n\nPaste your hoppy.cash claim link below:",
       { parse_mode: "HTML", reply_markup: backToHomeKeyboard() }
     );
@@ -428,7 +425,7 @@ function registerHandlers(bot: Bot) {
 
   bot.callbackQuery(CB.SETTINGS, async (ctx) => {
     await ctx.answerCallbackQuery();
-    await ctx.editMessageText(settingsMessage(), {
+    await ctx.reply(settingsMessage(), {
       parse_mode: "HTML",
       reply_markup: settingsKeyboard(),
     });
