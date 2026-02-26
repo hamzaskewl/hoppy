@@ -117,6 +117,9 @@ let botInstance: Bot | null = null;
 export function getBot(): Bot {
   if (!botInstance) {
     botInstance = createBot();
+    botInstance.catch((err) => {
+      console.error("[TG Bot] Unhandled error in handler:", err);
+    });
     registerHandlers(botInstance);
     setupCommands(botInstance).catch((err) =>
       console.error("[TG Bot] Failed to set commands:", err)
