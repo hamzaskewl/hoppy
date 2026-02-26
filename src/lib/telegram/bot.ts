@@ -104,6 +104,32 @@ const APP_URL =
 
 console.log("[TG Bot] APP_URL resolved to:", APP_URL);
 
+// Fee constants (lamports)
+const FEE_QUICK = 1_000_000;     // 0.001 SOL — tx fee + ephemeral rent
+const FEE_PRIVATE = 15_000_000;  // 0.015 SOL — pool entry (0.006) + exit (0.003) + 0.35% + ZK proof + rent
+const MIN_SEND_QUICK = 0.001;    // 0.001 SOL minimum for quick sends
+const MIN_SEND_PRIVATE = 0.015;  // 0.015 SOL minimum for private sends
+
+/** Returns an error string if amount is below the minimum, or null if OK */
+function getMinAmountError(amount: number, privacy: string): string | null {
+  const isPrivate = privacy === "private";
+  const minAmount = isPrivate ? MIN_SEND_PRIVATE : MIN_SEND_QUICK;
+
+  if (amount < minAmount) {
+    const feeBreakdown = isPrivate
+      ? `~0.006 SOL ephemeral buffer\n` +
+        `~0.003 SOL pool deposit overhead\n` +
+        `~0.35% withdraw fee\n` +
+        `+ rent &amp; relayer fees`
+      : `~0.001 SOL (tx fee + rent)`;
+    return (
+      `Amount too low.\n\n` +
+      `Minimum for ${isPrivate ? "🔒 private" : "⚡ quick"} sends: <b>${minAmount} SOL</b>\n\n` +
+      `<b>Fee breakdown:</b>\n${feeBreakdown}`
+    );
+  }
+  return null;
+}
 
 function createBot(): Bot {
   const token = process.env.TELEGRAM_BOT_TOKEN;
@@ -198,17 +224,30 @@ async function claimPaymentForUser(
   const note = extractDoubleHopNoteFromUrl(payment.claim_url);
   if (!note) return { success: false, error: "Invalid claim link" };
 
-  const response = await fetch(`${APP_URL}/api/privacy-cash/claim`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      note,
-      recipientAddress: recipientWalletAddress,
-      recipientPrivacy,
-    }),
-  });
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 180_000); // 3 min timeout
 
-  const result = await response.json();
+  let result: { success: boolean; error?: string; amountReceived?: number };
+  try {
+    const response = await fetch(`${APP_URL}/api/privacy-cash/claim`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        note,
+        recipientAddress: recipientWalletAddress,
+        recipientPrivacy,
+      }),
+      signal: controller.signal,
+    });
+    result = await response.json();
+  } catch (fetchErr: unknown) {
+    clearTimeout(timeout);
+    const msg = fetchErr instanceof Error && fetchErr.name === "AbortError"
+      ? "Claim timed out — please try again"
+      : "Network error during claim";
+    return { success: false, error: msg };
+  }
+  clearTimeout(timeout);
   if (!result.success) {
     return { success: false, error: result.error || "Claim failed" };
   }
@@ -929,7 +968,12 @@ function registerHandlers(bot: Bot) {
           );
           return;
         }
-        const defaultAnon = flow.privacy === "private";
+        const minErr = getMinAmountError(amount, flow.privacy || "basic");
+        if (minErr) {
+          await ctx.reply(errorMessage(minErr), { parse_mode: "HTML" });
+          return;
+        }
+        const defaultAnon = true;
         setSendFlow(tgUserId, {
           ...flow,
           step: "awaiting_confirm",
@@ -1091,8 +1135,15 @@ async function handleSend(ctx: Context, text: string) {
     return;
   }
 
+  const privacy = parsed.privacy || "basic";
+  const minErr = getMinAmountError(parsed.amount, privacy);
+  if (minErr) {
+    await ctx.reply(errorMessage(minErr), { parse_mode: "HTML" });
+    return;
+  }
+
   // Always confirm before sending
-  const defaultAnonymous = (parsed.privacy || "basic") === "private";
+  const defaultAnonymous = true;
   setPendingConfirmation(tgUserId, {
     text,
     expiresAt: Date.now() + 60_000,
@@ -1150,11 +1201,21 @@ async function executeSend(ctx: Context, text: string, anonymous = true) {
   const amountLamports = solToLamports(parsed.amount);
   const balance = await getBalance(wallet.wallet_address);
 
-  const MIN_BUFFER = privacy === "private" ? 10_000_000 : 1_000_000;
-  if (balance < amountLamports + MIN_BUFFER) {
+  const fee = privacy === "private" ? FEE_PRIVATE : FEE_QUICK;
+  const totalNeeded = amountLamports + fee;
+
+  if (balance < totalNeeded) {
+    const feeSol = lamportsToSol(fee).toFixed(3);
+    const feeDetail = privacy === "private"
+      ? `~${feeSol} SOL (pool entry/exit + 0.35% + ZK proof + rent)`
+      : `~${feeSol} SOL (tx fee + rent)`;
     await ctx.reply(
       errorMessage(
-        `Insufficient balance. You have ${lamportsToSol(balance).toFixed(4)} SOL but need ~${lamportsToSol(amountLamports + MIN_BUFFER).toFixed(4)} SOL.`
+        `Insufficient balance.\n\n` +
+        `You have: <b>${lamportsToSol(balance).toFixed(4)} SOL</b>\n` +
+        `Amount: <b>${parsed.amount} SOL</b>\n` +
+        `Network fee: <b>${feeDetail}</b>\n` +
+        `Total needed: <b>~${lamportsToSol(totalNeeded).toFixed(4)} SOL</b>`
       ),
       { parse_mode: "HTML" }
     );

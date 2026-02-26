@@ -928,8 +928,8 @@ export async function POST(request: NextRequest) {
       );
     }
     
-    // Generic insufficient balance - could be empty ephemeral
-    if (errorMessage.includes("insufficient") || errorMessage.includes("no balance") || errorMessage.includes("has insufficient balance")) {
+    // Generic insufficient balance - could be empty ephemeral or pool
+    if (errorMessage.includes("insufficient") || errorMessage.includes("no balance") || errorMessage.includes("No enough balance") || errorMessage.includes("has insufficient balance")) {
       return NextResponse.json(
         { success: false, error: "This payment has already been claimed or expired" },
         { status: 400 }
