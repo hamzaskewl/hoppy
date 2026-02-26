@@ -158,7 +158,7 @@ async function sendHomeScreen(
   address: string,
   balanceSol: string
 ) {
-  await ctx.replyWithPhoto(`${APP_URL}/hoppy-bgblack.png`, {
+  await ctx.replyWithPhoto(`${APP_URL}/hoppy-tgblackpng.png`, {
     caption: startMessage(address, balanceSol),
     parse_mode: "HTML",
     reply_markup: mainMenuKeyboard(),
@@ -247,7 +247,7 @@ function registerHandlers(bot: Bot) {
     const encrypted = encryptSecretKey(wallet.secretKey, tgUserId);
     await createNewWallet(tgUserId, tgUsername, wallet.publicKey, encrypted);
 
-    const msg = await ctx.replyWithPhoto(`${APP_URL}/hoppy-bgblack.png`, {
+    const msg = await ctx.replyWithPhoto(`${APP_URL}/hoppy-tgblackpng.png`, {
       caption: startNewUserMessage(wallet.publicKey, wallet.secretKey),
       parse_mode: "HTML",
       reply_markup: mainMenuKeyboard(),
