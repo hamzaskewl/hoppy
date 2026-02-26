@@ -13,7 +13,11 @@ import {
 import {
   getWallet,
   getWalletByUsername,
-  upsertWallet,
+  getWalletsByUser,
+  getWalletCount,
+  createNewWallet,
+  setActiveWallet,
+  updateWalletUsername,
   savePayment,
   getPaymentById,
   getPaymentsByUser,
@@ -45,6 +49,7 @@ import {
   transferSuccessMessage,
   recoverySuccessMessage,
   recoveryFailedMessage,
+  switchWalletMessage,
 } from "./messages";
 import {
   mainMenuKeyboard,
@@ -57,10 +62,12 @@ import {
   transferCancelKeyboard,
   receivedPaymentKeyboard,
   historyWithRecallKeyboard,
+  walletListKeyboard,
   CB,
   RCV_QUICK_PREFIX,
   RCV_PRIV_PREFIX,
   RCV_LINK_PREFIX,
+  WALLET_SWITCH_PREFIX,
 } from "./keyboards";
 import {
   getSendFlow,
@@ -222,6 +229,7 @@ function registerHandlers(bot: Bot) {
     const existing = await getWallet(tgUserId);
 
     if (existing) {
+      if (tgUsername) await updateWalletUsername(tgUserId, tgUsername);
       let balanceSol = "—";
       try {
         const bal = await getBalance(existing.wallet_address);
@@ -237,7 +245,7 @@ function registerHandlers(bot: Bot) {
     // New user
     const wallet = generateWallet();
     const encrypted = encryptSecretKey(wallet.secretKey, tgUserId);
-    await upsertWallet(tgUserId, tgUsername, wallet.publicKey, encrypted);
+    await createNewWallet(tgUserId, tgUsername, wallet.publicKey, encrypted);
 
     const msg = await ctx.replyWithPhoto(`${APP_URL}/hoppy-bgblack.png`, {
       caption: startNewUserMessage(wallet.publicKey, wallet.secretKey),
@@ -272,7 +280,13 @@ function registerHandlers(bot: Bot) {
     const tgUsername = ctx.from?.username;
     const wallet = generateWallet();
     const encrypted = encryptSecretKey(wallet.secretKey, tgUserId);
-    await upsertWallet(tgUserId, tgUsername, wallet.publicKey, encrypted);
+    const result = await createNewWallet(tgUserId, tgUsername, wallet.publicKey, encrypted);
+    if (!result.success) {
+      await ctx.reply(errorMessage(result.error || "Could not create wallet."), {
+        parse_mode: "HTML",
+      });
+      return;
+    }
 
     const msg = await ctx.reply(
       startNewUserMessage(wallet.publicKey, wallet.secretKey),
@@ -425,9 +439,12 @@ function registerHandlers(bot: Bot) {
 
   bot.callbackQuery(CB.SETTINGS, async (ctx) => {
     await ctx.answerCallbackQuery();
-    await ctx.reply(settingsMessage(), {
+    const wallet = await getWallet(ctx.from.id);
+    if (!wallet) return;
+    const count = await getWalletCount(ctx.from.id);
+    await ctx.reply(settingsMessage(wallet.wallet_address, count), {
       parse_mode: "HTML",
-      reply_markup: settingsKeyboard(),
+      reply_markup: settingsKeyboard(count),
     });
   });
 
@@ -456,12 +473,18 @@ function registerHandlers(bot: Bot) {
     await ctx.answerCallbackQuery();
     const wallet = generateWallet();
     const encrypted = encryptSecretKey(wallet.secretKey, ctx.from.id);
-    await upsertWallet(
+    const result = await createNewWallet(
       ctx.from.id,
       ctx.from.username,
       wallet.publicKey,
       encrypted
     );
+    if (!result.success) {
+      await ctx.reply(errorMessage(result.error || "Could not create wallet."), {
+        parse_mode: "HTML",
+      });
+      return;
+    }
     const msg = await ctx.reply(
       startNewUserMessage(wallet.publicKey, wallet.secretKey),
       {
@@ -475,6 +498,40 @@ function registerHandlers(bot: Bot) {
   bot.callbackQuery(CB.SET_BACK, async (ctx) => {
     await ctx.answerCallbackQuery();
     await editToHomeScreen(ctx);
+  });
+
+  bot.callbackQuery(CB.SET_SWITCH, async (ctx) => {
+    await ctx.answerCallbackQuery();
+    const wallets = await getWalletsByUser(ctx.from.id);
+    if (wallets.length <= 1) {
+      await ctx.reply(errorMessage("You only have one wallet."), {
+        parse_mode: "HTML",
+      });
+      return;
+    }
+    await ctx.editMessageText(switchWalletMessage(), {
+      parse_mode: "HTML",
+      reply_markup: walletListKeyboard(wallets),
+    });
+  });
+
+  bot.callbackQuery(/^wal:sw:\d+$/, async (ctx) => {
+    await ctx.answerCallbackQuery();
+    const walletId = parseInt(ctx.callbackQuery.data.split(":")[2]);
+    const success = await setActiveWallet(ctx.from.id, walletId);
+    if (!success) {
+      await ctx.reply(errorMessage("Could not switch wallet."), {
+        parse_mode: "HTML",
+      });
+      return;
+    }
+    const wallet = await getWallet(ctx.from.id);
+    if (!wallet) return;
+    const short = `${wallet.wallet_address.slice(0, 6)}...${wallet.wallet_address.slice(-4)}`;
+    await ctx.editMessageText(
+      `✅ Switched to wallet <code>${short}</code>`,
+      { parse_mode: "HTML", reply_markup: backToHomeKeyboard() }
+    );
   });
 
   // ============ Callback Queries — Send Flow ============

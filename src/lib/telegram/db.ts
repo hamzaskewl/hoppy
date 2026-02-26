@@ -3,12 +3,15 @@ import pool from "@/lib/card/db";
 export async function initTelegramTables(): Promise<void> {
   const client = await pool.connect();
   try {
+    // Fresh deployments get the multi-wallet schema
     await client.query(`
       CREATE TABLE IF NOT EXISTS tg_wallets (
-        tg_user_id BIGINT PRIMARY KEY,
+        id SERIAL PRIMARY KEY,
+        tg_user_id BIGINT NOT NULL,
         tg_username TEXT,
         wallet_address TEXT NOT NULL,
         encrypted_secret_key TEXT NOT NULL,
+        is_active BOOLEAN DEFAULT true,
         created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
       );
 
@@ -29,7 +32,35 @@ export async function initTelegramTables(): Promise<void> {
       CREATE INDEX IF NOT EXISTS idx_tg_payments_recipient ON tg_payments(recipient_identifier);
       CREATE INDEX IF NOT EXISTS idx_tg_payments_status ON tg_payments(status);
       CREATE INDEX IF NOT EXISTS idx_tg_wallets_username ON tg_wallets(tg_username);
+      CREATE INDEX IF NOT EXISTS idx_tg_wallets_user ON tg_wallets(tg_user_id);
     `);
+
+    // Migration for existing single-wallet tables
+    await client.query(`
+      DO $$ BEGIN
+        IF NOT EXISTS (
+          SELECT 1 FROM information_schema.columns
+          WHERE table_name = 'tg_wallets' AND column_name = 'is_active'
+        ) THEN
+          ALTER TABLE tg_wallets ADD COLUMN is_active BOOLEAN DEFAULT true;
+        END IF;
+
+        IF NOT EXISTS (
+          SELECT 1 FROM information_schema.columns
+          WHERE table_name = 'tg_wallets' AND column_name = 'id'
+        ) THEN
+          ALTER TABLE tg_wallets DROP CONSTRAINT tg_wallets_pkey;
+          ALTER TABLE tg_wallets ADD COLUMN id SERIAL PRIMARY KEY;
+        END IF;
+      END $$;
+    `);
+
+    // Ensure only one active wallet per user
+    await client.query(`
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_tg_wallets_active_user
+        ON tg_wallets(tg_user_id) WHERE is_active = true;
+    `);
+
     console.log("[TG DB] Telegram tables initialized");
   } finally {
     client.release();
@@ -38,7 +69,7 @@ export async function initTelegramTables(): Promise<void> {
 
 export async function getWallet(tgUserId: number) {
   const result = await pool.query(
-    "SELECT * FROM tg_wallets WHERE tg_user_id = $1",
+    "SELECT * FROM tg_wallets WHERE tg_user_id = $1 AND is_active = true",
     [tgUserId]
   );
   return result.rows[0] || null;
@@ -46,26 +77,119 @@ export async function getWallet(tgUserId: number) {
 
 export async function getWalletByUsername(username: string) {
   const result = await pool.query(
-    "SELECT * FROM tg_wallets WHERE tg_username = $1",
+    "SELECT * FROM tg_wallets WHERE tg_username = $1 AND is_active = true",
     [username.toLowerCase()]
   );
   return result.rows[0] || null;
 }
 
-export async function upsertWallet(
+export async function getWalletsByUser(tgUserId: number) {
+  const result = await pool.query(
+    "SELECT * FROM tg_wallets WHERE tg_user_id = $1 ORDER BY created_at ASC",
+    [tgUserId]
+  );
+  return result.rows;
+}
+
+export async function getWalletCount(tgUserId: number): Promise<number> {
+  const result = await pool.query(
+    "SELECT COUNT(*)::int AS count FROM tg_wallets WHERE tg_user_id = $1",
+    [tgUserId]
+  );
+  return result.rows[0].count;
+}
+
+export async function createNewWallet(
   tgUserId: number,
   tgUsername: string | undefined,
   walletAddress: string,
   encryptedSecretKey: string
+): Promise<{ success: boolean; error?: string }> {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+
+    const countResult = await client.query(
+      "SELECT COUNT(*)::int AS count FROM tg_wallets WHERE tg_user_id = $1",
+      [tgUserId]
+    );
+    const count = countResult.rows[0].count;
+    if (count >= 3) {
+      await client.query("ROLLBACK");
+      return {
+        success: false,
+        error: "Maximum 3 wallets reached. Switch to an existing wallet instead.",
+      };
+    }
+
+    // Deactivate current active wallet
+    await client.query(
+      "UPDATE tg_wallets SET is_active = false WHERE tg_user_id = $1 AND is_active = true",
+      [tgUserId]
+    );
+
+    // Insert new active wallet
+    await client.query(
+      `INSERT INTO tg_wallets (tg_user_id, tg_username, wallet_address, encrypted_secret_key, is_active)
+       VALUES ($1, $2, $3, $4, true)`,
+      [tgUserId, tgUsername?.toLowerCase(), walletAddress, encryptedSecretKey]
+    );
+
+    await client.query("COMMIT");
+    return { success: true };
+  } catch (err) {
+    await client.query("ROLLBACK");
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+export async function setActiveWallet(
+  tgUserId: number,
+  walletId: number
+): Promise<boolean> {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+
+    // Verify wallet belongs to user
+    const check = await client.query(
+      "SELECT id FROM tg_wallets WHERE id = $1 AND tg_user_id = $2",
+      [walletId, tgUserId]
+    );
+    if (check.rows.length === 0) {
+      await client.query("ROLLBACK");
+      return false;
+    }
+
+    // Deactivate all, then activate the chosen one
+    await client.query(
+      "UPDATE tg_wallets SET is_active = false WHERE tg_user_id = $1",
+      [tgUserId]
+    );
+    await client.query(
+      "UPDATE tg_wallets SET is_active = true WHERE id = $1",
+      [walletId]
+    );
+
+    await client.query("COMMIT");
+    return true;
+  } catch (err) {
+    await client.query("ROLLBACK");
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+export async function updateWalletUsername(
+  tgUserId: number,
+  tgUsername: string
 ) {
   await pool.query(
-    `INSERT INTO tg_wallets (tg_user_id, tg_username, wallet_address, encrypted_secret_key)
-     VALUES ($1, $2, $3, $4)
-     ON CONFLICT (tg_user_id) DO UPDATE SET
-       tg_username = COALESCE($2, tg_wallets.tg_username),
-       wallet_address = $3,
-       encrypted_secret_key = $4`,
-    [tgUserId, tgUsername?.toLowerCase(), walletAddress, encryptedSecretKey]
+    "UPDATE tg_wallets SET tg_username = $2 WHERE tg_user_id = $1",
+    [tgUserId, tgUsername.toLowerCase()]
   );
 }
 

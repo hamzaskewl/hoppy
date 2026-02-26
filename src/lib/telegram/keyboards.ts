@@ -22,6 +22,7 @@ export const CB = {
   // Settings
   SET_EXPORT: "set:export",
   SET_NEWWALLET: "set:newwallet",
+  SET_SWITCH: "set:switch",
   SET_BACK: "set:back",
   // Navigation
   HOME: "home",
@@ -31,16 +32,17 @@ export const CB = {
 export const RCV_QUICK_PREFIX = "rcv:quick:";
 export const RCV_PRIV_PREFIX = "rcv:priv:";
 export const RCV_LINK_PREFIX = "rcv:link:";
+export const WALLET_SWITCH_PREFIX = "wal:sw:";
 
 export function mainMenuKeyboard(): InlineKeyboard {
   return new InlineKeyboard()
     .text("💸 Send", CB.SEND)
-    .text("📤 Transfer", CB.TRANSFER)
-    .row()
     .text("📥 Claim", CB.CLAIM)
-    .text("📊 History", CB.HISTORY)
     .row()
     .text("💰 Balance", CB.BALANCE)
+    .text("📊 History", CB.HISTORY)
+    .row()
+    .text("📤 Transfer", CB.TRANSFER)
     .text("⚙️ Settings", CB.SETTINGS);
 }
 
@@ -64,13 +66,30 @@ export function confirmTransferKeyboard(): InlineKeyboard {
     .text("❌ Cancel", CB.TRANSFER_CANCEL);
 }
 
-export function settingsKeyboard(): InlineKeyboard {
-  return new InlineKeyboard()
+export function settingsKeyboard(walletCount: number): InlineKeyboard {
+  const kb = new InlineKeyboard()
     .text("🔑 Export Private Key", CB.SET_EXPORT)
     .row()
-    .text("🆕 New Wallet", CB.SET_NEWWALLET)
-    .row()
-    .text("⬅️ Back", CB.SET_BACK);
+    .text(`🆕 New Wallet (${walletCount}/3)`, CB.SET_NEWWALLET)
+    .row();
+  if (walletCount > 1) {
+    kb.text("🔄 Switch Wallet", CB.SET_SWITCH).row();
+  }
+  kb.text("⬅️ Back", CB.SET_BACK);
+  return kb;
+}
+
+export function walletListKeyboard(
+  wallets: Array<{ id: number; wallet_address: string; is_active: boolean }>
+): InlineKeyboard {
+  const kb = new InlineKeyboard();
+  for (const w of wallets) {
+    const short = `${w.wallet_address.slice(0, 6)}...${w.wallet_address.slice(-4)}`;
+    const label = w.is_active ? `✅ ${short} (active)` : `    ${short}`;
+    kb.text(label, `${WALLET_SWITCH_PREFIX}${w.id}`).row();
+  }
+  kb.text("⬅️ Back", CB.SET_BACK);
+  return kb;
 }
 
 export function backToHomeKeyboard(): InlineKeyboard {

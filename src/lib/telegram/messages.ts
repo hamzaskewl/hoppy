@@ -247,12 +247,33 @@ export function sendFlowConfirmMessage(
   ].join("\n");
 }
 
-export function settingsMessage(): string {
+export function settingsMessage(
+  activeAddress: string,
+  walletCount: number,
+): string {
+  const short =
+    activeAddress.length > 12
+      ? `${activeAddress.slice(0, 6)}...${activeAddress.slice(-4)}`
+      : activeAddress;
   return [
     `⚙️ <b>Settings</b>`,
     ``,
+    `Active wallet: <code>${esc(short)}</code>`,
+    `Wallets: ${walletCount}/3`,
+    ``,
     `🔑 <b>Export</b> — View your private key`,
     `🆕 <b>New Wallet</b> — Generate a fresh wallet`,
+    ...(walletCount > 1
+      ? [`🔄 <b>Switch Wallet</b> — Change active wallet`]
+      : []),
+  ].join("\n");
+}
+
+export function switchWalletMessage(): string {
+  return [
+    `🔄 <b>Switch Wallet</b>`,
+    ``,
+    `Select a wallet to activate:`,
   ].join("\n");
 }
 
@@ -291,7 +312,10 @@ export function receivedPaymentDeliveredMessage(
 
 export function transferAddressMessage(): string {
   return [
-    `📤 <b>Transfer SOL</b>`,
+    `📤 <b>Direct Transfer</b>`,
+    ``,
+    `Send SOL directly to any Solana address.`,
+    `<i>Standard on-chain transfer (not private).</i>`,
     ``,
     `Paste the destination <b>Solana address</b>:`,
     ``,
@@ -377,7 +401,7 @@ export function helpMessage(): string {
     "<b>Basics:</b>",
     "/start - Open wallet & main menu",
     "/balance - Check your balance",
-    "/transfer - Send SOL to any address",
+    "/transfer - Direct SOL transfer (not private)",
     "",
     "<b>Privacy Payments:</b>",
     "/send - Send a private payment",
