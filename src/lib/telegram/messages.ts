@@ -157,6 +157,11 @@ export function errorMessage(msg: string): string {
   return `❌ ${esc(msg)}`;
 }
 
+/** Error message that already contains HTML formatting — not escaped */
+export function errorMessageHtml(msg: string): string {
+  return `❌ ${msg}`;
+}
+
 // ============ New UI Messages ============
 
 export function startMessage(address: string, balanceSol: string): string {
@@ -237,6 +242,7 @@ export function sendFlowConfirmMessage(
   recipient: string,
   privacy: string,
   anonymous: boolean,
+  estimates?: { quickEstimate: number; privateEstimate: number },
 ): string {
   const label =
     privacy === "private"
@@ -245,16 +251,27 @@ export function sendFlowConfirmMessage(
   const anonLabel = anonymous
     ? "👻 Anonymous — recipient won't see your username"
     : "👤 Named — recipient will see your @username";
-  return [
+
+  const lines = [
     `💸 <b>Confirm Payment</b>`,
     ``,
     `Amount: <b>${amount} SOL</b>`,
     `To: <b>${esc(recipient)}</b>`,
     `Mode: <b>${label}</b>`,
     `Identity: <b>${anonLabel}</b>`,
-    ``,
-    `Tap ✅ to confirm or ❌ to cancel.`,
-  ].join("\n");
+  ];
+
+  if (estimates) {
+    lines.push(
+      ``,
+      `📊 <b>Recipient receives (est.):</b>`,
+      `  ⚡ Quick claim: ~${estimates.quickEstimate.toFixed(4)} SOL`,
+      `  🔒 Private claim: ~${estimates.privateEstimate.toFixed(4)} SOL`,
+    );
+  }
+
+  lines.push(``, `Tap ✅ to confirm or ❌ to cancel.`);
+  return lines.join("\n");
 }
 
 export function settingsMessage(
@@ -289,40 +306,50 @@ export function switchWalletMessage(): string {
 
 // ============ Receive / Claim Messages ============
 
+// Claim overhead constants (lamports)
+const QUICK_CLAIM_OVERHEAD = 5_000;        // just tx fee
+const PRIVATE_CLAIM_OVERHEAD = 6_000_000;  // deposit overhead + rent + relayer + 0.35%
+
 export function receivedPaymentMessage(
-  amountLamports: number,
+  fundedLamports: number,
   senderUsername: string | undefined,
   walletAddress: string,
 ): string {
-  const sol = lamportsToSol(amountLamports).toFixed(4);
+  const quickEst = lamportsToSol(Math.max(0, fundedLamports - QUICK_CLAIM_OVERHEAD)).toFixed(4);
+  const privEst = lamportsToSol(Math.max(0, fundedLamports - PRIVATE_CLAIM_OVERHEAD)).toFixed(4);
   const from = senderUsername ? `@${esc(senderUsername)}` : "someone";
   const short = `${walletAddress.slice(0, 6)}...${walletAddress.slice(-4)}`;
   return [
     `🎉 <b>You received a payment!</b>`,
     ``,
-    `Amount: <b>${sol} SOL</b>`,
     `From: ${from}`,
     `Wallet: <code>${short}</code>`,
     ``,
-    `Tap below to claim to your wallet:`,
+    `⚡ Quick claim: ~<b>${quickEst} SOL</b>`,
+    `🔒 Private claim: ~<b>${privEst} SOL</b>`,
+    ``,
+    `Tap below to claim:`,
   ].join("\n");
 }
 
 export function receivedPaymentDeliveredMessage(
-  amountLamports: number,
+  fundedLamports: number,
   walletAddress: string,
   senderUsername?: string,
 ): string {
-  const sol = lamportsToSol(amountLamports).toFixed(4);
+  const quickEst = lamportsToSol(Math.max(0, fundedLamports - QUICK_CLAIM_OVERHEAD)).toFixed(4);
+  const privEst = lamportsToSol(Math.max(0, fundedLamports - PRIVATE_CLAIM_OVERHEAD)).toFixed(4);
   const short = `${walletAddress.slice(0, 6)}...${walletAddress.slice(-4)}`;
   const fromLine = senderUsername ? `From: @${esc(senderUsername)}\n` : "";
   return [
     `🎉 <b>Pending payment found!</b>`,
     ``,
-    `Amount: <b>${sol} SOL</b>`,
     `${fromLine}Wallet: <code>${short}</code>`,
     ``,
-    `Tap below to claim to your wallet:`,
+    `⚡ Quick claim: ~<b>${quickEst} SOL</b>`,
+    `🔒 Private claim: ~<b>${privEst} SOL</b>`,
+    ``,
+    `Tap below to claim:`,
   ].join("\n");
 }
 

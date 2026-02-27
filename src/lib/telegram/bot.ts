@@ -40,6 +40,7 @@ import {
   claimSuccessMessage,
   historyMessage,
   errorMessage,
+  errorMessageHtml,
   escapeMarkdown,
   receivedPaymentMessage,
   receivedPaymentDeliveredMessage,
@@ -110,6 +111,27 @@ const FEE_PRIVATE = 15_000_000;  // 0.015 SOL — pool entry (0.006) + exit (0.0
 const MIN_SEND_QUICK = 0.001;    // 0.001 SOL minimum for quick sends
 const MIN_SEND_PRIVATE = 0.015;  // 0.015 SOL minimum for private sends
 
+// Buffer added to ephemeral funding (matches BUFFER in executeSend)
+const BUFFER_QUICK = 1_000_000;  // 0.001 SOL
+const BUFFER_PRIVATE = 6_000_000; // 0.006 SOL
+
+// Claim overhead — what gets deducted when recipient claims
+const QUICK_CLAIM_OVERHEAD = 5_000;        // just tx fee
+const PRIVATE_CLAIM_OVERHEAD = 6_000_000;  // deposit overhead + rent + relayer + 0.35%
+
+/** Compute receive estimates for a given send amount + privacy mode */
+function getReceiveEstimates(amountSol: number, privacy: string) {
+  const amountLamports = solToLamports(amountSol);
+  const buffer = privacy === "private" ? BUFFER_PRIVATE : BUFFER_QUICK;
+  const funded = amountLamports + buffer;
+  return {
+    quickEstimate: lamportsToSol(Math.max(0, funded - QUICK_CLAIM_OVERHEAD)),
+    privateEstimate: lamportsToSol(Math.max(0, funded - PRIVATE_CLAIM_OVERHEAD)),
+    fundedLamports: funded,
+    totalDebit: lamportsToSol(amountLamports + (privacy === "private" ? FEE_PRIVATE : FEE_QUICK)),
+  };
+}
+
 /** Returns an error string if amount is below the minimum, or null if OK */
 function getMinAmountError(amount: number, privacy: string): string | null {
   const isPrivate = privacy === "private";
@@ -120,7 +142,7 @@ function getMinAmountError(amount: number, privacy: string): string | null {
       ? `~0.006 SOL ephemeral buffer\n` +
         `~0.003 SOL pool deposit overhead\n` +
         `~0.35% withdraw fee\n` +
-        `+ rent &amp; relayer fees`
+        `+ rent &amp; relayer fees`  // &amp; is intentional — this is raw HTML
       : `~0.001 SOL (tx fee + rent)`;
     return (
       `Amount too low.\n\n` +
@@ -648,11 +670,13 @@ function registerHandlers(bot: Bot) {
     if (!flow || flow.step !== "awaiting_confirm") return;
     const toggled = !(flow.anonymous ?? true);
     setSendFlow(ctx.from.id, { ...flow, anonymous: toggled });
+    const est = getReceiveEstimates(flow.amount!, flow.privacy!);
     const confirmText = sendFlowConfirmMessage(
       flow.amount!,
       flow.recipient!,
       flow.privacy!,
-      toggled
+      toggled,
+      est
     );
     try {
       await ctx.editMessageText(confirmText, {
@@ -970,7 +994,7 @@ function registerHandlers(bot: Bot) {
         }
         const minErr = getMinAmountError(amount, flow.privacy || "basic");
         if (minErr) {
-          await ctx.reply(errorMessage(minErr), { parse_mode: "HTML" });
+          await ctx.reply(errorMessageHtml(minErr), { parse_mode: "HTML" });
           return;
         }
         const defaultAnon = true;
@@ -980,11 +1004,13 @@ function registerHandlers(bot: Bot) {
           amount,
           anonymous: defaultAnon,
         });
+        const est = getReceiveEstimates(amount, flow.privacy!);
         const confirmText = sendFlowConfirmMessage(
           amount,
           flow.recipient!,
           flow.privacy!,
-          defaultAnon
+          defaultAnon,
+          est
         );
         if (flow.messageId) {
           try {
@@ -1138,7 +1164,7 @@ async function handleSend(ctx: Context, text: string) {
   const privacy = parsed.privacy || "basic";
   const minErr = getMinAmountError(parsed.amount, privacy);
   if (minErr) {
-    await ctx.reply(errorMessage(minErr), { parse_mode: "HTML" });
+    await ctx.reply(errorMessageHtml(minErr), { parse_mode: "HTML" });
     return;
   }
 
@@ -1157,12 +1183,14 @@ async function handleSend(ctx: Context, text: string) {
     startedAt: Date.now(),
   });
 
+  const est = getReceiveEstimates(parsed.amount, privacy);
   await ctx.reply(
     sendFlowConfirmMessage(
       parsed.amount,
       parsed.recipient,
-      parsed.privacy || "basic",
-      defaultAnonymous
+      privacy,
+      defaultAnonymous,
+      est
     ),
     { parse_mode: "HTML", reply_markup: confirmSendKeyboard(defaultAnonymous) }
   );
@@ -1210,7 +1238,7 @@ async function executeSend(ctx: Context, text: string, anonymous = true) {
       ? `~${feeSol} SOL (pool entry/exit + 0.35% + ZK proof + rent)`
       : `~${feeSol} SOL (tx fee + rent)`;
     await ctx.reply(
-      errorMessage(
+      errorMessageHtml(
         `Insufficient balance.\n\n` +
         `You have: <b>${lamportsToSol(balance).toFixed(4)} SOL</b>\n` +
         `Amount: <b>${parsed.amount} SOL</b>\n` +
@@ -1341,7 +1369,7 @@ async function executeSend(ctx: Context, text: string, anonymous = true) {
             `${APP_URL}/hoppy-tgcarrot.png`,
             {
               caption: receivedPaymentMessage(
-                amountLamports,
+                fundingAmount,
                 senderName,
                 recipientWallet.wallet_address
               ),
@@ -1611,7 +1639,11 @@ async function deliverPendingPayments(ctx: Context, username: string) {
       }
 
       await ctx.replyWithPhoto(`${APP_URL}/hoppy-tgcarrot.png`, {
-        caption: receivedPaymentDeliveredMessage(payment.amount, walletAddr, senderUsername),
+        caption: receivedPaymentDeliveredMessage(
+          payment.amount + (payment.sender_privacy === "private" ? BUFFER_PRIVATE : BUFFER_QUICK),
+          walletAddr,
+          senderUsername,
+        ),
         parse_mode: "HTML",
         reply_markup: receivedPaymentKeyboard(payment.id),
       });
