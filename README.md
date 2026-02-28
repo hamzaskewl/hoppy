@@ -1,6 +1,7 @@
-# hoppy
+# hoppy 
 
 **Privacy-First Payments on Solana**
+🏆 Privacy Cash SDK Bounty $1,000 Winner 🏆
 
 Sending crypto shouldn't require the recipient to have a wallet set up, share their address, or expose their identity. With hoppy, you just share a link. The money is in the link. They claim it privately.
 
