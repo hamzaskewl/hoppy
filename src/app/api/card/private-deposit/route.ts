@@ -9,6 +9,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { Connection, Keypair, PublicKey, LAMPORTS_PER_SOL, SystemProgram, Transaction, sendAndConfirmTransaction } from "@solana/web3.js";
 import { PrivacyCash } from "privacycash";
 import bs58 from "bs58";
+import { preseedUtxoOffset } from "@/lib/privacy/utxo-cache";
 
 export async function POST(request: NextRequest) {
   let ephemeralKeypair: Keypair | null = null;
@@ -77,6 +78,9 @@ export async function POST(request: NextRequest) {
     }
 
     // Deposit to pool (buffer stays for SDK fees)
+
+    // Pre-seed UTXO offset so SDK skips scanning existing UTXOs
+    await preseedUtxoOffset(ephemeralKeypair.publicKey.toBase58());
 
     // Initialize Privacy Cash
     const privacyCash = new PrivacyCash({

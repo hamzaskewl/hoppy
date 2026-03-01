@@ -45,6 +45,7 @@ import {
   type SupportedToken,
 } from "@/lib/privacy/privacy-cash-adapter";
 import bs58 from "bs58";
+import { preseedUtxoOffset } from "@/lib/privacy/utxo-cache";
 
 const RPC_URL = process.env.NEXT_PUBLIC_SOLANA_RPC_URL || "https://api.devnet.solana.com";
 const BASE_URL = process.env.NEXT_PUBLIC_APP_URL || "https://hoppy.cash";
@@ -187,6 +188,7 @@ export async function POST(request: NextRequest) {
     // This is the gas-efficient path for claiming remainder links.
     // ------------------------------------------------------------------------
     if (fundsInPool) {
+      await preseedUtxoOffset(compositeSecret.ephemeralKeypair.publicKey.toBase58());
       const privacyCashClient = new PrivacyCash({
         RPC_url: RPC_URL,
         owner: compositeSecret.ephemeralKeypair,
@@ -533,12 +535,13 @@ export async function POST(request: NextRequest) {
         
         try {
           // Step 3: EphRemainder deposits ALL to pool
+          await preseedUtxoOffset(ephRemainderSecret.ephemeralKeypair.publicKey.toBase58());
           const ephRemainderClient = new PrivacyCash({
             RPC_url: RPC_URL,
             owner: ephRemainderSecret.ephemeralKeypair,
             enableDebug: false,
           });
-          
+
           const MIN_TX_BUFFER = 3_000_000; // ~0.003 SOL for tx fees
           depositedAmount = Math.max(0, expectedEphRemainderBalance - MIN_TX_BUFFER);
           
@@ -719,12 +722,13 @@ export async function POST(request: NextRequest) {
         
         try {
           // Step 3: EphRemainder deposits ALL to pool
+          await preseedUtxoOffset(ephRemainderSecret.ephemeralKeypair.publicKey.toBase58());
           const ephRemainderClient = new PrivacyCash({
             RPC_url: RPC_URL,
             owner: ephRemainderSecret.ephemeralKeypair,
             enableDebug: false,
           });
-          
+
           const depositAmountWholeTokens = totalAmountBaseUnits / (10 ** tokenInfo.decimals);
           const partialAmountWholeTokens = partialAmount / (10 ** tokenInfo.decimals);
           
@@ -814,6 +818,7 @@ export async function POST(request: NextRequest) {
       // Flow 3: Ephemeral → Pool → Recipient (PRIVATE CLAIM)
       const ephPubkey = compositeSecret.ephemeralKeypair.publicKey;
 
+      await preseedUtxoOffset(ephPubkey.toBase58());
       const privacyCashClient = new PrivacyCash({
         RPC_url: RPC_URL,
         owner: compositeSecret.ephemeralKeypair,

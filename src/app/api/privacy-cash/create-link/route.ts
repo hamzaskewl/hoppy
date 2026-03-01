@@ -30,6 +30,7 @@ import {
   getTokenInfo,
   SPL_SOL_BUFFER,
 } from "@/lib/privacy/privacy-cash-adapter";
+import { preseedUtxoOffset } from "@/lib/privacy/utxo-cache";
 
 const RPC_URL = process.env.NEXT_PUBLIC_SOLANA_RPC_URL || "https://api.devnet.solana.com";
 const NETWORK = (process.env.NEXT_PUBLIC_SOLANA_NETWORK as "devnet" | "mainnet-beta") || "devnet";
@@ -216,6 +217,9 @@ export async function POST(request: NextRequest) {
         );
       }
       
+      // Pre-seed UTXO offset so the SDK skips scanning all existing UTXOs
+      await preseedUtxoOffset(compositeSecret.ephemeralKeypair.publicKey.toBase58());
+
       // Step 1: Create Privacy Cash client with Eph1 (sender's ephemeral)
       const eph1Client = new PrivacyCash({
         RPC_url: RPC_URL,
