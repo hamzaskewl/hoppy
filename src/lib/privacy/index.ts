@@ -1,38 +1,66 @@
-// Privacy Cash Adapter (Production Implementation)
-// Note: Privacy Cash SDK operations are in API routes (server-side only)
+// Umbra Privacy Adapter (replaces Privacy Cash)
 export {
   // Types
+  type UmbraNote,
+  type EphemeralKey,
   type CompositeSecret,
-  type DoubleHopNote,
   type FeeEstimate,
-  type SenderPrivacy,
-  type RecipientPrivacy,
-  type SenderPrivacyInfo,
-  type RecipientPrivacyInfo,
+  type ClaimMode,
   type SupportedToken,
   type TokenInfo,
-  // Legacy types
+  type UmbraConfig,
+  type ClaimModeInfo,
+  // Legacy type aliases
+  type DoubleHopNote,
+  type SenderPrivacy,
+  type RecipientPrivacy,
   type PrivacyLevel,
+  type SenderPrivacyInfo,
+  type RecipientPrivacyInfo,
   // Constants
+  WSOL_MINT,
+  UMBRA_FEE_PERCENT,
+  EPHEMERAL_GAS_BUFFER,
+  MIN_SEND_SOL,
+  MIN_SEND_SPL,
+  SPL_SOL_BUFFER,
+  TOKEN_MINTS,
+  CLAIM_MODES,
   SENDER_PRIVACY,
   RECIPIENT_PRIVACY,
-  PRIVACY_LEVELS, // Legacy
-  TOKEN_MINTS,
-  SPL_SOL_BUFFER,
-  // Functions
+  PRIVACY_LEVELS,
+  // Ephemeral key generation
+  generateEphemeralKey,
+  decodeEphemeralSeed,
   generateCompositeSecret,
   decodeCompositeSecret,
+  // Fee calculations
+  calculateUmbraFees,
+  calculateDepositForRecipientAmount,
+  calculateRecipientReceives,
   calculateFees,
   calculateSPLFees,
-  calculateDepositForRecipientAmount,
-  calculateSPLDepositForRecipientAmount,
   calculateSenderCost,
-  calculateRecipientReceives,
   calculateSPLRecipientReceives,
-  calculateTotalDeposit, // Legacy
+  calculateDepositForRecipientAmountLegacy as calculateDepositForRecipientAmountSOL,
+  calculateSPLDepositForRecipientAmount,
+  calculateTotalDeposit,
+  // URL serialization
+  serializeUmbraNote,
+  deserializeUmbraNote,
+  createClaimUrl,
+  extractNoteFromUrl,
+  // Legacy URL aliases
   serializeDoubleHopNote,
   deserializeDoubleHopNote,
   createDoubleHopClaimUrl,
   extractDoubleHopNoteFromUrl,
+  // Token helpers
   getTokenInfo,
-} from "./privacy-cash-adapter";
+  getTokenFromMint,
+  // Umbra SDK helpers
+  getUmbraConfig,
+  createUmbraClientFromKeypair,
+  ensureRegistered,
+  getRelayer,
+} from "./umbra-adapter";
