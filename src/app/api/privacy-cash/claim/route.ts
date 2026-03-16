@@ -46,6 +46,7 @@ import {
 } from "@/lib/privacy/privacy-cash-adapter";
 import bs58 from "bs58";
 import { preseedUtxoOffset } from "@/lib/privacy/utxo-cache";
+import { incrementLinksClaimed } from "@/lib/card/db";
 
 const RPC_URL = process.env.NEXT_PUBLIC_SOLANA_RPC_URL || "https://api.devnet.solana.com";
 const BASE_URL = process.env.NEXT_PUBLIC_APP_URL || "https://hoppy.cash";
@@ -180,6 +181,9 @@ export async function POST(request: NextRequest) {
     
     const needsPrivacy = recipientPrivacy === "private";
     const fundsInPool = doubleHopNote.fundsLocation === "pool";
+
+    // Track claim (no PII, just a counter)
+    incrementLinksClaimed().catch(() => {});
     
     // ------------------------------------------------------------------------
     // SPECIAL CASE: Funds already in pool (from partial claim remainder)

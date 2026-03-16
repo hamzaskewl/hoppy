@@ -18,6 +18,44 @@ export default pool;
  * Initialize the database schema
  * Call this once on app startup
  */
+/** Increment link created counter (no PII stored) */
+export async function incrementLinksCreated(): Promise<void> {
+  try {
+    await pool.query(
+      `UPDATE link_stats SET total_links_created = total_links_created + 1, last_updated = NOW() WHERE id = 1`
+    );
+  } catch (e) {
+    console.error("[DB] Failed to increment links created:", e);
+  }
+}
+
+/** Increment link claimed counter (no PII stored) */
+export async function incrementLinksClaimed(): Promise<void> {
+  try {
+    await pool.query(
+      `UPDATE link_stats SET total_links_claimed = total_links_claimed + 1, last_updated = NOW() WHERE id = 1`
+    );
+  } catch (e) {
+    console.error("[DB] Failed to increment links claimed:", e);
+  }
+}
+
+/** Get link stats */
+export async function getLinkStats(): Promise<{ totalCreated: number; totalClaimed: number }> {
+  try {
+    const res = await pool.query(`SELECT total_links_created, total_links_claimed FROM link_stats WHERE id = 1`);
+    if (res.rows.length > 0) {
+      return {
+        totalCreated: res.rows[0].total_links_created,
+        totalClaimed: res.rows[0].total_links_claimed,
+      };
+    }
+  } catch (e) {
+    console.error("[DB] Failed to get link stats:", e);
+  }
+  return { totalCreated: 0, totalClaimed: 0 };
+}
+
 export async function initDatabase(): Promise<void> {
   const client = await pool.connect();
   try {
@@ -41,6 +79,15 @@ export async function initDatabase(): Promise<void> {
 
       CREATE INDEX IF NOT EXISTS idx_orders_status ON gift_card_orders(status);
       CREATE INDEX IF NOT EXISTS idx_orders_starpay_id ON gift_card_orders(starpay_order_id);
+
+      CREATE TABLE IF NOT EXISTS link_stats (
+        id INTEGER PRIMARY KEY DEFAULT 1,
+        total_links_created INTEGER NOT NULL DEFAULT 0,
+        total_links_claimed INTEGER NOT NULL DEFAULT 0,
+        last_updated TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+        CHECK (id = 1)
+      );
+      INSERT INTO link_stats (id) VALUES (1) ON CONFLICT DO NOTHING;
     `);
     console.log("[DB] Database schema initialized");
   } finally {

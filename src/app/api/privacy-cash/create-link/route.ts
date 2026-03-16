@@ -31,6 +31,7 @@ import {
   SPL_SOL_BUFFER,
 } from "@/lib/privacy/privacy-cash-adapter";
 import { preseedUtxoOffset } from "@/lib/privacy/utxo-cache";
+import { incrementLinksCreated } from "@/lib/card/db";
 
 const RPC_URL = process.env.NEXT_PUBLIC_SOLANA_RPC_URL || "https://api.devnet.solana.com";
 const NETWORK = (process.env.NEXT_PUBLIC_SOLANA_NETWORK as "devnet" | "mainnet-beta") || "devnet";
@@ -455,6 +456,9 @@ export async function POST(request: NextRequest) {
       token,
       tokenMint: tokenInfo.mint,
     };
+
+    // Track link creation (no PII, just a counter)
+    incrementLinksCreated().catch(() => {});
 
     return NextResponse.json({
       success: true,
