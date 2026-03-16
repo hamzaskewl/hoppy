@@ -825,26 +825,35 @@ export async function POST(request: NextRequest) {
         enableDebug: false,
       });
 
+      const TX_TIMEOUT_MS = 60_000; // 60s max per SDK call
+      const withTimeout = <T>(promise: Promise<T>, label: string): Promise<T> =>
+        Promise.race([
+          promise,
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error(`${label} timed out after ${TX_TIMEOUT_MS / 1000}s`)), TX_TIMEOUT_MS)
+          ),
+        ]);
+
       if (isSOL) {
         // SOL: Check actual ephemeral balance and subtract SDK overhead
         const ephBalance = await connection.getBalance(ephPubkey);
         const MIN_TX_BUFFER = 3_000_000; // ~0.003 SOL - minimal buffer for tx fees
         const depositAmount = Math.max(0, ephBalance - MIN_TX_BUFFER);
-        
+
         if (depositAmount <= 0) {
           throw new Error("Ephemeral balance too low to cover Privacy Cash overhead");
         }
-        
+
         // First deposit to pool (free, no fee)
-        await privacyCashClient.deposit({
+        await withTimeout(privacyCashClient.deposit({
           lamports: depositAmount,
-        });
+        }), 'deposit');
 
         // Withdraw with ZK privacy
-        const withdrawResult = await privacyCashClient.withdraw({
+        const withdrawResult = await withTimeout(privacyCashClient.withdraw({
           lamports: depositAmount,
           recipientAddress,
-        });
+        }), 'withdraw');
 
         // Sweep leftover SOL back to relayer (non-blocking)
         sweepToRelayer(compositeSecret.ephemeralKeypair).catch(() => {});
@@ -870,17 +879,17 @@ export async function POST(request: NextRequest) {
         const depositAmountWholeTokens = depositAmountBaseUnits / (10 ** tokenInfo.decimals);
         
         // Deposit SPL to pool
-        await privacyCashClient.depositSPL({
+        await withTimeout(privacyCashClient.depositSPL({
           amount: depositAmountWholeTokens,
           mintAddress: tokenInfo.mint!,
-        });
+        }), 'depositSPL');
 
         // Withdraw SPL with ZK privacy
-        const withdrawResult = await privacyCashClient.withdrawSPL({
+        const withdrawResult = await withTimeout(privacyCashClient.withdrawSPL({
           amount: depositAmountWholeTokens,
           mintAddress: tokenInfo.mint!,
           recipientAddress,
-        });
+        }), 'withdrawSPL');
 
         // Sweep leftover SOL back to relayer (non-blocking)
         sweepToRelayer(compositeSecret.ephemeralKeypair).catch(() => {});

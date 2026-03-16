@@ -58,9 +58,13 @@ interface SavedLink {
   claimUrl: string;
   amount: number; // lamports
   createdAt: number;
-  status: "active" | "claimed" | "recalled" | "dust" | "unknown";
+  status: "active" | "claimed" | "recalled" | "dust" | "unknown" | "failed";
   senderPrivacy: SenderPrivacy;
   recipientAddress?: string;
+  /** Stored when txn fails so user can reclaim funds from ephemeral wallet */
+  ephemeralSecretKeyBase58?: string;
+  ephemeralAddress?: string;
+  token?: string;
 }
 
 const STORAGE_KEY = "hoppy_links_v1";
@@ -262,7 +266,7 @@ export function CreateLinkForm() {
   // Check on-chain status of a single link
   const checkLinkStatus = useCallback(async (link: SavedLink): Promise<SavedLink> => {
     // If already marked as claimed or recalled, don't re-check
-    if (link.status === "claimed" || link.status === "recalled" || link.status === "dust") {
+    if (link.status === "claimed" || link.status === "recalled" || link.status === "dust" || link.status === "failed") {
       return link;
     }
     
@@ -765,35 +769,50 @@ export function CreateLinkForm() {
       });
 
       let result;
+
+      // Helper: persist failed txn to localStorage so it survives page refresh
+      const persistFailedRecovery = async (secretBase58: string) => {
+        setFailedDepositRecovery({
+          ephemeralSecretKeyBase58: secretBase58,
+          ephemeralAddress,
+          userWallet: solanaAddress,
+        });
+        // Also save as a "failed" link so it shows up in Saved Links
+        const failedLink: SavedLink = {
+          id: `failed_${Date.now()}`,
+          claimUrl: "",
+          amount: costBreakdown.poolAmount,
+          createdAt: Date.now(),
+          status: "failed",
+          senderPrivacy,
+          ephemeralSecretKeyBase58: secretBase58,
+          ephemeralAddress,
+          token: selectedToken,
+        };
+        await saveLink(failedLink, solanaAddress);
+        const updatedLinks = await loadLinks(solanaAddress);
+        setSavedLinks(updatedLinks);
+      };
+
       try {
         result = await response.json();
       } catch (jsonErr) {
         console.error("[Create] Failed to parse API response:", jsonErr);
-        // Store recovery info since API crashed
         const ephemeralSecretBase58 = bs58.encode(compositeSecret.ephemeralKeypair.secretKey);
-        setFailedDepositRecovery({
-          ephemeralSecretKeyBase58: ephemeralSecretBase58,
-          ephemeralAddress,
-          userWallet: solanaAddress,
-        });
-        
+        await persistFailedRecovery(ephemeralSecretBase58);
+
         throw new Error("API error - your funds may be in the ephemeral wallet. Check recovery section below.");
       }
 
       if (!result.success || !result.note) {
-        // Store recovery info so user can reclaim SOL from ephemeral if they want
         const ephemeralSecretBase58 = bs58.encode(compositeSecret.ephemeralKeypair.secretKey);
-        setFailedDepositRecovery({
-          ephemeralSecretKeyBase58: ephemeralSecretBase58,
-          ephemeralAddress,
-          userWallet: solanaAddress,
-        });
-        
+        await persistFailedRecovery(ephemeralSecretBase58);
+
         // Check if API returned recovery info (funds may have been auto-swept)
         if (result.recoverySuccess) {
           throw new Error("Transaction failed but funds were automatically returned to your wallet.");
         }
-        
+
         throw new Error(result.error || "Failed to create payment link");
       }
       
@@ -959,9 +978,21 @@ export function CreateLinkForm() {
       const sig = await connection.sendRawTransaction(tx.serialize(), { preflightCommitment: "confirmed" });
       await connection.confirmTransaction(sig, "confirmed");
       setError(null);
+      const reclaimedKey = failedDepositRecovery.ephemeralSecretKeyBase58;
       setFailedDepositRecovery(null);
       setReclaimSuccess(`Reclaimed: ${reclaimedItems.join(", ")}`);
       setTimeout(() => setReclaimSuccess(null), 10000);
+      // Remove the failed link from saved links after successful reclaim
+      const address = getSolanaAddress();
+      if (address) {
+        const currentLinks = await loadLinks(address);
+        const matchingLink = currentLinks.find(l => l.ephemeralSecretKeyBase58 === reclaimedKey);
+        if (matchingLink) {
+          await deleteLink(matchingLink.id, address);
+          const updated = await loadLinks(address);
+          setSavedLinks(updated);
+        }
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : "Reclaim failed");
     } finally {
@@ -1913,6 +1944,7 @@ export function CreateLinkForm() {
                   .sort((a, b) => {
                     // Priority: active > dust > claimed/recalled
                     const getPriority = (status: string) => {
+                      if (status === "failed") return -1; // failed links first
                       if (status === "active" || status === "unknown") return 0;
                       if (status === "dust") return 1;
                       return 2; // claimed, recalled
@@ -1926,8 +1958,10 @@ export function CreateLinkForm() {
                   <div
                     key={link.id}
                     className={`p-3 rounded-xl bg-card border-2 ${
-                      link.status === "claimed" || link.status === "recalled"
-                        ? "border-gray-300 dark:border-gray-600 opacity-60" 
+                      link.status === "failed"
+                        ? "border-red-400 dark:border-red-600"
+                        : link.status === "claimed" || link.status === "recalled"
+                        ? "border-gray-300 dark:border-gray-600 opacity-60"
                         : link.status === "dust"
                         ? "border-orange-300 dark:border-orange-600 opacity-75"
                         : "border-hop-400"
@@ -1938,7 +1972,9 @@ export function CreateLinkForm() {
                         {lamportsToSol(link.amount).toFixed(4)} SOL
                       </span>
                       <span className={`text-xs px-2 py-0.5 rounded-full font-medium flex items-center gap-1 ${
-                        link.status === "active" 
+                        link.status === "failed"
+                          ? "bg-red-100 dark:bg-red-500/20 text-red-700 dark:text-red-400"
+                          : link.status === "active"
                           ? "bg-hop-200 dark:bg-hop-500/20 text-hop-700 dark:text-hop-400"
                           : link.status === "claimed"
                           ? "bg-gray-200 dark:bg-gray-500/20 text-gray-600 dark:text-gray-400"
@@ -1948,17 +1984,46 @@ export function CreateLinkForm() {
                           ? "bg-orange-100 dark:bg-orange-500/20 text-orange-700 dark:text-orange-400"
                           : "bg-honey-100 dark:bg-yellow-500/20 text-honey-700 dark:text-yellow-400"
                       }`}>
+                        {link.status === "failed" && <AlertTriangle className="w-3 h-3" />}
                         {link.status === "claimed" && <Check className="w-3 h-3" />}
                         {link.status === "recalled" && <Undo2 className="w-3 h-3" />}
                         {link.status === "dust" && <AlertTriangle className="w-3 h-3" />}
-                        {link.status === "claimed" ? "Claimed" 
-                          : link.status === "recalled" ? "Recalled" 
-                          : link.status === "dust" ? "Dust" 
-                          : link.status === "active" ? "Unclaimed" 
+                        {link.status === "failed" ? "Failed - Reclaimable"
+                          : link.status === "claimed" ? "Claimed"
+                          : link.status === "recalled" ? "Recalled"
+                          : link.status === "dust" ? "Dust"
+                          : link.status === "active" ? "Unclaimed"
                           : "Unknown"}
                       </span>
                     </div>
-                    {/* Claim Link - Priority */}
+                    {/* Claim Link or Reclaim for failed */}
+                    {link.status === "failed" && link.ephemeralSecretKeyBase58 ? (
+                    <div className="flex items-center gap-2 mb-2">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="flex-1 text-red-600 dark:text-red-400 border-red-300 dark:border-red-600 hover:bg-red-50 dark:hover:bg-red-900/20"
+                        onClick={() => {
+                          setFailedDepositRecovery({
+                            ephemeralSecretKeyBase58: link.ephemeralSecretKeyBase58!,
+                            ephemeralAddress: link.ephemeralAddress || "",
+                            userWallet: getSolanaAddress() || "",
+                          });
+                        }}
+                      >
+                        Reclaim Funds
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        onClick={() => handleCopy(link.ephemeralSecretKeyBase58!)}
+                        className="h-7 w-7 flex-shrink-0"
+                        title="Copy ephemeral key (for manual recovery)"
+                      >
+                        <Copy className="h-3 w-3" />
+                      </Button>
+                    </div>
+                    ) : (
                     <div className="flex items-center gap-2 mb-2">
                       <code className="flex-1 text-xs font-mono truncate text-foreground bg-muted/50 px-2 py-1 rounded">
                         {link.claimUrl}
@@ -2013,6 +2078,7 @@ export function CreateLinkForm() {
                         <Trash2 className="h-3 w-3" />
                       </Button>
                     </div>
+                    )}
                     <div className="flex items-center justify-between text-xs text-muted-foreground">
                       <span>{new Date(link.createdAt).toLocaleDateString()}</span>
                       <span className={link.senderPrivacy === "private" 

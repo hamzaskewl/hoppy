@@ -237,18 +237,27 @@ export async function POST(request: NextRequest) {
         ? depositAmount 
         : depositAmount / (10 ** tokenInfo.decimals);
       
+      const TX_TIMEOUT_MS = 60_000; // 60s max per SDK call
+      const withTimeout = <T>(promise: Promise<T>, label: string): Promise<T> =>
+        Promise.race([
+          promise,
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error(`${label} timed out after ${TX_TIMEOUT_MS / 1000}s`)), TX_TIMEOUT_MS)
+          ),
+        ]);
+
       for (let attempt = 1; attempt <= 3; attempt++) {
         try {
           if (isSOL) {
-            depositResult = await eph1Client.deposit({
+            depositResult = await withTimeout(eph1Client.deposit({
               lamports: depositAmount,
-            });
+            }), 'deposit');
           } else {
             // SPL token deposit - amount in whole tokens
-            depositResult = await eph1Client.depositSPL({
+            depositResult = await withTimeout(eph1Client.depositSPL({
               amount: depositAmountForSDK,
               mintAddress: tokenInfo.mint!,
-            });
+            }), 'depositSPL');
           }
           break;
         } catch (depositError: any) {
