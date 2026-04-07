@@ -674,26 +674,15 @@ export function ClaimFlow() {
                 })()} available to claim
               </p>
 
-              {/* Sender privacy info */}
-              <div className={`p-2 rounded-lg mb-4 ${
-                state.note.senderPrivacy === "private"
-                  ? "bg-hop-500/10 border border-hop-500/20"
-                  : "bg-secondary border border-border"
-              }`}>
-                <div className="flex items-center gap-2">
-                  {state.note.senderPrivacy === "private" ? (
-                    <>
-                      <Lock className="w-4 h-4 text-hop-500" />
-                      <span className="text-xs">Sender is hidden (ZK mixer protected)</span>
-                    </>
-                  ) : (
-                    <>
-                      <Zap className="w-4 h-4 text-yellow-500" />
-                      <span className="text-xs">Direct transfer (sender visible on-chain)</span>
-                    </>
-                  )}
+              {/* Sender privacy info — only show for private sends */}
+              {state.note.senderPrivacy === "private" && (
+                <div className="p-2 rounded-lg mb-4 bg-hop-500/10 border border-hop-500/20">
+                  <div className="flex items-center gap-2">
+                    <Lock className="w-4 h-4 text-hop-500" />
+                    <span className="text-xs">Sender is hidden (ZK mixer protected)</span>
+                  </div>
                 </div>
-              </div>
+              )}
 
               {/* Your Claim Mode Selector */}
               <div className="mb-4">
