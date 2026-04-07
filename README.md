@@ -15,7 +15,7 @@ Sending crypto shouldn't require the recipient to have a wallet set up, share th
 
 ---
 
-`solana` `privacy` `zk-compression` `payments` `defi` `web3` `hackathon`
+`solana` `privacy` `zk-compression` `payments` `web3` `hackathon`
 
 ## Table of Contents
 
@@ -48,7 +48,7 @@ This friction prevents everyday use cases: sending money to friends, private gif
 
 ## The Solution
 
-hoppy lets you send crypto by sharing a link. That's it.
+hoppy lets you send crypto by sharing a link.
 
 You deposit funds into a shielded pool and get a claim link. Share that link with anyone via text, email, or QR code. They open it, connect any wallet, and claim the funds. Nobody except the link holder knows what it contains, and on-chain observers cannot connect sender to recipient.
 
