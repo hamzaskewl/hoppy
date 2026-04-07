@@ -231,7 +231,6 @@ export default function Home() {
           <div className="flex gap-6">
             <Link href="/how-it-works" className="hover:text-foreground transition-colors">How it works</Link>
             <Link href="/roadmap" className="hover:text-foreground transition-colors">Roadmap</Link>
-            <a href="https://x.com/hoppyprivacy" target="_blank" rel="noopener noreferrer" className="hover:text-foreground transition-colors">Twitter / X</a>
           </div>
         </div>
       </footer>

@@ -324,7 +324,6 @@ export default function RoadmapPage() {
           <p>© 2026 Hoppy. Built with privacy in mind.</p>
           <div className="flex gap-6">
             <Link href="/how-it-works" className="hover:text-foreground transition-colors">How it works</Link>
-            <a href="https://x.com/hoppyprivacy" target="_blank" rel="noopener noreferrer" className="hover:text-foreground transition-colors">Twitter / X</a>
           </div>
         </div>
       </footer>
