@@ -19,8 +19,11 @@ export {
   type RecipientPrivacyInfo,
   // Constants
   WSOL_MINT,
+  UMBRA_FEE_BPS,
+  UMBRA_BPS_DIVISOR,
   UMBRA_FEE_PERCENT,
   EPHEMERAL_GAS_BUFFER,
+  WSOL_ATA_RENT,
   MIN_SEND_SOL,
   MIN_SEND_SPL,
   SPL_SOL_BUFFER,
@@ -61,6 +64,8 @@ export {
   // Umbra SDK helpers
   getUmbraConfig,
   createUmbraClientFromKeypair,
+  createUmbraClientFromWallet,
+  createUmbraClientFromPrivateKey,
   ensureRegistered,
   getRelayer,
 } from "./umbra-adapter";

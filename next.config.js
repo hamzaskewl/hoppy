@@ -1,6 +1,15 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  serverExternalPackages: ['@solana/web3.js', '@lightprotocol/hasher.rs', 'imapflow', 'mailparser', 'pg'],
+  serverExternalPackages: ['@solana/web3.js', '@lightprotocol/hasher.rs', 'imapflow', 'mailparser', 'pg', 'snarkjs'],
+  async rewrites() {
+    return [
+      {
+        // Proxy Umbra ZK prover circuit files to avoid CORS issues
+        source: '/umbra-zk/:path*',
+        destination: 'https://d3j9fjdkre529f.cloudfront.net/:path*',
+      },
+    ];
+  },
   images: {
     remotePatterns: [
       {

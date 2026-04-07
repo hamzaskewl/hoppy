@@ -4,36 +4,40 @@ import { useState, useMemo, useEffect, useCallback } from "react";
 import { QRCodeSVG } from "qrcode.react";
 import Image from "next/image";
 import { motion } from "framer-motion";
-import { Copy, Check, Wallet, ArrowRight, Lock, Info, AlertTriangle, Eye, EyeOff, Save, History, Trash2, ExternalLink, ChevronDown, Settings2, QrCode, Download, Undo2, X, RefreshCw } from "lucide-react";
-import { usePrivy } from "@privy-io/react-auth";
-import { useWallets, useSignAndSendTransaction, useFundWallet } from "@privy-io/react-auth/solana";
+import { Copy, Check, Wallet, ArrowRight, Lock, AlertTriangle, Save, History, Trash2, ExternalLink, ChevronDown, Settings2, QrCode, Download, Undo2, X, RefreshCw, Zap } from "lucide-react";
+import { useWallet, useConnection } from "@solana/wallet-adapter-react";
+import { useWalletModal } from "@solana/wallet-adapter-react-ui";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { 
-  createDoubleHopClaimUrl,
-  generateCompositeSecret,
+import {
+  createClaimUrl,
+  generateEphemeralKey,
   decodeCompositeSecret,
-  extractDoubleHopNoteFromUrl,
+  extractNoteFromUrl,
   calculateSenderCost,
-  calculateRecipientReceives,
-  calculateSPLRecipientReceives,
-  calculateDepositForRecipientAmount,
-  calculateSPLDepositForRecipientAmount,
-  SENDER_PRIVACY,
-  RECIPIENT_PRIVACY,
+  EPHEMERAL_GAS_BUFFER,
+  WSOL_ATA_RENT,
+  UMBRA_FEE_PERCENT,
   TOKEN_MINTS,
-  SPL_SOL_BUFFER,
-  type DoubleHopNote,
-  type SenderPrivacy,
+  WSOL_MINT,
+  getUmbraConfig,
+  SENDER_PRIVACY,
+  createUmbraClientFromKeypair,
+  ensureRegistered,
+  getRelayer,
+  type UmbraNote,
   type SupportedToken,
+  type SenderPrivacy,
 } from "@/lib/privacy";
 import { shortenAddress, solToLamports, lamportsToSol } from "@/lib/utils";
-import { Connection, Transaction, SystemProgram, PublicKey, LAMPORTS_PER_SOL, Keypair } from "@solana/web3.js";
-import { 
-  getAssociatedTokenAddress, 
+import { Connection, Transaction, SystemProgram, PublicKey, LAMPORTS_PER_SOL, Keypair, sendAndConfirmTransaction } from "@solana/web3.js";
+import {
+  getAssociatedTokenAddress,
   createAssociatedTokenAccountInstruction,
   createTransferInstruction,
+  createCloseAccountInstruction,
+  createSyncNativeInstruction,
   TOKEN_PROGRAM_ID,
   getAccount,
 } from "@solana/spl-token";
@@ -59,27 +63,30 @@ interface SavedLink {
   amount: number; // lamports
   createdAt: number;
   status: "active" | "claimed" | "recalled" | "dust" | "unknown";
-  senderPrivacy: SenderPrivacy;
+  senderPrivacy?: string; // legacy field, always "private" for new links
   recipientAddress?: string;
 }
 
 const STORAGE_KEY = "hoppy_links_v1";
+const RECOVERY_KEY = "hoppy_recovery_v1";
 
 // Simple encryption using Web Crypto API with a derived key
 async function deriveKey(walletAddress: string): Promise<CryptoKey> {
   const encoder = new TextEncoder();
+  const rawKey = encoder.encode(walletAddress + "_hoppy_local_key");
   const keyMaterial = await crypto.subtle.importKey(
     "raw",
-    encoder.encode(walletAddress + "_hoppy_local_key"),
+    rawKey.buffer as ArrayBuffer,
     "PBKDF2",
     false,
     ["deriveKey"]
   );
-  
+
+  const salt = encoder.encode("hoppy_salt_v1");
   return crypto.subtle.deriveKey(
     {
       name: "PBKDF2",
-      salt: encoder.encode("hoppy_salt_v1"),
+      salt: salt.buffer as ArrayBuffer,
       iterations: 100000,
       hash: "SHA-256",
     },
@@ -94,11 +101,11 @@ async function encryptData(data: string, walletAddress: string): Promise<string>
   const key = await deriveKey(walletAddress);
   const encoder = new TextEncoder();
   const iv = crypto.getRandomValues(new Uint8Array(12));
-  
+
   const encrypted = await crypto.subtle.encrypt(
-    { name: "AES-GCM", iv },
+    { name: "AES-GCM", iv: iv.buffer as ArrayBuffer },
     key,
-    encoder.encode(data)
+    encoder.encode(data).buffer as ArrayBuffer
   );
   
   // Combine IV + encrypted data and encode as base64
@@ -133,9 +140,9 @@ async function decryptData(encryptedBase64: string, walletAddress: string): Prom
     const encrypted = combined.slice(12);
     
     const decrypted = await crypto.subtle.decrypt(
-      { name: "AES-GCM", iv },
+      { name: "AES-GCM", iv: iv.buffer as ArrayBuffer },
       key,
-      encrypted
+      encrypted.buffer as ArrayBuffer
     );
     
     return new TextDecoder().decode(decrypted);
@@ -190,28 +197,50 @@ async function deleteLink(linkId: string, walletAddress: string): Promise<void> 
   }
 }
 
+function saveRecovery(recovery: FailedDepositRecovery): void {
+  try {
+    const existing = loadRecoveries();
+    // Prepend, dedup by ephemeral address, keep last 20
+    const updated = [recovery, ...existing.filter(r => r.ephemeralAddress !== recovery.ephemeralAddress)].slice(0, 20);
+    localStorage.setItem(RECOVERY_KEY, JSON.stringify(updated));
+  } catch { /* silent */ }
+}
+
+function loadRecoveries(): FailedDepositRecovery[] {
+  try {
+    const raw = localStorage.getItem(RECOVERY_KEY);
+    if (!raw) return [];
+    return JSON.parse(raw) as FailedDepositRecovery[];
+  } catch {
+    return [];
+  }
+}
+
+function clearRecovery(ephemeralAddress: string): void {
+  try {
+    const existing = loadRecoveries();
+    const updated = existing.filter(r => r.ephemeralAddress !== ephemeralAddress);
+    localStorage.setItem(RECOVERY_KEY, JSON.stringify(updated));
+  } catch { /* silent */ }
+}
+
 export function CreateLinkForm() {
-  const { login, logout, authenticated, ready, user } = usePrivy();
-  // Privy Solana wallet hooks for embedded wallet support
-  const { wallets: privyWallets } = useWallets();
-  const { signAndSendTransaction: privySignAndSend } = useSignAndSendTransaction();
-  const { fundWallet } = useFundWallet();
+  const { publicKey, connected, sendTransaction, wallet: connectedWallet, disconnect } = useWallet();
+  const { connection: walletConnection } = useConnection();
+  const { setVisible: openWalletModal } = useWalletModal();
   const [step, setStep] = useState<Step>("connect");
   // Wallet balance tracking for embedded wallets
   const [walletBalance, setWalletBalance] = useState<number | null>(null);
-  const [isLoadingBalance, setIsLoadingBalance] = useState(false);
   const [amount, setAmount] = useState<string>("0.1");
   const [displayAmount, setDisplayAmount] = useState<string>("0.1");
   const [currency, setCurrency] = useState<"SOL" | "USD">("SOL");
   const [selectedToken, setSelectedToken] = useState<SupportedToken>("SOL");
   const [solPrice, setSolPrice] = useState<number | null>(null);
-  const [senderPrivacy, setSenderPrivacy] = useState<SenderPrivacy>("basic");
   const [showAdvanced, setShowAdvanced] = useState(false); // Hide advanced options by default
   const [isDepositing, setIsDepositing] = useState(false);
-  const [doubleHopNote, setDoubleHopNote] = useState<DoubleHopNote | null>(null);
+  const [umbraNote, setUmbraNote] = useState<UmbraNote | null>(null);
   const [claimUrl, setClaimUrl] = useState<string>("");
   const [fundingTxHash, setFundingTxHash] = useState<string | null>(null);
-  const [depositTxHash, setDepositTxHash] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [depositProgress, setDepositProgress] = useState<string>("");
@@ -228,32 +257,12 @@ export function CreateLinkForm() {
   const [recallCustomAddress, setRecallCustomAddress] = useState("");
   const [isRecalling, setIsRecalling] = useState(false);
   const [recallError, setRecallError] = useState<string | null>(null);
-  const [relayerStatus, setRelayerStatus] = useState<{
-    available: boolean;
-    warning?: boolean;
-    message?: string;
-  } | null>(null);
+  const [senderPrivacy, setSenderPrivacy] = useState<SenderPrivacy>("basic");
 
-  // Get Solana wallet address - look for chainType: 'solana'
+  // Get connected Solana wallet address
   const getSolanaAddress = useCallback((): string | null => {
-    // 1. Check linkedAccounts for Solana wallet by chainType
-    const solanaWallet = user?.linkedAccounts?.find((a) => {
-      const account = a as any;
-      return account.type === 'wallet' && account.chainType === 'solana';
-    }) as any;
-    
-    if (solanaWallet?.address) {
-      return solanaWallet.address as string;
-    }
-    
-    // 2. Check if main wallet is Solana (not starting with 0x)
-    const mainAddress = user?.wallet?.address;
-    if (mainAddress && !mainAddress.startsWith('0x')) {
-      return mainAddress;
-    }
-    
-    return null;
-  }, [user]);
+    return publicKey?.toBase58() || null;
+  }, [publicKey]);
 
   // Minimum balance needed to perform a transfer (tx fee + rent buffer)
   const MIN_WITHDRAWABLE_BALANCE = 10000; // 0.00001 SOL - absolute minimum for tx fees
@@ -273,7 +282,7 @@ export function CreateLinkForm() {
     }
     
     try {
-      const note = extractDoubleHopNoteFromUrl(link.claimUrl);
+      const note = extractNoteFromUrl(link.claimUrl);
       if (!note) {
         // Can't parse link - if amount is small, mark as dust
         if (link.amount < DUST_THRESHOLD) {
@@ -281,7 +290,7 @@ export function CreateLinkForm() {
         }
         return link;
       }
-      
+
       const compositeSecret = decodeCompositeSecret(note.secret);
       if (!compositeSecret) {
         if (link.amount < DUST_THRESHOLD) {
@@ -289,10 +298,10 @@ export function CreateLinkForm() {
         }
         return link;
       }
-      
+
       const rpcUrl = process.env.NEXT_PUBLIC_SOLANA_RPC_URL || "https://api.devnet.solana.com";
       const connection = new Connection(rpcUrl, "confirmed");
-      
+
       const ephemeralPubkey = compositeSecret.ephemeralKeypair.publicKey;
       const balance = await connection.getBalance(ephemeralPubkey);
       
@@ -349,10 +358,23 @@ export function CreateLinkForm() {
         setSavedLinks(links);
       }
     };
-    if (authenticated) {
+    if (connected) {
       loadSavedLinks();
     }
-  }, [authenticated, getSolanaAddress]);
+  }, [connected, getSolanaAddress]);
+
+  // Load persisted recovery info on mount
+  useEffect(() => {
+    if (!connected) return;
+    const address = getSolanaAddress();
+    if (!address) return;
+    const recoveries = loadRecoveries();
+    // Show the most recent recovery for this wallet
+    const mine = recoveries.find(r => r.userWallet === address);
+    if (mine && !failedDepositRecovery) {
+      setFailedDepositRecovery(mine);
+    }
+  }, [connected, getSolanaAddress]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Fetch SOL/USD price for amount step
   useEffect(() => {
@@ -371,177 +393,96 @@ export function CreateLinkForm() {
     return () => { cancelled = true; };
   }, [step]);
 
-  // Check if user has a Privy embedded wallet
-  const isEmbeddedWallet = useMemo(() => {
-    const addr = getSolanaAddress();
-    if (!addr || !privyWallets?.length) return false;
-    return privyWallets.some(
-      (w) => w.address?.toLowerCase() === addr.toLowerCase()
-    );
-  }, [getSolanaAddress, privyWallets]);
-
   // Fetch wallet balance when on amount step
   useEffect(() => {
     if (step !== "amount" && step !== "connect") return;
     const addr = getSolanaAddress();
-    if (!addr || !authenticated) return;
+    if (!addr || !connected) return;
 
     let cancelled = false;
     const fetchBalance = async () => {
-      setIsLoadingBalance(true);
       try {
-        const rpcUrl = process.env.NEXT_PUBLIC_SOLANA_RPC_URL || "https://api.mainnet-beta.solana.com";
-        const connection = new Connection(rpcUrl, "confirmed");
-        const balance = await connection.getBalance(new PublicKey(addr));
+        const balance = await walletConnection.getBalance(new PublicKey(addr));
         if (!cancelled) setWalletBalance(balance);
       } catch {
         if (!cancelled) setWalletBalance(null);
-      } finally {
-        if (!cancelled) setIsLoadingBalance(false);
       }
     };
     fetchBalance();
     return () => { cancelled = true; };
-  }, [step, authenticated, getSolanaAddress]);
-
-  // Helper: handle funding the embedded wallet
-  const handleFundWallet = useCallback(async () => {
-    const addr = getSolanaAddress();
-    if (!addr) return;
-    try {
-      await fundWallet({
-        address: addr,
-      });
-      // Refresh balance after funding
-      const rpcUrl = process.env.NEXT_PUBLIC_SOLANA_RPC_URL || "https://api.mainnet-beta.solana.com";
-      const connection = new Connection(rpcUrl, "confirmed");
-      const balance = await connection.getBalance(new PublicKey(addr));
-      setWalletBalance(balance);
-    } catch {
-      // User cancelled funding
-    }
-  }, [getSolanaAddress, fundWallet]);
-
-  // Check relayer status when selecting SPL token + private mode
-  useEffect(() => {
-    if (selectedToken !== "SOL" && senderPrivacy === "private" && step === "amount") {
-      let cancelled = false;
-      (async () => {
-        try {
-          const res = await fetch("/api/relayer/status");
-          if (!res.ok || cancelled) return;
-          const status = await res.json();
-          if (!cancelled) setRelayerStatus(status);
-        } catch {
-          if (!cancelled) setRelayerStatus({ available: false, message: "Failed to check relayer status" });
-        }
-      })();
-      return () => { cancelled = true; };
-    } else {
-      setRelayerStatus(null);
-    }
-  }, [selectedToken, senderPrivacy, step]);
+  }, [step, connected, getSolanaAddress, walletConnection]);
 
   // Calculate costs based on amount, token, and sender privacy
-  // Fee per Privacy Cash withdrawal: 0.006 SOL (base) + 0.35% (percentage)
   const costBreakdown = useMemo(() => {
     const amountNum = parseFloat(amount) || 0;
     if (amountNum <= 0) return null;
 
-    const isPrivateSender = senderPrivacy === "private";
-
-    // SOL path (lamports + Privacy Cash fee model)
     if (selectedToken === "SOL") {
       const baseRecipientAmount = solToLamports(amountNum);
-      
-      // Small buffer for blockchain tx fees (~0.000005 SOL per tx, but we add ~0.001 to be safe)
-      const TX_FEE_BUFFER = 1_000_000; // 0.001 SOL
-      
-      let senderPays: number;
-      let senderFee: number;
-      const poolAmount = baseRecipientAmount; // What ends up in ephemeral for recipient
 
-      if (isPrivateSender) {
-        // PRIVATE sender: Sender → Pool → Ephemeral (1 withdrawal fee on sender side)
-        // Deposit X so that X - fee(X) = baseRecipientAmount in ephemeral
-        const depositNeeded = calculateDepositForRecipientAmount(baseRecipientAmount);
-        senderPays = depositNeeded + TX_FEE_BUFFER;
-        senderFee = senderPays - baseRecipientAmount;
-      } else {
-        // BASIC sender: Sender → Ephemeral (direct transfer, no pool fee)
-        senderPays = baseRecipientAmount + TX_FEE_BUFFER;
-        senderFee = TX_FEE_BUFFER;
+      if (senderPrivacy === "basic") {
+        // Basic: direct transfer to ephemeral. No Umbra. Just tx fees.
+        const claimGasReserve = 5000; // ephemeral needs this for claim tx fee
+        return {
+          token: selectedToken,
+          decimals: 9,
+          baseRecipientAmount,
+          commission: 0,
+          gasBuffer: claimGasReserve,
+          senderPays: baseRecipientAmount + claimGasReserve,
+          senderFee: claimGasReserve,
+          senderPaysGasLamports: 0,
+          recipientQuick: baseRecipientAmount,
+          recipientPrivate: baseRecipientAmount,
+        };
       }
 
-      // Recipient amounts:
-      // - Quick claim: direct from ephemeral (no pool fee)
-      // - Private claim: ephemeral → pool → recipient (1 withdrawal fee)
-      const recipientQuickAmount = baseRecipientAmount;
-      const recipientPrivateAmount = calculateRecipientReceives(baseRecipientAmount, "quick").recipientReceives;
-
+      // Private: Umbra mixer. ~0.21% commission (35 BPS) + gas for registration/wrap/UTXO.
+      // NOTE: Private send not yet available on web (requires TG bot).
+      const cost = calculateSenderCost(baseRecipientAmount, "private");
       return {
         token: selectedToken,
         decimals: 9,
         baseRecipientAmount,
-        poolAmount,
-        senderPays,
-        senderFee,
+        commission: cost.senderFee - EPHEMERAL_GAS_BUFFER,
+        gasBuffer: EPHEMERAL_GAS_BUFFER,
+        senderPays: cost.senderPays,
+        senderFee: cost.senderFee,
         senderPaysGasLamports: 0,
-        senderPrivacyInfo: SENDER_PRIVACY[senderPrivacy],
-        recipientQuick: recipientQuickAmount,
-        recipientPrivate: recipientPrivateAmount,
+        recipientQuick: baseRecipientAmount,
+        recipientPrivate: baseRecipientAmount,
       };
     }
 
-    // SPL path (token units + separate SOL gas buffer)
+    // SPL path (USDC, USDT) — always basic for now
     const decimals = TOKEN_MINTS[selectedToken].decimals;
     const baseRecipientAmount = Math.round(amountNum * 10 ** decimals);
-    const senderPaysGasLamports = SPL_SOL_BUFFER;
-
-    // SPL tokens: Rent fee (~$0.50 in token) + 0.35% per withdrawal
-    let senderPaysTokens: number;
-    let senderFeeTokens: number;
-
-    if (isPrivateSender) {
-      // Private sender: deposit more so after fee, ephemeral gets baseRecipientAmount
-      senderPaysTokens = calculateSPLDepositForRecipientAmount(baseRecipientAmount, decimals);
-      senderFeeTokens = senderPaysTokens - baseRecipientAmount;
-    } else {
-      // Basic sender: direct transfer to ephemeral (no pool fee)
-      senderPaysTokens = baseRecipientAmount;
-      senderFeeTokens = 0;
-    }
-
-    // Recipient amounts:
-    // - Quick claim: direct from ephemeral (no pool fee)
-    // - Private claim: ephemeral → pool → recipient (rent fee + 0.35%)
-    const recipientQuickAmount = baseRecipientAmount;
-    const recipientPrivateAmount = calculateSPLRecipientReceives(baseRecipientAmount, "quick", decimals).recipientReceives;
+    const gasBuffer = EPHEMERAL_GAS_BUFFER;
 
     return {
       token: selectedToken,
       decimals,
       baseRecipientAmount,
-      poolAmount: baseRecipientAmount,
-      senderPays: senderPaysTokens,
-      senderFee: senderFeeTokens,
-      senderPaysGasLamports,
-      senderPrivacyInfo: SENDER_PRIVACY[senderPrivacy],
-      recipientQuick: recipientQuickAmount,
-      recipientPrivate: recipientPrivateAmount,
+      commission: 0,
+      gasBuffer,
+      senderPays: baseRecipientAmount,
+      senderFee: 0,
+      senderPaysGasLamports: gasBuffer,
+      recipientQuick: baseRecipientAmount,
+      recipientPrivate: baseRecipientAmount,
     };
-  }, [amount, senderPrivacy, selectedToken]);
+  }, [amount, selectedToken, senderPrivacy]);
 
-  // Move to amount step when authenticated
+  // Move to amount step when connected
   const handleContinue = () => {
-    if (authenticated) {
+    if (connected) {
       setStep("amount");
     } else {
-      login();
+      openWalletModal(true);
     }
   };
 
-  // Handle double hop deposit
+  // Handle deposit (basic: direct transfer; private: Umbra mixer via two ephemeral keypairs)
   const handleDeposit = async () => {
     const amountNum = parseFloat(amount);
     if (isNaN(amountNum) || amountNum <= 0) {
@@ -554,17 +495,23 @@ export function CreateLinkForm() {
       return;
     }
 
-    // Pre-check: if embedded wallet, verify balance before attempting tx
-    if (isEmbeddedWallet && walletBalance !== null) {
-      const neededLamports = selectedToken === "SOL" 
-        ? costBreakdown.senderPays 
-        : (costBreakdown.senderPays + 5_000_000); // SPL needs SOL for gas too
+    // Pre-check: verify balance before attempting tx
+    if (walletBalance !== null) {
+      const neededLamports = selectedToken === "SOL"
+        ? costBreakdown.senderPays
+        : (costBreakdown.senderPaysGasLamports + 5_000_000);
       if (walletBalance < neededLamports) {
         setError(
-          `Insufficient balance. You have ${lamportsToSol(walletBalance).toFixed(4)} SOL but need ~${lamportsToSol(neededLamports).toFixed(4)} SOL. Use the "Add Funds" button below to deposit.`
+          `Insufficient balance. You have ${lamportsToSol(walletBalance).toFixed(4)} SOL but need ~${lamportsToSol(neededLamports).toFixed(4)} SOL.`
         );
         return;
       }
+    }
+
+    // Private send only supports SOL for now
+    if (senderPrivacy === "private" && selectedToken !== "SOL") {
+      setError("Private send is currently only available for SOL.");
+      return;
     }
 
     setError(null);
@@ -572,274 +519,255 @@ export function CreateLinkForm() {
     setStep("depositing");
     setDepositProgress("Initializing...");
 
+    // Track ephemeral info for recovery
+    let ephemeralSecretBase58 = "";
+    let ephemeralAddress = "";
+    let solanaAddress = "";
+
     try {
       // Get user's Solana wallet for signing
-      const solanaAddress = getSolanaAddress();
+      solanaAddress = getSolanaAddress() || "";
       if (!solanaAddress) {
         throw new Error("No Solana wallet connected");
       }
 
-      // Check for Privy embedded wallet first, then fall back to browser extensions
-      // This ensures Gmail/email users with embedded wallets can also deposit
-      const privyWallet = privyWallets?.find(
-        (w) => w.address?.toLowerCase() === solanaAddress.toLowerCase()
-      );
-      const isPrivyEmbeddedWallet = !!privyWallet;
-      
-      // Get browser extension provider (Phantom, Solflare, etc.) as fallback
-      let solanaProvider: any = null;
-      
-      if (!isPrivyEmbeddedWallet && typeof window !== "undefined") {
-        // Check for Phantom
-        if ((window as any).phantom?.solana?.isPhantom) {
-          solanaProvider = (window as any).phantom.solana;
-        }
-        // Check for Solflare
-        else if ((window as any).solflare?.isSolflare) {
-          solanaProvider = (window as any).solflare;
-        }
-        // Check for generic Solana provider
-        else if ((window as any).solana) {
-          solanaProvider = (window as any).solana;
-        }
-      }
-      
-      // Must have either Privy embedded wallet or browser extension
-      if (!isPrivyEmbeddedWallet && !solanaProvider) {
-        throw new Error("No Solana wallet found. Please connect a wallet or install Phantom.");
-      }
-      
-      // For browser extension wallets, verify connection
-      if (solanaProvider && !isPrivyEmbeddedWallet) {
-        if (solanaProvider.publicKey?.toBase58() !== solanaAddress) {
-          if (!solanaProvider.isConnected) {
-            await solanaProvider.connect();
-          }
-        }
+      if (!connected || !publicKey) {
+        throw new Error("No Solana wallet connected. Please connect a wallet.");
       }
 
-      setDepositProgress("Generating ephemeral wallet...");
-      
-      // 1. Generate composite secret (client-side)
-      const compositeSecret = generateCompositeSecret();
-      const ephemeralAddress = compositeSecret.ephemeralKeypair.publicKey.toBase58();
-      
-      // Ephemeral wallet created - private key stays in memory only
-
-      setDepositProgress("Preparing transaction...");
-      
       const rpcUrl = process.env.NEXT_PUBLIC_SOLANA_RPC_URL || "https://api.devnet.solana.com";
       const connection = new Connection(rpcUrl, "confirmed");
       const senderPubkey = new PublicKey(solanaAddress);
-      const ephemeralPubkey = compositeSecret.ephemeralKeypair.publicKey;
-      
-      // 2. Create funding transaction (sender → ephemeral)
-      const fundingTx = new Transaction();
-      const isSOL = selectedToken === "SOL";
-      
-      if (isSOL) {
-        // SOL: Simple transfer
-        // Add 3% buffer to ALL transfers to ensure recipient gets enough after on-chain costs
-        const BUFFER_PERCENTAGE = 0.03; // 3% buffer
-        const bufferAmount = Math.ceil(costBreakdown.poolAmount * BUFFER_PERCENTAGE);
-        // For private: also add minimal buffer for tx fees
-        const MIN_TX_BUFFER = 3_000_000; // ~0.003 SOL - minimal buffer for tx fees
-        const fundingAmount = senderPrivacy === "private" 
-          ? costBreakdown.poolAmount + MIN_TX_BUFFER + bufferAmount
-          : costBreakdown.poolAmount + bufferAmount;
-        
-        fundingTx.add(
+
+      if (senderPrivacy === "private" && selectedToken === "SOL") {
+        // ── PRIVATE SEND: User → eph → Umbra pool (self-claimable UTXO) ──
+        // ONE ephemeral: deposits into mixer, claim URL has eph seed.
+        // Claimer reconstructs eph, claims UTXO, sends to their wallet.
+        // Privacy: mixer breaks the on-chain link between deposit and claim.
+
+        setDepositProgress("Generating ephemeral wallet...");
+        const eph = generateEphemeralKey();
+        ephemeralAddress = eph.address;
+        ephemeralSecretBase58 = bs58.encode(eph.keypair.secretKey);
+
+        // Calculate total: amount + ~0.21% commission (35 BPS) + ATA rent + Umbra gas
+        const commission = Math.ceil(costBreakdown.baseRecipientAmount * UMBRA_FEE_PERCENT);
+        const wrapAmount = costBreakdown.baseRecipientAmount + commission;
+        const totalToEph = wrapAmount + WSOL_ATA_RENT + EPHEMERAL_GAS_BUFFER;
+
+        // 1. User signs ONE tx: fund ephemeral
+        setDepositProgress("Please sign the transaction in your wallet...");
+        const fundingTx = new Transaction().add(
           SystemProgram.transfer({
             fromPubkey: senderPubkey,
-            toPubkey: ephemeralPubkey,
-            lamports: fundingAmount,
+            toPubkey: eph.keypair.publicKey,
+            lamports: totalToEph,
           })
         );
-      } else {
-        // SPL Token: Need to send both SOL (for gas) and the token
-        const tokenInfo = TOKEN_MINTS[selectedToken];
-        const mintPubkey = new PublicKey(tokenInfo.mint!);
-        
-        // 1. Send SOL for gas fees
-        fundingTx.add(
-          SystemProgram.transfer({
-            fromPubkey: senderPubkey,
-            toPubkey: ephemeralPubkey,
-            lamports: SPL_SOL_BUFFER, // 0.005 SOL for gas
-          })
-        );
-        
-        // 2. Get sender's token account
-        const senderAta = await getAssociatedTokenAddress(mintPubkey, senderPubkey);
-        
-        // 3. Create ephemeral's token account (ATA)
-        const ephemeralAta = await getAssociatedTokenAddress(mintPubkey, ephemeralPubkey);
-        fundingTx.add(
-          createAssociatedTokenAccountInstruction(
-            senderPubkey, // payer
-            ephemeralAta,
-            ephemeralPubkey,
-            mintPubkey
-          )
-        );
-        
-        // 4. Transfer tokens to ephemeral
-        // Add small buffer for fees (~1%)
-        const tokenAmount = BigInt(Math.ceil(costBreakdown.poolAmount * 1.01));
-        fundingTx.add(
-          createTransferInstruction(
-            senderAta,
-            ephemeralAta,
-            senderPubkey,
-            tokenAmount,
-            [],
-            TOKEN_PROGRAM_ID
-          )
-        );
-      }
+        const txHash = await sendTransaction(fundingTx, connection);
+        setDepositProgress("Waiting for confirmation...");
+        const conf = await connection.confirmTransaction(txHash, "confirmed");
+        if (conf.value.err) throw new Error(`Funding failed: ${JSON.stringify(conf.value.err)}`);
+        setFundingTxHash(txHash);
 
-      const { blockhash } = await connection.getLatestBlockhash();
-      fundingTx.recentBlockhash = blockhash;
-      fundingTx.feePayer = senderPubkey;
+        // 2. Wrap SOL → wSOL
+        setDepositProgress("Wrapping SOL...");
+        const wsolMint = new PublicKey(WSOL_MINT);
+        const ephWsolAta = await getAssociatedTokenAddress(wsolMint, eph.keypair.publicKey);
+        const wrapTx = new Transaction();
+        wrapTx.add(createAssociatedTokenAccountInstruction(eph.keypair.publicKey, ephWsolAta, eph.keypair.publicKey, wsolMint));
+        wrapTx.add(SystemProgram.transfer({ fromPubkey: eph.keypair.publicKey, toPubkey: ephWsolAta, lamports: wrapAmount }));
+        wrapTx.add(createSyncNativeInstruction(ephWsolAta));
+        await sendAndConfirmTransaction(connection, wrapTx, [eph.keypair], { commitment: "confirmed" });
 
-      setDepositProgress("Please sign the transaction in your wallet...");
-      
-      // 3. Sign and send transaction
-      let fundingTxHash: string;
-      
-      if (isPrivyEmbeddedWallet && privyWallet) {
-        // Use Privy's embedded wallet signing
-        // Serialize transaction to Uint8Array for Privy
-        const serializedTx = fundingTx.serialize({ requireAllSignatures: false });
-        const result = await privySignAndSend({
-          transaction: new Uint8Array(serializedTx),
-          wallet: privyWallet,
+        // 3. Register on Umbra (anonymous: true for MVK needed by UTXO ops)
+        setDepositProgress("Loading ZK circuits...");
+        const { getCdnZkAssetProvider } = await import("@umbra-privacy/web-zk-prover");
+        const zkProvider = getCdnZkAssetProvider({ baseUrl: `${window.location.origin}/umbra-zk` });
+
+        setDepositProgress("Registering on privacy pool...");
+        const umbraClient = await createUmbraClientFromKeypair(eph.keypair);
+        await ensureRegistered(umbraClient, { confidential: true, anonymous: true, zkAssetProvider: zkProvider });
+
+        // 4. Create self-claimable UTXO from public wSOL balance
+        setDepositProgress("Creating private UTXO (~30s, don't close this page)...");
+        const { getPublicBalanceToSelfClaimableUtxoCreatorFunction } = await import("@umbra-privacy/sdk");
+        const { getCreateSelfClaimableUtxoFromPublicBalanceProver } = await import("@umbra-privacy/web-zk-prover");
+        const createProver = getCreateSelfClaimableUtxoFromPublicBalanceProver({ assetProvider: zkProvider });
+        const createUtxo = getPublicBalanceToSelfClaimableUtxoCreatorFunction(
+          { client: umbraClient },
+          { zkProver: createProver }
+        );
+        await createUtxo({
+          amount: BigInt(costBreakdown.baseRecipientAmount) as any,
+          destinationAddress: eph.address as any,
+          mint: WSOL_MINT as any,
         });
-        // Convert signature Uint8Array to base58 string
-        fundingTxHash = bs58.encode(result.signature);
-      } else if (solanaProvider) {
-        // Use browser extension wallet (Phantom, Solflare, etc.)
-        if (typeof solanaProvider.signAndSendTransaction === "function") {
-          // Phantom and most wallets support this
-          const result = await solanaProvider.signAndSendTransaction(fundingTx);
-          fundingTxHash = result.signature;
-        } else if (typeof solanaProvider.signTransaction === "function") {
-          // Fallback: sign then send separately
-          const signedTx = await solanaProvider.signTransaction(fundingTx);
-          fundingTxHash = await connection.sendRawTransaction(signedTx.serialize());
+
+        // 5. Done! The UTXO is in the mixer. Claim URL has the eph seed.
+        // When claiming, the claimer reconstructs the eph, claims the UTXO,
+        // withdraws wSOL, unwraps to SOL, and sends to their wallet.
+        setDepositProgress("Generating claim link...");
+        const config = getUmbraConfig();
+        const note: UmbraNote = {
+          ephemeralSeed: eph.seed,
+          amount: costBreakdown.baseRecipientAmount,
+          network: config.network,
+          token: selectedToken,
+          tokenMint: TOKEN_MINTS[selectedToken].mint,
+          createdAt: Date.now(),
+          ephemeralAddress: eph.address,
+          senderPrivacy: "private",
+          status: "funded",
+          fundsLocation: "pool",
+          senderAddress: "",
+          secret: eph.seed,
+        };
+
+        const url = createClaimUrl(note);
+        setUmbraNote(note);
+        setClaimUrl(url);
+
+        try {
+          await navigator.clipboard.writeText(url);
+          setCopied(true);
+          setTimeout(() => setCopied(false), 3000);
+        } catch { /* clipboard failed silently */ }
+
+        const savedLink: SavedLink = {
+          id: eph.seed.substring(0, 22),
+          claimUrl: url,
+          amount: costBreakdown.baseRecipientAmount,
+          createdAt: Date.now(),
+          status: "active",
+          senderPrivacy: "private",
+        };
+
+        await saveLink(savedLink, solanaAddress);
+        const updatedLinks = await loadLinks(solanaAddress);
+        setSavedLinks(updatedLinks);
+
+        setStep("complete");
+      } else {
+        // ── BASIC SEND: User → ephemeral (direct transfer, no Umbra) ──
+
+        setDepositProgress("Generating ephemeral wallet...");
+        const ephemeral = generateEphemeralKey();
+        ephemeralAddress = ephemeral.address;
+        ephemeralSecretBase58 = bs58.encode(ephemeral.keypair.secretKey);
+
+        setDepositProgress("Preparing transaction...");
+        const ephemeralPubkey = ephemeral.keypair.publicKey;
+        const fundingTx = new Transaction();
+        const isSOL = selectedToken === "SOL";
+
+        if (isSOL) {
+          fundingTx.add(
+            SystemProgram.transfer({
+              fromPubkey: senderPubkey,
+              toPubkey: ephemeralPubkey,
+              lamports: costBreakdown.senderPays,
+            })
+          );
         } else {
-          throw new Error("Wallet does not support transaction signing");
-        }
-      } else {
-        throw new Error("No wallet available for signing");
-      }
-      
-      
-      setDepositProgress("Waiting for transaction confirmation...");
-      
-      // Wait for confirmation (use "finalized" for more reliable confirmation)
-      const confirmation = await connection.confirmTransaction(fundingTxHash, "finalized");
-      
-      if (confirmation.value.err) {
-        throw new Error(`Transaction failed: ${JSON.stringify(confirmation.value.err)}`);
-      }
-      
-      
-      setDepositProgress("Depositing to Privacy Cash...");
-      
-      // 4. Send to API to handle Privacy Cash deposit
-      const response = await fetch("/api/privacy-cash/create-link", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          amount: costBreakdown.poolAmount, // Pool amount (what's available for recipient)
-          compositeSecret: compositeSecret.full,
-          ephemeralAddress,
-          fundingTxHash,
-          senderPrivacy,
-          senderAddress: solanaAddress, // For reclaim feature
-          token: selectedToken, // Token type (SOL, USDC, USDT)
-        }),
-      });
+          // SPL Token: Send SOL for gas + tokens
+          const tokenInfo = TOKEN_MINTS[selectedToken];
+          const mintPubkey = new PublicKey(tokenInfo.mint);
 
-      let result;
-      try {
-        result = await response.json();
-      } catch (jsonErr) {
-        console.error("[Create] Failed to parse API response:", jsonErr);
-        // Store recovery info since API crashed
-        const ephemeralSecretBase58 = bs58.encode(compositeSecret.ephemeralKeypair.secretKey);
-        setFailedDepositRecovery({
-          ephemeralSecretKeyBase58: ephemeralSecretBase58,
-          ephemeralAddress,
-          userWallet: solanaAddress,
-        });
-        
-        throw new Error("API error - your funds may be in the ephemeral wallet. Check recovery section below.");
-      }
+          fundingTx.add(
+            SystemProgram.transfer({
+              fromPubkey: senderPubkey,
+              toPubkey: ephemeralPubkey,
+              lamports: costBreakdown.senderPaysGasLamports,
+            })
+          );
 
-      if (!result.success || !result.note) {
-        // Store recovery info so user can reclaim SOL from ephemeral if they want
-        const ephemeralSecretBase58 = bs58.encode(compositeSecret.ephemeralKeypair.secretKey);
-        setFailedDepositRecovery({
-          ephemeralSecretKeyBase58: ephemeralSecretBase58,
-          ephemeralAddress,
-          userWallet: solanaAddress,
-        });
-        
-        // Check if API returned recovery info (funds may have been auto-swept)
-        if (result.recoverySuccess) {
-          throw new Error("Transaction failed but funds were automatically returned to your wallet.");
+          const senderAta = await getAssociatedTokenAddress(mintPubkey, senderPubkey);
+          const ephemeralAta = await getAssociatedTokenAddress(mintPubkey, ephemeralPubkey);
+          fundingTx.add(
+            createAssociatedTokenAccountInstruction(senderPubkey, ephemeralAta, ephemeralPubkey, mintPubkey)
+          );
+          fundingTx.add(
+            createTransferInstruction(
+              senderAta, ephemeralAta, senderPubkey,
+              BigInt(costBreakdown.senderPays), [], TOKEN_PROGRAM_ID
+            )
+          );
         }
-        
-        throw new Error(result.error || "Failed to create payment link");
+
+        setDepositProgress("Please sign the transaction in your wallet...");
+        const txHash = await sendTransaction(fundingTx, connection);
+        setDepositProgress("Waiting for transaction confirmation...");
+
+        const confirmation = await connection.confirmTransaction(txHash, "confirmed");
+        if (confirmation.value.err) {
+          throw new Error(`Transaction failed: ${JSON.stringify(confirmation.value.err)}`);
+        }
+
+        setFundingTxHash(txHash);
+
+        setDepositProgress("Generating claim link...");
+        const config = getUmbraConfig();
+        const tokenMint = TOKEN_MINTS[selectedToken].mint;
+        const note: UmbraNote = {
+          ephemeralSeed: ephemeral.seed,
+          amount: costBreakdown.baseRecipientAmount,
+          network: config.network,
+          token: selectedToken,
+          tokenMint,
+          createdAt: Date.now(),
+          ephemeralAddress: ephemeral.address,
+          senderPrivacy: "basic",
+          status: "funded",
+          fundsLocation: "ephemeral",
+          senderAddress: "",
+          secret: ephemeral.seed,
+        };
+
+        const url = createClaimUrl(note);
+        setUmbraNote(note);
+        setClaimUrl(url);
+
+        try {
+          await navigator.clipboard.writeText(url);
+          setCopied(true);
+          setTimeout(() => setCopied(false), 3000);
+        } catch { /* clipboard failed silently */ }
+
+        const savedLink: SavedLink = {
+          id: ephemeral.seed.substring(0, 22),
+          claimUrl: url,
+          amount: costBreakdown.baseRecipientAmount,
+          createdAt: Date.now(),
+          status: "active",
+          senderPrivacy: "basic",
+        };
+
+        await saveLink(savedLink, solanaAddress);
+        const updatedLinks = await loadLinks(solanaAddress);
+        setSavedLinks(updatedLinks);
+
+        setStep("complete");
       }
-      
-      // Generate claim URL
-      const url = createDoubleHopClaimUrl(result.note);
-      
-      setDoubleHopNote(result.note);
-      setClaimUrl(url);
-      setFundingTxHash(result.fundingTxHash || null);
-      setDepositTxHash(result.depositTxHash || null);
-      
-      // Auto-copy to clipboard
-      try {
-        await navigator.clipboard.writeText(url);
-        setCopied(true);
-        setTimeout(() => setCopied(false), 3000);
-      } catch {
-        // Clipboard copy failed silently
-      }
-      
-      // Save to encrypted local storage
-      const savedLink: SavedLink = {
-        id: compositeSecret.claimId,
-        claimUrl: url,
-        amount: costBreakdown.poolAmount,
-        createdAt: Date.now(),
-        status: "active",
-        senderPrivacy,
-      };
-      
-      await saveLink(savedLink, solanaAddress);
-      const updatedLinks = await loadLinks(solanaAddress);
-      setSavedLinks(updatedLinks);
-      
-      setStep("complete");
     } catch (err) {
       const message = err instanceof Error ? err.message : "Deposit failed";
       const isUserRejection =
         /rejected|denied|cancelled|canceled/i.test(message) ||
         (err && typeof err === "object" && "code" in err && (err as { code: number }).code === 4001);
       if (isUserRejection) {
-        // User clicked Reject in Phantom/wallet – not an error, just cancelled
         setError("Transaction cancelled");
       } else {
         console.error("[Create] Deposit error:", err);
         setError(message);
+        if (ephemeralSecretBase58 && ephemeralAddress && solanaAddress) {
+          const recovery: FailedDepositRecovery = {
+            ephemeralSecretKeyBase58: ephemeralSecretBase58,
+            ephemeralAddress,
+            userWallet: solanaAddress,
+          };
+          setFailedDepositRecovery(recovery);
+          saveRecovery(recovery);
+        }
       }
       setStep("amount");
     } finally {
@@ -856,13 +784,15 @@ export function CreateLinkForm() {
 
   const handleReset = () => {
     setStep("amount");
-    setDoubleHopNote(null);
+    setUmbraNote(null);
     setClaimUrl("");
     setFundingTxHash(null);
-    setDepositTxHash(null);
     setAmount("0.1");
     setDisplayAmount("0.1");
     setError(null);
+    if (failedDepositRecovery) {
+      clearRecovery(failedDepositRecovery.ephemeralAddress);
+    }
     setFailedDepositRecovery(null);
     setReclaimSuccess(null);
   };
@@ -881,62 +811,98 @@ export function CreateLinkForm() {
       let hasAnythingToReclaim = false;
       const reclaimedItems: string[] = [];
       
+      // Close wSOL ATA if it exists (unwraps back to SOL)
+      try {
+        const wsolMint = new PublicKey(WSOL_MINT);
+        const wsolAta = await getAssociatedTokenAddress(wsolMint, ephemeralKeypair.publicKey);
+        await getAccount(connection, wsolAta);
+        // wSOL ATA exists — close it to unwrap SOL
+        tx.add(createCloseAccountInstruction(wsolAta, ephemeralKeypair.publicKey, ephemeralKeypair.publicKey));
+        hasAnythingToReclaim = true;
+      } catch {
+        // No wSOL ATA, skip
+      }
+
       // Check and reclaim SPL tokens (USDC, USDT)
       for (const tokenSymbol of ["USDC", "USDT"] as SupportedToken[]) {
         const tokenInfo = TOKEN_MINTS[tokenSymbol];
         if (!tokenInfo.mint) continue;
-        
+
         try {
           const mintPubkey = new PublicKey(tokenInfo.mint);
           const ephemeralAta = await getAssociatedTokenAddress(mintPubkey, ephemeralKeypair.publicKey);
           const account = await getAccount(connection, ephemeralAta);
           const tokenBalance = account.amount;
-          
+
           if (tokenBalance > BigInt(0)) {
-            // Check if user has ATA, create if not
             const userAta = await getAssociatedTokenAddress(mintPubkey, userPubkey);
             try {
               await getAccount(connection, userAta);
             } catch {
-              // User doesn't have ATA, create it
               tx.add(
                 createAssociatedTokenAccountInstruction(
-                  ephemeralKeypair.publicKey, // payer
-                  userAta,
-                  userPubkey,
-                  mintPubkey
+                  ephemeralKeypair.publicKey, userAta, userPubkey, mintPubkey
                 )
               );
             }
-            
-            // Transfer tokens
+
             tx.add(
               createTransferInstruction(
-                ephemeralAta,
-                userAta,
-                ephemeralKeypair.publicKey,
-                tokenBalance,
-                [],
-                TOKEN_PROGRAM_ID
+                ephemeralAta, userAta, ephemeralKeypair.publicKey,
+                tokenBalance, [], TOKEN_PROGRAM_ID
               )
             );
-            
-            const displayAmount = Number(tokenBalance) / (10 ** tokenInfo.decimals);
-            reclaimedItems.push(`${displayAmount.toFixed(2)} ${tokenSymbol}`);
+
+            const displayAmt = Number(tokenBalance) / (10 ** tokenInfo.decimals);
+            reclaimedItems.push(`${displayAmt.toFixed(2)} ${tokenSymbol}`);
             hasAnythingToReclaim = true;
           }
         } catch {
           // No token account or error, skip
         }
       }
-      
-      // Check and reclaim SOL
+
+      // Check and reclaim SOL — drain ephemeral to exactly 0
+      // Count how many ATAs we're closing — each recovers ~0.00204 SOL rent
+      const ataCloseCount = tx.instructions.filter(ix =>
+        ix.programId.equals(TOKEN_PROGRAM_ID)
+      ).length;
       const solBalance = await connection.getBalance(ephemeralKeypair.publicKey);
-      const feeReserve = 10000; // leave for tx fees
-      const solToSend = Math.max(0, solBalance - feeReserve);
-      
-      if (solToSend > 0) {
+      // Total SOL available after ATA closes recover their rent
+      const totalSolAfterCloses = solBalance + (ataCloseCount * 2039280);
+
+      if (totalSolAfterCloses > 0) {
+        // Add placeholder SOL transfer to calculate exact fee
         tx.add(
+          SystemProgram.transfer({
+            fromPubkey: ephemeralKeypair.publicKey,
+            toPubkey: userPubkey,
+            lamports: totalSolAfterCloses, // placeholder
+          })
+        );
+        hasAnythingToReclaim = true;
+      }
+
+      if (!hasAnythingToReclaim) {
+        setError("No funds left in ephemeral wallet to reclaim.");
+        return;
+      }
+
+      const { blockhash } = await connection.getLatestBlockhash();
+      tx.recentBlockhash = blockhash;
+      tx.feePayer = ephemeralKeypair.publicKey;
+
+      // Get exact fee, rebuild with correct SOL drain amount
+      const fee = Number((await connection.getFeeForMessage(tx.compileMessage()))?.value ?? 5000);
+      const solToSend = Math.max(0, totalSolAfterCloses - fee);
+
+      // Rebuild final tx: all instructions except the placeholder SOL transfer
+      const finalTx = new Transaction();
+      for (let i = 0; i < tx.instructions.length - 1; i++) {
+        finalTx.add(tx.instructions[i]);
+      }
+      if (solToSend > 0) {
+        finalTx.add(
           SystemProgram.transfer({
             fromPubkey: ephemeralKeypair.publicKey,
             toPubkey: userPubkey,
@@ -944,21 +910,15 @@ export function CreateLinkForm() {
           })
         );
         reclaimedItems.push(`${(solToSend / 1e9).toFixed(4)} SOL`);
-        hasAnythingToReclaim = true;
       }
-      
-      if (!hasAnythingToReclaim) {
-        setError("No funds left in ephemeral wallet to reclaim.");
-        return;
-      }
-      
-      const { blockhash } = await connection.getLatestBlockhash();
-      tx.recentBlockhash = blockhash;
-      tx.feePayer = ephemeralKeypair.publicKey;
-      tx.sign(ephemeralKeypair);
-      const sig = await connection.sendRawTransaction(tx.serialize(), { preflightCommitment: "confirmed" });
+
+      finalTx.recentBlockhash = blockhash;
+      finalTx.feePayer = ephemeralKeypair.publicKey;
+      finalTx.sign(ephemeralKeypair);
+      const sig = await connection.sendRawTransaction(finalTx.serialize(), { preflightCommitment: "confirmed" });
       await connection.confirmTransaction(sig, "confirmed");
       setError(null);
+      clearRecovery(failedDepositRecovery.ephemeralAddress);
       setFailedDepositRecovery(null);
       setReclaimSuccess(`Reclaimed: ${reclaimedItems.join(", ")}`);
       setTimeout(() => setReclaimSuccess(null), 10000);
@@ -981,8 +941,7 @@ export function CreateLinkForm() {
       const connection = new Connection(rpcUrl, "confirmed");
       
       // Parse the claim URL to get the ephemeral keypair
-      // The URL contains a serialized DoubleHopNote
-      const note = extractDoubleHopNoteFromUrl(recallModalLink.claimUrl);
+      const note = extractNoteFromUrl(recallModalLink.claimUrl);
       if (!note) {
         throw new Error("Invalid link format - could not parse note");
       }
@@ -1014,56 +973,57 @@ export function CreateLinkForm() {
       const tx = new Transaction();
       let hasAnythingToRecall = false;
       const recalledItems: string[] = [];
-      
+
+      // Close wSOL ATA if it exists (unwraps back to SOL)
+      try {
+        const wsolMint = new PublicKey(WSOL_MINT);
+        const wsolAta = await getAssociatedTokenAddress(wsolMint, ephemeralKeypair.publicKey);
+        await getAccount(connection, wsolAta);
+        tx.add(createCloseAccountInstruction(wsolAta, ephemeralKeypair.publicKey, ephemeralKeypair.publicKey));
+        hasAnythingToRecall = true;
+      } catch {
+        // No wSOL ATA, skip
+      }
+
       // Check and recall SPL tokens (USDC, USDT)
       for (const tokenSymbol of ["USDC", "USDT"] as SupportedToken[]) {
         const tokenInfo = TOKEN_MINTS[tokenSymbol];
         if (!tokenInfo.mint) continue;
-        
+
         try {
           const mintPubkey = new PublicKey(tokenInfo.mint);
           const ephemeralAta = await getAssociatedTokenAddress(mintPubkey, ephemeralKeypair.publicKey);
           const account = await getAccount(connection, ephemeralAta);
           const tokenBalance = account.amount;
-          
+
           if (tokenBalance > BigInt(0)) {
-            // Check if destination has ATA, create if not
             const destAta = await getAssociatedTokenAddress(mintPubkey, destinationPubkey);
             try {
               await getAccount(connection, destAta);
             } catch {
-              // Destination doesn't have ATA, create it
               tx.add(
                 createAssociatedTokenAccountInstruction(
-                  ephemeralKeypair.publicKey, // payer
-                  destAta,
-                  destinationPubkey,
-                  mintPubkey
+                  ephemeralKeypair.publicKey, destAta, destinationPubkey, mintPubkey
                 )
               );
             }
-            
-            // Transfer tokens
+
             tx.add(
               createTransferInstruction(
-                ephemeralAta,
-                destAta,
-                ephemeralKeypair.publicKey,
-                tokenBalance,
-                [],
-                TOKEN_PROGRAM_ID
+                ephemeralAta, destAta, ephemeralKeypair.publicKey,
+                tokenBalance, [], TOKEN_PROGRAM_ID
               )
             );
-            
-            const displayAmount = Number(tokenBalance) / (10 ** tokenInfo.decimals);
-            recalledItems.push(`${displayAmount.toFixed(2)} ${tokenSymbol}`);
+
+            const displayAmt = Number(tokenBalance) / (10 ** tokenInfo.decimals);
+            recalledItems.push(`${displayAmt.toFixed(2)} ${tokenSymbol}`);
             hasAnythingToRecall = true;
           }
         } catch {
           // No token account or error, skip
         }
       }
-      
+
       // Check and recall SOL
       const solBalance = await connection.getBalance(ephemeralKeypair.publicKey);
       const feeReserve = 10000; // leave for tx fees
@@ -1110,16 +1070,7 @@ export function CreateLinkForm() {
     }
   };
 
-  if (!ready) {
-    return (
-      <Card className="w-full max-w-md mx-auto">
-        <CardContent className="py-12 text-center">
-          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-hop-500 mx-auto" />
-          <p className="mt-4 text-muted-foreground">Loading...</p>
-        </CardContent>
-      </Card>
-    );
-  }
+  // Wallet adapter is always ready (no async init like Privy)
 
   return (
     <Card className="w-full">
@@ -1147,23 +1098,23 @@ export function CreateLinkForm() {
               <div className="flex items-start gap-3">
                 <Image src="/bunnypriv.png" alt="Privacy" width={28} height={28} className="w-7 h-7 mt-0.5" />
                 <div>
-                  <p className="text-sm font-medium text-hop-700 dark:text-hop-300">Double Hop Privacy</p>
+                  <p className="text-sm font-medium text-hop-700 dark:text-hop-300">Payment Link</p>
                   <p className="text-xs text-muted-foreground mt-1">
-                    Your payment goes through an ephemeral wallet and Privacy Cash. 
-                    No one can link your wallet to the recipient.
+                    Send SOL or tokens via a secure link.
+                    Recipient chooses their privacy level when claiming.
                   </p>
                 </div>
               </div>
             </div>
 
-            {authenticated ? (
+            {connected ? (
               getSolanaAddress() ? (
                 <div className="space-y-3">
                   <div className="p-3 rounded-xl bg-card border-2 border-border">
                     <div className="flex items-center justify-between">
                       <div>
                         <p className="text-xs text-muted-foreground mb-1">
-                          {isEmbeddedWallet ? "Hoppy Wallet (Solana)" : "Connected Wallet (Solana)"}
+                          Connected Wallet (Solana)
                         </p>
                         <p className="font-mono text-sm font-medium">
                           {shortenAddress(getSolanaAddress()!, 6)}
@@ -1177,21 +1128,11 @@ export function CreateLinkForm() {
                       )}
                     </div>
                   </div>
-                  {isEmbeddedWallet && walletBalance !== null && walletBalance < 10_000_000 && (
+                  {walletBalance !== null && walletBalance < 10_000_000 && (
                     <div className="p-3 rounded-xl bg-amber-50 dark:bg-amber-900/20 border-2 border-amber-300 dark:border-amber-700">
-                      <p className="text-xs text-amber-700 dark:text-amber-400 font-medium mb-2">
-                        Your wallet needs funds to create payment links.
+                      <p className="text-xs text-amber-700 dark:text-amber-400 font-medium">
+                        Your wallet needs funds to create payment links. Send SOL to your address above.
                       </p>
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        onClick={handleFundWallet}
-                        className="w-full text-xs border-amber-400 text-amber-700 hover:bg-amber-100"
-                      >
-                        <Wallet className="w-3 h-3 mr-1.5" />
-                        Add Funds
-                      </Button>
                     </div>
                   )}
                   <Button onClick={handleContinue} className="w-full" size="lg">
@@ -1207,13 +1148,13 @@ export function CreateLinkForm() {
                       You're connected with an EVM wallet. Please logout and connect with <strong>Phantom</strong> or another Solana wallet.
                     </p>
                   </div>
-                  <Button onClick={logout} className="w-full" variant="outline">
+                  <Button onClick={disconnect} className="w-full" variant="outline">
                     Logout & Connect Solana Wallet
                   </Button>
                 </div>
               )
             ) : (
-              <Button onClick={login} className="w-full" size="lg">
+              <Button onClick={() => openWalletModal(true)} className="w-full" size="lg">
                 <Wallet className="w-4 h-4 mr-2" />
                 Connect Wallet
               </Button>
@@ -1449,84 +1390,95 @@ export function CreateLinkForm() {
                       <div className="flex justify-between">
                         <span className="text-muted-foreground">Amount</span>
                         <span>
-                          {selectedToken === "SOL" 
+                          {selectedToken === "SOL"
                             ? `${lamportsToSol(costBreakdown.baseRecipientAmount).toFixed(4)} SOL`
                             : `${(costBreakdown.baseRecipientAmount / 10 ** costBreakdown.decimals).toFixed(2)} ${selectedToken}`
                           }
                         </span>
                       </div>
-                      {selectedToken === "SOL" && senderPrivacy === "private" && (
+                      {costBreakdown.commission > 0 && (
                         <div className="flex justify-between">
-                          <span className="text-muted-foreground">Privacy fee (0.006 + 0.35%)</span>
+                          <span className="text-muted-foreground">Privacy fee (0.3%)</span>
                           <span className="text-honey-600 dark:text-honey-400">
-                            +{lamportsToSol(Math.max(0, costBreakdown.senderFee - 1_000_000)).toFixed(4)}
+                            {selectedToken === "SOL"
+                              ? `+${lamportsToSol(costBreakdown.commission).toFixed(4)} SOL`
+                              : `+${(costBreakdown.commission / 10 ** costBreakdown.decimals).toFixed(2)} ${selectedToken}`
+                            }
                           </span>
                         </div>
                       )}
-                      {selectedToken === "SOL" && (
-                        <div className="flex justify-between">
-                          <span className="text-muted-foreground">Tx buffer</span>
-                          <span className="text-muted-foreground">+0.001 SOL</span>
-                        </div>
-                      )}
-                      {selectedToken !== "SOL" && (
-                        <div className="flex justify-between">
-                          <span className="text-muted-foreground">Gas buffer</span>
-                          <span className="text-muted-foreground">+0.005 SOL</span>
-                        </div>
-                      )}
+                      <div className="flex justify-between">
+                        <span className="text-muted-foreground">Gas</span>
+                        <span className="text-muted-foreground">
+                          {selectedToken === "SOL"
+                            ? `+${lamportsToSol(costBreakdown.gasBuffer).toFixed(6)} SOL`
+                            : `+${lamportsToSol(costBreakdown.senderPaysGasLamports).toFixed(3)} SOL`
+                          }
+                        </span>
+                      </div>
                       <div className="border-t border-border pt-2 flex justify-between font-semibold">
                         <span>Total</span>
                         <span className="text-hop-600 dark:text-hop-400">
                           {selectedToken === "SOL"
                             ? `${lamportsToSol(costBreakdown.senderPays).toFixed(4)} SOL`
-                            : `${(costBreakdown.senderPays / 10 ** costBreakdown.decimals).toFixed(2)} ${selectedToken} + 0.005 SOL`
+                            : `${(costBreakdown.senderPays / 10 ** costBreakdown.decimals).toFixed(2)} ${selectedToken} + ${lamportsToSol(costBreakdown.senderPaysGasLamports).toFixed(3)} SOL`
                           }
                         </span>
                       </div>
                     </div>
-                    {selectedToken === "SOL" && senderPrivacy === "basic" && (
-                      <p className="text-xs text-muted-foreground">
-                        Quick claim is free. Private claim costs ~0.006 + 0.35%.
-                      </p>
-                    )}
                   </div>
                 )}
               </div>
 
-              {/* RIGHT: Privacy */}
+              {/* RIGHT: Privacy & Summary */}
               <div className="space-y-4">
-                {/* Privacy Toggle */}
+                {/* Sender Privacy Toggle */}
                 <div className="space-y-2">
-                  <label className="text-sm font-medium">Privacy</label>
-                  <div className="grid grid-cols-2 gap-2">
-                    <button
-                      type="button"
-                      onClick={() => setSenderPrivacy("basic")}
-                      className={`flex flex-col items-center gap-1 p-3 rounded-xl transition-all ${
-                        senderPrivacy === "basic"
-                          ? "bg-honey-100 dark:bg-honey-900/30 border-2 border-honey-500"
-                          : "bg-card border-2 border-border hover:border-honey-400"
-                      }`}
-                    >
-                      <Eye className={`w-5 h-5 ${senderPrivacy === "basic" ? "text-honey-600" : "text-muted-foreground"}`} />
-                      <span className={`text-sm font-medium ${senderPrivacy === "basic" ? "text-honey-700 dark:text-honey-300" : ""}`}>Basic</span>
-                      <span className="text-[10px] text-muted-foreground">Free</span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setSenderPrivacy("private")}
-                      className={`flex flex-col items-center gap-1 p-3 rounded-xl transition-all ${
-                        senderPrivacy === "private"
-                          ? "bg-hop-200 dark:bg-hop-900/30 border-2 border-hop-500"
-                          : "bg-card border-2 border-border hover:border-hop-400"
-                      }`}
-                    >
-                      <EyeOff className={`w-5 h-5 ${senderPrivacy === "private" ? "text-hop-600" : "text-muted-foreground"}`} />
-                      <span className={`text-sm font-medium ${senderPrivacy === "private" ? "text-hop-700 dark:text-hop-300" : ""}`}>Private</span>
-                      <span className="text-[10px] text-muted-foreground">0.006 + 0.35%</span>
-                    </button>
+                  <div className="flex items-center gap-2">
+                    <Lock className="w-4 h-4 text-hop-600 dark:text-hop-400" />
+                    <span className="text-sm font-medium text-hop-700 dark:text-hop-300">Send Mode</span>
                   </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    {(Object.keys(SENDER_PRIVACY) as SenderPrivacy[]).map((mode) => {
+                      const info = SENDER_PRIVACY[mode];
+                      const isSelected = senderPrivacy === mode;
+                      const isDisabled = mode === "private"; // Umbra indexer not yet live — can deposit but can't claim
+                      return (
+                        <button
+                          key={mode}
+                          type="button"
+                          onClick={() => !isDisabled && setSenderPrivacy(mode)}
+                          disabled={isDisabled}
+                          className={`p-3 rounded-xl border-2 transition-all text-left ${
+                            isDisabled
+                              ? "border-border bg-muted/50 opacity-50 cursor-not-allowed"
+                              : isSelected
+                                ? mode === "basic"
+                                  ? "border-yellow-500 bg-yellow-500/10 ring-2 ring-yellow-500/30"
+                                  : "border-hop-500 bg-hop-500/20 ring-2 ring-hop-500/50"
+                                : "border-border hover:border-muted-foreground/50 bg-background"
+                          }`}
+                        >
+                          <div className="flex items-center gap-1.5 mb-1">
+                            {mode === "basic" ? (
+                              <Zap className={`w-4 h-4 ${isSelected ? "text-yellow-600" : "text-yellow-500"}`} />
+                            ) : (
+                              <Lock className={`w-4 h-4 ${isDisabled ? "text-muted-foreground" : isSelected ? "text-hop-600" : "text-hop-500"}`} />
+                            )}
+                            <span className={`text-sm font-semibold ${isDisabled ? "text-muted-foreground" : isSelected && (mode as string) === "private" ? "text-hop-700 dark:text-hop-300" : ""}`}>
+                              {info.label}
+                              {isDisabled && <span className="ml-1 text-[10px] font-normal">(Coming Soon)</span>}
+                            </span>
+                          </div>
+                          <p className="text-[10px] text-muted-foreground leading-tight">{info.description}</p>
+                          <p className="text-[10px] text-muted-foreground mt-1 font-medium">{isDisabled ? "Pending SDK update" : info.feeDescription}</p>
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <p className="text-[10px] text-muted-foreground">
+                    Recipient chooses their own privacy level when claiming.
+                  </p>
                 </div>
 
                 {/* Recipient gets - show max (quick claim amount). Claimer sees reduced amount when they choose quick vs private on claim page. */}
@@ -1544,54 +1496,6 @@ export function CreateLinkForm() {
                   </div>
                 )}
 
-                {/* Relayer Warning for SPL + Private */}
-                {selectedToken !== "SOL" && senderPrivacy === "private" && relayerStatus && !relayerStatus.available && (
-                  <div className="p-3 rounded-lg bg-red-100 dark:bg-red-900/20 border-2 border-red-400 dark:border-red-700">
-                    <p className="text-sm text-red-700 dark:text-red-400 font-medium">
-                      {relayerStatus.message || "Private mode temporarily unavailable for stablecoins"}
-                    </p>
-                    <p className="text-xs text-red-600 dark:text-red-300 mt-1">
-                      Try Basic mode or use SOL instead.
-                    </p>
-                  </div>
-                )}
-                {selectedToken !== "SOL" && senderPrivacy === "private" && relayerStatus?.warning && relayerStatus.available && (
-                  <div className="p-2 rounded-lg bg-amber-100 dark:bg-amber-900/20 border border-amber-400 dark:border-amber-700">
-                    <p className="text-xs text-amber-700 dark:text-amber-400">
-                      ⚠️ Relayer balance running low. Service may become unavailable soon.
-                    </p>
-                  </div>
-                )}
-
-                {/* Embedded wallet balance + fund button */}
-                {isEmbeddedWallet && (
-                  <div className="p-3 rounded-xl bg-card border-2 border-border">
-                    <div className="flex items-center justify-between">
-                      <div>
-                        <p className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Wallet Balance</p>
-                        <p className="text-sm font-semibold font-mono">
-                          {isLoadingBalance ? "..." : walletBalance !== null ? `${lamportsToSol(walletBalance).toFixed(4)} SOL` : "---"}
-                        </p>
-                      </div>
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        onClick={handleFundWallet}
-                        className="text-xs h-8 px-3 border-hop-400 text-hop-700 hover:bg-hop-100"
-                      >
-                        <Wallet className="w-3 h-3 mr-1.5" />
-                        Add Funds
-                      </Button>
-                    </div>
-                    {walletBalance !== null && costBreakdown && walletBalance < costBreakdown.senderPays && (
-                      <p className="text-[11px] text-amber-600 dark:text-amber-400 mt-2 font-medium">
-                        You need ~{lamportsToSol(costBreakdown.senderPays).toFixed(4)} SOL. Add funds to continue.
-                      </p>
-                    )}
-                  </div>
-                )}
-
                 {/* Create Button - under Recipient gets */}
                 <Button
                   onClick={handleDeposit}
@@ -1599,10 +1503,9 @@ export function CreateLinkForm() {
                   className="w-full h-12 font-semibold text-sm"
                   size="lg"
                   disabled={
-                    !costBreakdown || 
+                    !costBreakdown ||
                     costBreakdown.senderPays <= 0 ||
-                    (selectedToken !== "SOL" && senderPrivacy === "private" && relayerStatus !== null && !relayerStatus.available) ||
-                    (isEmbeddedWallet && walletBalance !== null && costBreakdown && walletBalance < costBreakdown.senderPays)
+                    (walletBalance !== null && costBreakdown && walletBalance < costBreakdown.senderPays)
                   }
                 >
                   <Image src="/bunnypriv.png" alt="" width={28} height={28} className="w-7 h-7 mr-2" />
@@ -1618,18 +1521,6 @@ export function CreateLinkForm() {
             {error && (
               <div className="p-3 rounded-lg bg-red-100 dark:bg-red-900/20 border-2 border-red-400 dark:border-red-700">
                 <p className="text-sm text-red-700 dark:text-red-400 font-medium">{error}</p>
-                {isEmbeddedWallet && error.includes("nsufficient") && (
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    onClick={handleFundWallet}
-                    className="mt-2 text-xs border-red-400 text-red-700 hover:bg-red-50"
-                  >
-                    <Wallet className="w-3 h-3 mr-1.5" />
-                    Add Funds to Wallet
-                  </Button>
-                )}
               </div>
             )}
           </div>
@@ -1674,7 +1565,7 @@ export function CreateLinkForm() {
               <div className="flex items-start gap-2 justify-center">
                 <AlertTriangle className="w-4 h-4 text-amber-600 dark:text-amber-500 mt-0.5 flex-shrink-0" />
                 <p className="text-xs text-amber-800 dark:text-amber-200/80 font-medium">
-                  Do not close this page. This may take a minute.
+                  Do not close this page while the transaction is processing.
                 </p>
               </div>
             </div>
@@ -1682,7 +1573,7 @@ export function CreateLinkForm() {
         )}
 
         {/* Step 4: Complete */}
-        {step === "complete" && doubleHopNote && (
+        {step === "complete" && umbraNote && (
           <div className="space-y-4">
             {/* Success Banner */}
             <div className="p-4 rounded-xl bg-hop-200 dark:bg-hop-500/20 border-2 border-hop-500 text-center">
@@ -1719,26 +1610,26 @@ export function CreateLinkForm() {
 
             {/* Amount */}
             <div className="p-4 rounded-xl bg-hop-100 dark:bg-hop-500/10 border-2 border-hop-400 text-center">
-              <p className="text-sm text-muted-foreground">Recipient Will Receive (Quick Claim)</p>
+              <p className="text-sm text-muted-foreground">Recipient Will Receive</p>
               <p className="text-2xl font-bold text-hop-700 dark:text-hop-400">
                 {(() => {
-                  const isSOL = !doubleHopNote.token || doubleHopNote.token === "SOL";
+                  const isSOL = !umbraNote.token || umbraNote.token === "SOL";
                   if (isSOL) {
-                    return `~${lamportsToSol(doubleHopNote.amount).toFixed(4)} SOL`;
+                    return `~${lamportsToSol(umbraNote.amount).toFixed(4)} SOL`;
                   } else {
-                    const decimals = doubleHopNote.token === "USDC" || doubleHopNote.token === "USDT" ? 6 : 9;
-                    return `~${(doubleHopNote.amount / (10 ** decimals)).toFixed(2)} ${doubleHopNote.token}`;
+                    const decimals = umbraNote.token === "USDC" || umbraNote.token === "USDT" ? 6 : 9;
+                    return `~${(umbraNote.amount / (10 ** decimals)).toFixed(2)} ${umbraNote.token}`;
                   }
                 })()}
               </p>
               <p className="text-xs text-muted-foreground mt-1">
                 {(() => {
-                  const isSOL = !doubleHopNote.token || doubleHopNote.token === "SOL";
+                  const isSOL = !umbraNote.token || umbraNote.token === "SOL";
                   if (isSOL) {
-                    return `Claimable balance: ${lamportsToSol(doubleHopNote.amount).toFixed(4)} SOL`;
+                    return `Claimable balance: ${lamportsToSol(umbraNote.amount).toFixed(4)} SOL`;
                   } else {
-                    const decimals = doubleHopNote.token === "USDC" || doubleHopNote.token === "USDT" ? 6 : 9;
-                    return `Claimable balance: ${(doubleHopNote.amount / (10 ** decimals)).toFixed(2)} ${doubleHopNote.token}`;
+                    const decimals = umbraNote.token === "USDC" || umbraNote.token === "USDT" ? 6 : 9;
+                    return `Claimable balance: ${(umbraNote.amount / (10 ** decimals)).toFixed(2)} ${umbraNote.token}`;
                   }
                 })()}
               </p>
@@ -1811,7 +1702,7 @@ export function CreateLinkForm() {
               {fundingTxHash && (
                 <div className="p-3 rounded-xl bg-card border-2 border-border">
                   <div className="flex items-center justify-between">
-                    <span className="text-xs text-muted-foreground">TXN: Ephemeral Funding</span>
+                    <span className="text-xs text-muted-foreground">TXN: Funding</span>
                     <div className="flex items-center gap-2">
                       <a
                         href={`https://solscan.io/tx/${fundingTxHash}${process.env.NEXT_PUBLIC_SOLANA_NETWORK === "devnet" ? "?cluster=devnet" : ""}`}
@@ -1827,24 +1718,6 @@ export function CreateLinkForm() {
                 </div>
               )}
               
-              {depositTxHash && (
-                <div className="p-3 rounded-xl bg-card border-2 border-border">
-                  <div className="flex items-center justify-between">
-                    <span className="text-xs text-muted-foreground">TXN: Pool Deposit</span>
-                    <div className="flex items-center gap-2">
-                      <a
-                        href={`https://solscan.io/tx/${depositTxHash}${process.env.NEXT_PUBLIC_SOLANA_NETWORK === "devnet" ? "?cluster=devnet" : ""}`}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="flex items-center gap-1 text-xs font-mono text-hop-600 dark:text-hop-400 hover:text-hop-700 dark:hover:text-hop-300"
-                      >
-                        {shortenAddress(depositTxHash, 6)}
-                        <ExternalLink className="w-3 h-3" />
-                      </a>
-                    </div>
-                  </div>
-                </div>
-              )}
             </div>
 
             {/* Privacy Notice */}
@@ -1876,7 +1749,7 @@ export function CreateLinkForm() {
         )}
 
         {/* Saved Links History */}
-        {authenticated && savedLinks.length > 0 && step !== "depositing" && (
+        {connected && savedLinks.length > 0 && step !== "depositing" && (
           <div className="mt-6 pt-6 border-t-2 border-border">
             <div className="flex items-center gap-2">
               <button
@@ -2015,10 +1888,7 @@ export function CreateLinkForm() {
                     </div>
                     <div className="flex items-center justify-between text-xs text-muted-foreground">
                       <span>{new Date(link.createdAt).toLocaleDateString()}</span>
-                      <span className={link.senderPrivacy === "private" 
-                        ? "text-hop-600 dark:text-hop-400" 
-                        : "text-honey-600 dark:text-yellow-400"
-                      }>
+                      <span className="text-hop-600 dark:text-hop-400">
                         {link.senderPrivacy === "private" ? "Private Send" : "Basic Send"}
                       </span>
                     </div>

@@ -4,16 +4,16 @@
  * Replaces the PrivacyCash adapter with Umbra Privacy SDK integration.
  *
  * KEY DIFFERENCES FROM PRIVACYCASH:
- * - All sends use the mixer (always private, no "basic" sender mode)
  * - Uses wSOL instead of native SOL (auto-wrap/unwrap handled transparently)
  * - Users must register on Umbra before receiving (1-3 on-chain txs, idempotent)
  * - ZK proofs via WASM prover (1-5 seconds, no 19MB circuit download)
  * - UTXO lookup via indexer (instant, no brute-force scanning)
  *
- * PRIVACY MODEL:
- * - Create link: sender creates self-claimable UTXO via mixer (sender-recipient link broken)
- * - Claim quick: claim into public balance (recipient visible to link holder)
- * - Claim private: claim into encrypted balance (recipient hidden)
+ * PRIVACY MODEL (hybrid — sender & receiver choose independently):
+ * - Sender basic: direct transfer to ephemeral (visible on-chain, cheapest)
+ * - Sender private: sender→Umbra pool→ephemeral (sender hidden via ZK mixer, ~0.21%)
+ * - Claim quick: ephemeral→receiver (direct transfer, cheapest)
+ * - Claim private: ephemeral→Umbra pool→receiver (receiver hidden via ZK mixer, ~0.21%)
  *
  * URL FORMAT:
  * /claim#<base58-encoded JSON with ephemeral seed, amount, token info>
@@ -30,11 +30,20 @@ const LAMPORTS_PER_SOL = 1_000_000_000;
 /** wSOL mint address (Umbra uses wSOL, not native SOL) */
 export const WSOL_MINT = "So11111111111111111111111111111111111111112";
 
-/** Umbra fee: 0.3% commission on deposits */
-export const UMBRA_FEE_PERCENT = 0.003;
+/**
+ * Umbra v2 fee: 35 BPS with divisor 2^14 = 16384.
+ * Effective rate ≈ 0.2136%  (floor(amount × 35 / 16384))
+ */
+export const UMBRA_FEE_BPS = 35;
+export const UMBRA_BPS_DIVISOR = 16384;
+/** Legacy alias — now derived from BPS for backwards compat */
+export const UMBRA_FEE_PERCENT = UMBRA_FEE_BPS / UMBRA_BPS_DIVISOR; // ≈ 0.002136
 
-/** Estimated gas buffer for ephemeral operations (registration + UTXO creation + claim) */
-export const EPHEMERAL_GAS_BUFFER = 20_000_000; // 0.02 SOL
+/** Gas buffer for ephemeral Umbra ops (registration + proof account + protocol SOL fee + tx fees) */
+export const EPHEMERAL_GAS_BUFFER = 10_000_000; // 0.01 SOL
+
+/** Extra rent needed for creating wSOL ATA on the sender ephemeral */
+export const WSOL_ATA_RENT = 2_100_000; // ~0.0021 SOL (token account rent-exempt minimum)
 
 /** Minimum send amounts */
 export const MIN_SEND_SOL = 0.01; // 0.01 SOL
@@ -98,18 +107,47 @@ export function getTokenFromMint(mint: string): SupportedToken | null {
 }
 
 // ============================================================================
-// Claim Mode (replaces SenderPrivacy + RecipientPrivacy)
+// Privacy Types — Sender & Receiver choose independently
 // ============================================================================
 
-/**
- * All sends are private (mixer always breaks sender-receiver link).
- * Claim mode only affects recipient privacy.
- */
+/** Sender privacy: basic = direct transfer, private = ZK mixer */
+export type SenderPrivacy = "basic" | "private";
+
+/** Claim mode: quick = direct transfer, private = ZK mixer */
 export type ClaimMode = "quick" | "private";
 
-// Legacy type aliases for compatibility during migration
-export type SenderPrivacy = "basic" | "private"; // "basic" is deprecated, kept for compat
 export type RecipientPrivacy = ClaimMode;
+
+export interface SenderPrivacyInfo {
+  id: SenderPrivacy;
+  label: string;
+  name: string;
+  description: string;
+  icon: string;
+  senderHidden: boolean;
+  feeDescription: string;
+}
+
+export const SENDER_PRIVACY: Record<SenderPrivacy, SenderPrivacyInfo> = {
+  basic: {
+    id: "basic",
+    label: "Basic",
+    name: "Basic Send",
+    description: "Direct transfer. Cheaper, but your wallet is visible on-chain.",
+    icon: "zap",
+    senderHidden: false,
+    feeDescription: "~0.000005 SOL (tx fee only)",
+  },
+  private: {
+    id: "private",
+    label: "Private",
+    name: "Private Send",
+    description: "ZK mixer hides your wallet from on-chain observers.",
+    icon: "shield",
+    senderHidden: true,
+    feeDescription: "~0.21% + ~0.02 SOL gas",
+  },
+};
 
 export interface ClaimModeInfo {
   id: ClaimMode;
@@ -127,21 +165,21 @@ export const CLAIM_MODES: Record<ClaimMode, ClaimModeInfo> = {
     id: "quick",
     label: "Quick",
     name: "Quick Claim",
-    description: "Fast claim to your wallet. Link holder can see who claimed.",
+    description: "Direct transfer to your wallet. Fast and free.",
     icon: "zap",
     recipientHidden: false,
-    feeDescription: "0.3% commission",
+    feeDescription: "~0 fees",
     hops: 0,
   },
   private: {
     id: "private",
     label: "Private",
     name: "Private Claim",
-    description: "Claim into encrypted balance. Link holder cannot see who claimed.",
+    description: "ZK mixer hides your wallet from on-chain observers.",
     icon: "shield",
     recipientHidden: true,
-    feeDescription: "0.3% commission",
-    hops: 0,
+    feeDescription: "~0.21% + gas",
+    hops: 1,
   },
 };
 
@@ -169,13 +207,14 @@ export interface UmbraNote {
   /** Ephemeral public key (for verification) */
   ephemeralAddress: string;
 
-  // ---- Legacy fields (for migration compatibility, removed after Phase 2-3) ----
+  /** Sender privacy mode chosen at creation time */
+  senderPrivacy: SenderPrivacy;
+
+  // ---- Legacy fields (for migration compatibility) ----
   /** @deprecated Always "funded" in Umbra */
   status: string;
   /** @deprecated Not used in Umbra — always "ephemeral" */
   fundsLocation: "ephemeral" | "pool";
-  /** @deprecated Always "private" in Umbra */
-  senderPrivacy: string;
   /** @deprecated Not stored in Umbra notes */
   senderAddress: string;
   /** @deprecated Alias for ephemeralSeed */
@@ -201,11 +240,11 @@ export interface FeeEstimate {
 }
 
 /**
- * Calculate Umbra fees for a given amount.
- * Umbra charges 0.3% commission on deposits.
+ * Calculate Umbra v2 fees for a given amount.
+ * Fee = floor(amount × 35 / 16384) ≈ 0.2136%
  */
 export function calculateUmbraFees(amount: number, token: SupportedToken = "SOL"): FeeEstimate {
-  const commission = Math.ceil(amount * UMBRA_FEE_PERCENT);
+  const commission = Math.floor(amount * UMBRA_FEE_BPS / UMBRA_BPS_DIVISOR);
   const gasCost = token === "SOL" ? EPHEMERAL_GAS_BUFFER : SPL_SOL_BUFFER;
   const totalFee = commission + gasCost;
   const recipientReceives = Math.max(0, amount - commission);
@@ -221,9 +260,8 @@ export function calculateDepositForRecipientAmount(
   recipientAmount: number,
   _token: SupportedToken = "SOL"
 ): number {
-  // recipientReceives = depositAmount - (depositAmount * 0.003)
-  // depositAmount = recipientReceives / (1 - 0.003)
-  return Math.ceil(recipientAmount / (1 - UMBRA_FEE_PERCENT));
+  // fee = floor(deposit × 35 / 16384), so deposit = ceil(recipientAmount × 16384 / (16384 - 35))
+  return Math.ceil(recipientAmount * UMBRA_BPS_DIVISOR / (UMBRA_BPS_DIVISOR - UMBRA_FEE_BPS));
 }
 
 /**
@@ -277,8 +315,19 @@ export function calculateSPLFees(amount: number, _decimals: number = 6): FeeEsti
 
 export function calculateSenderCost(
   recipientAmountLamports: number,
-  _senderPrivacy: string = "private"
+  senderPrivacy: SenderPrivacy = "private"
 ) {
+  if (senderPrivacy === "basic") {
+    // Basic: just a SystemProgram.transfer — only tx fee
+    const txFee = 5000; // ~5000 lamports
+    return {
+      recipientAmount: recipientAmountLamports,
+      senderPays: recipientAmountLamports + txFee,
+      senderFee: txFee,
+    };
+  }
+
+  // Private: 0.3% commission + gas buffer for ephemeral registration/claim
   const result = calculateFullDepositInfo(recipientAmountLamports, "SOL");
   return {
     recipientAmount: recipientAmountLamports,
@@ -444,6 +493,8 @@ interface SerializedNote {
   c: number;
   /** Ephemeral address (for verification) */
   e: string;
+  /** Sender privacy: "b" = basic, "p" = private */
+  sp?: string;
   /** Version marker */
   v: 2;
 }
@@ -460,6 +511,7 @@ export function serializeUmbraNote(note: UmbraNote): string {
     tm: note.tokenMint,
     c: note.createdAt,
     e: note.ephemeralAddress,
+    sp: note.senderPrivacy === "basic" ? "b" : "p",
     v: 2, // Version 2 = Umbra format
   };
   const json = JSON.stringify(data);
@@ -484,11 +536,12 @@ export function deserializeUmbraNote(encoded: string): UmbraNote | null {
         tokenMint: data.tm,
         createdAt: data.c,
         ephemeralAddress: data.e,
+        senderPrivacy: data.sp === "b" ? "basic" as const : "private" as const,
         // Legacy compat fields
         secret: data.s,
         status: "funded",
-        fundsLocation: "ephemeral",
-        senderPrivacy: "private",
+        // Private sends deposit into Umbra pool; basic sends stay on the ephemeral
+        fundsLocation: data.sp === "p" ? "pool" : "ephemeral",
         senderAddress: "",
       };
     }
@@ -504,11 +557,11 @@ export function deserializeUmbraNote(encoded: string): UmbraNote | null {
         tokenMint: data.tm || WSOL_MINT,
         createdAt: Date.now(),
         ephemeralAddress: data.e || "",
+        senderPrivacy: (data.sp === "p" ? "private" : "basic") as SenderPrivacy,
         // Legacy fields
         secret: data.s,
         status: data.st || "funded",
         fundsLocation: data.fl || "ephemeral",
-        senderPrivacy: data.sp || "basic",
         senderAddress: data.sa || "",
       };
     }
@@ -578,12 +631,17 @@ export function getUmbraConfig(): UmbraConfig {
                    process.env.NEXT_PUBLIC_SOLANA_NETWORK === "mainnet")
     ? "mainnet" : "devnet";
 
+  const rpcUrl = process.env.NEXT_PUBLIC_SOLANA_RPC_URL || "https://api.devnet.solana.com";
+  // Derive WebSocket URL from RPC URL if not explicitly set
+  const wsUrl = process.env.NEXT_PUBLIC_SOLANA_WS_URL ||
+    rpcUrl.replace("https://", "wss://").replace("http://", "ws://");
+
   return {
     network,
-    rpcUrl: process.env.NEXT_PUBLIC_SOLANA_RPC_URL || "https://api.devnet.solana.com",
-    wsUrl: process.env.NEXT_PUBLIC_SOLANA_WS_URL || "wss://api.devnet.solana.com",
-    indexerUrl: process.env.NEXT_PUBLIC_UMBRA_INDEXER_URL || "https://acqzie0a1h.execute-api.eu-central-1.amazonaws.com",
-    relayerUrl: process.env.NEXT_PUBLIC_UMBRA_RELAYER_URL || "https://6yn4ndrv2i.execute-api.eu-central-1.amazonaws.com",
+    rpcUrl,
+    wsUrl,
+    indexerUrl: process.env.NEXT_PUBLIC_UMBRA_INDEXER_URL || "https://indexer.api.umbraprivacy.com",
+    relayerUrl: process.env.NEXT_PUBLIC_UMBRA_RELAYER_URL || "https://relayer.api.umbraprivacy.com",
   };
 }
 
@@ -595,19 +653,91 @@ export async function createUmbraClientFromKeypair(
   keypair: InstanceType<typeof import("@solana/web3.js").Keypair>,
   configOverride?: Partial<UmbraConfig>
 ) {
-  const { getUmbraClientFromSigner, createSignerFromPrivateKeyBytes } = await import("@umbra-privacy/sdk");
+  const { getUmbraClient, createSignerFromPrivateKeyBytes, getPollingTransactionForwarder, getPollingComputationMonitor } = await import("@umbra-privacy/sdk");
   const config = { ...getUmbraConfig(), ...configOverride };
 
   // createSignerFromPrivateKeyBytes accepts 64-byte keypair (secretKey) or 32-byte seed
   // @solana/web3.js Keypair.secretKey is 64 bytes (private + public key)
   const signer = await createSignerFromPrivateKeyBytes(new Uint8Array(keypair.secretKey));
 
-  const client = await getUmbraClientFromSigner({
+  // Use polling-based forwarding and monitoring instead of WebSocket —
+  // more reliable in browsers and avoids premature callback simulation failures
+  const transactionForwarder = getPollingTransactionForwarder({ rpcUrl: config.rpcUrl });
+  const computationMonitor = getPollingComputationMonitor({ rpcUrl: config.rpcUrl });
+
+  const client = await getUmbraClient({
     signer,
     network: config.network as any,
     rpcUrl: config.rpcUrl,
     rpcSubscriptionsUrl: config.wsUrl,
     indexerApiEndpoint: config.indexerUrl,
+  }, {
+    transactionForwarder,
+    computationMonitor,
+  });
+
+  return client;
+}
+
+/**
+ * Create an Umbra client from wallet-standard Wallet + WalletAccount (browser wallets).
+ * Used for web sender private mode where the connected wallet signs Umbra operations.
+ *
+ * @param wallet - Wallet from @wallet-standard/base (the connected wallet adapter)
+ * @param walletAccount - WalletAccount from @wallet-standard/base (the active account)
+ */
+export async function createUmbraClientFromWallet(
+  wallet: any, // Wallet from @wallet-standard/base
+  walletAccount: any, // WalletAccount from @wallet-standard/base
+  configOverride?: Partial<UmbraConfig>
+) {
+  const { getUmbraClient, createSignerFromWalletAccount, getPollingTransactionForwarder, getPollingComputationMonitor } = await import("@umbra-privacy/sdk");
+  const config = { ...getUmbraConfig(), ...configOverride };
+
+  const signer = createSignerFromWalletAccount(wallet, walletAccount);
+
+  const transactionForwarder = getPollingTransactionForwarder({ rpcUrl: config.rpcUrl });
+  const computationMonitor = getPollingComputationMonitor({ rpcUrl: config.rpcUrl });
+
+  const client = await getUmbraClient({
+    signer,
+    network: config.network as any,
+    rpcUrl: config.rpcUrl,
+    rpcSubscriptionsUrl: config.wsUrl,
+    indexerApiEndpoint: config.indexerUrl,
+  }, {
+    transactionForwarder,
+    computationMonitor,
+  });
+
+  return client;
+}
+
+/**
+ * Create an Umbra client from a raw private key (32 or 64 bytes).
+ * Used for embedded wallets that can export their private key.
+ */
+export async function createUmbraClientFromPrivateKey(
+  privateKeyBytes: Uint8Array,
+  configOverride?: Partial<UmbraConfig>
+) {
+  const { getUmbraClient, createSignerFromPrivateKeyBytes, getPollingTransactionForwarder, getPollingComputationMonitor } = await import("@umbra-privacy/sdk");
+  const config = { ...getUmbraConfig(), ...configOverride };
+
+  const signer = await createSignerFromPrivateKeyBytes(privateKeyBytes);
+
+  const transactionForwarder = getPollingTransactionForwarder({ rpcUrl: config.rpcUrl });
+  const computationMonitor = getPollingComputationMonitor({ rpcUrl: config.rpcUrl });
+
+  const client = await getUmbraClient({
+    signer,
+    network: config.network as any,
+    rpcUrl: config.rpcUrl,
+    rpcSubscriptionsUrl: config.wsUrl,
+    indexerApiEndpoint: config.indexerUrl,
+  }, {
+    transactionForwarder,
+    computationMonitor,
   });
 
   return client;
@@ -619,25 +749,71 @@ export async function createUmbraClientFromKeypair(
  */
 export async function ensureRegistered(
   client: any,
-  options?: { confidential?: boolean; anonymous?: boolean }
+  options?: { confidential?: boolean; anonymous?: boolean; zkAssetProvider?: any }
 ): Promise<string[]> {
   const { getUserRegistrationFunction } = await import("@umbra-privacy/sdk");
-  const register = getUserRegistrationFunction({ client });
+  const anonymous = options?.anonymous ?? true;
 
-  try {
-    const sigs = await register({
-      confidential: options?.confidential ?? true,
-      anonymous: options?.anonymous ?? true,
-    });
-    return sigs.map((s: any) => String(s));
-  } catch (error: any) {
-    // If already registered, the SDK should handle this gracefully
-    // But catch just in case
-    if (error.message?.includes("already") || error.message?.includes("exists")) {
-      return [];
-    }
-    throw error;
+  // Anonymous registration requires a ZK prover
+  let deps: any = {};
+  if (anonymous) {
+    const { getUserRegistrationProver } = await import("@umbra-privacy/web-zk-prover");
+    deps.zkProver = getUserRegistrationProver(
+      options?.zkAssetProvider ? { assetProvider: options.zkAssetProvider } : undefined
+    );
   }
+
+  const MAX_RETRIES = 3;
+  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+    // Re-create the registration function each attempt so it fetches a fresh blockhash
+    const register = getUserRegistrationFunction({ client }, deps);
+
+    try {
+      const sigs = await register({
+        confidential: options?.confidential ?? true,
+        anonymous,
+      });
+      return sigs.map((s: any) => String(s));
+    } catch (error: any) {
+      // Collect all error messages from the cause chain
+      const allMessages: string[] = [];
+      let e = error;
+      while (e) {
+        if (e.message) allMessages.push(e.message);
+        e = e.cause;
+      }
+      const fullError = allMessages.join(" | ");
+
+      // Already registered / callback already processed — not an error
+      if (
+        fullError.includes("already") ||
+        fullError.includes("exists") ||
+        fullError.includes("Already registered") ||
+        fullError.includes("AlreadyCallbacked") ||
+        fullError.includes("already called") ||
+        fullError.includes("custom program error: #1") // account already initialized
+      ) {
+        console.log("[Umbra] Already registered (or partially), skipping");
+        return [];
+      }
+
+      // Blockhash expired — retry with a fresh one
+      const isBlockhashExpired =
+        fullError.includes("block height") ||
+        fullError.includes("blockhash") ||
+        fullError.includes("progressed past");
+
+      if (isBlockhashExpired && attempt < MAX_RETRIES) {
+        console.warn(`[Umbra] Registration blockhash expired, retrying (${attempt}/${MAX_RETRIES})...`);
+        await new Promise(r => setTimeout(r, 1000));
+        continue;
+      }
+
+      console.error("[Umbra] Registration failed:", error.message, error.cause || "");
+      throw error;
+    }
+  }
+  return []; // unreachable but satisfies TS
 }
 
 /**
@@ -649,43 +825,18 @@ export async function getRelayer(configOverride?: Partial<UmbraConfig>) {
 
   return getUmbraRelayer({
     apiEndpoint: config.relayerUrl,
-  });
+  } as any);
 }
 
 // ============================================================================
 // Legacy exports for gradual migration
 // ============================================================================
 
-// These maintain the same export shape as privacy-cash-adapter.ts
-// so that files importing from index.ts don't break during migration
-
 export type PrivacyLevel = "quick" | "private";
 export const PRIVACY_LEVELS = CLAIM_MODES;
-
-export const SENDER_PRIVACY: Record<SenderPrivacy, { id: SenderPrivacy; name: string; label: string; description: string; senderHidden: boolean; estimatedCost: string }> = {
-  basic: {
-    id: "basic",
-    name: "Basic",
-    label: "Basic",
-    description: "All sends are private in Umbra (basic is deprecated).",
-    senderHidden: false,
-    estimatedCost: "0.3% commission",
-  },
-  private: {
-    id: "private",
-    name: "Private",
-    label: "Private",
-    description: "Sender hidden via ZK mixer.",
-    senderHidden: true,
-    estimatedCost: "0.3% commission",
-  },
-};
-
 export const RECIPIENT_PRIVACY = CLAIM_MODES;
-
-export type SenderPrivacyInfo = typeof SENDER_PRIVACY.private;
 export type RecipientPrivacyInfo = ClaimModeInfo;
 
-export function calculateTotalDeposit(amount: number): number {
-  return calculateFullDepositInfo(amount, "SOL").totalSenderPays;
+export function calculateTotalDeposit(amount: number, senderPrivacy: SenderPrivacy = "private"): number {
+  return calculateSenderCost(amount, senderPrivacy).senderPays;
 }

@@ -32,7 +32,6 @@ import {
   helpMessage,
   sendConfirmMessage,
   sendSuccessMessage,
-  sendFlowPrivacyMessage,
   sendFlowRecipientMessage,
   sendFlowAmountMessage,
   sendFlowConfirmMessage,
@@ -54,7 +53,6 @@ import {
 } from "./messages";
 import {
   mainMenuKeyboard,
-  sendPrivacyKeyboard,
   confirmSendKeyboard,
   confirmTransferKeyboard,
   settingsKeyboard,
@@ -64,6 +62,7 @@ import {
   receivedPaymentKeyboard,
   historyWithRecallKeyboard,
   walletListKeyboard,
+  sendPrivacyKeyboard,
   CB,
   RCV_QUICK_PREFIX,
   RCV_PRIV_PREFIX,
@@ -89,11 +88,28 @@ import {
   sendAndConfirmTransaction,
 } from "@solana/web3.js";
 import {
-  generateCompositeSecret,
-  createDoubleHopClaimUrl,
-  extractDoubleHopNoteFromUrl,
+  generateEphemeralKey,
+  createClaimUrl,
+  extractNoteFromUrl,
   decodeCompositeSecret,
-} from "@/lib/privacy/privacy-cash-adapter";
+  createUmbraClientFromKeypair,
+  ensureRegistered,
+  getRelayer,
+  getUmbraConfig,
+  calculateSenderCost,
+  WSOL_MINT,
+  UMBRA_FEE_PERCENT,
+  EPHEMERAL_GAS_BUFFER,
+  type UmbraNote,
+  type SenderPrivacy,
+} from "@/lib/privacy";
+import {
+  getAssociatedTokenAddress,
+  createAssociatedTokenAccountInstruction,
+  createCloseAccountInstruction,
+  createSyncNativeInstruction,
+  getAccount,
+} from "@solana/spl-token";
 
 const RPC_URL =
   process.env.NEXT_PUBLIC_SOLANA_RPC_URL || "https://api.devnet.solana.com";
@@ -105,49 +121,35 @@ const APP_URL =
 
 console.log("[TG Bot] APP_URL resolved to:", APP_URL);
 
-// Fee constants (lamports)
-const FEE_QUICK = 1_000_000;     // 0.001 SOL — tx fee + ephemeral rent
-const FEE_PRIVATE = 15_000_000;  // 0.015 SOL — pool entry (0.006) + exit (0.003) + 0.35% + ZK proof + rent
-const MIN_SEND_QUICK = 0.001;    // 0.001 SOL minimum for quick sends
-const MIN_SEND_PRIVATE = 0.015;  // 0.015 SOL minimum for private sends
+// Fee constants — Umbra v2 model: 35 BPS (~0.21%) commission + gas buffer for registration/proofs
+const MIN_SEND = 0.005;  // 0.005 SOL minimum
 
-// Buffer added to ephemeral funding (matches BUFFER in executeSend)
-const BUFFER_QUICK = 1_000_000;  // 0.001 SOL
-const BUFFER_PRIVATE = 6_000_000; // 0.006 SOL
-
-// Claim overhead — what gets deducted when recipient claims
-const QUICK_CLAIM_OVERHEAD = 5_000;        // just tx fee
-const PRIVATE_CLAIM_OVERHEAD = 6_000_000;  // deposit overhead + rent + relayer + 0.35%
-
-/** Compute receive estimates for a given send amount + privacy mode */
-function getReceiveEstimates(amountSol: number, privacy: string) {
+/** Compute receive estimates for a given send amount */
+function getReceiveEstimates(amountSol: number, privacy: SenderPrivacy = "basic") {
   const amountLamports = solToLamports(amountSol);
-  const buffer = privacy === "private" ? BUFFER_PRIVATE : BUFFER_QUICK;
-  const funded = amountLamports + buffer;
+  const cost = calculateSenderCost(amountLamports, privacy);
+  // Quick claim: recipient gets ~full amount (tiny tx fee)
+  const quickNet = Math.max(0, amountLamports - 5000);
+  // Private claim: recipient pays ~0.21% mixer commission (35 BPS) + gas reserve
+  const privateClaimAmount = Math.floor(amountLamports / (1 + UMBRA_FEE_PERCENT));
   return {
-    quickEstimate: lamportsToSol(Math.max(0, funded - QUICK_CLAIM_OVERHEAD)),
-    privateEstimate: lamportsToSol(Math.max(0, funded - PRIVATE_CLAIM_OVERHEAD)),
-    fundedLamports: funded,
-    totalDebit: lamportsToSol(amountLamports + (privacy === "private" ? FEE_PRIVATE : FEE_QUICK)),
+    quickEstimate: lamportsToSol(quickNet),
+    privateEstimate: lamportsToSol(privateClaimAmount),
+    fundedLamports: cost.senderPays,
+    totalDebit: lamportsToSol(cost.senderPays),
   };
 }
 
 /** Returns an error string if amount is below the minimum, or null if OK */
-function getMinAmountError(amount: number, privacy: string): string | null {
-  const isPrivate = privacy === "private";
-  const minAmount = isPrivate ? MIN_SEND_PRIVATE : MIN_SEND_QUICK;
-
-  if (amount < minAmount) {
-    const feeBreakdown = isPrivate
-      ? `~0.006 SOL ephemeral buffer\n` +
-        `~0.003 SOL pool deposit overhead\n` +
-        `~0.35% withdraw fee\n` +
-        `+ rent &amp; relayer fees`  // &amp; is intentional — this is raw HTML
-      : `~0.001 SOL (tx fee + rent)`;
+function getMinAmountError(amount: number, privacy: SenderPrivacy = "basic"): string | null {
+  if (amount < MIN_SEND) {
+    const feeInfo = privacy === "basic"
+      ? `~0.000005 SOL (tx fee only)`
+      : `~0.3% commission + ~0.02 SOL gas`;
     return (
       `Amount too low.\n\n` +
-      `Minimum for ${isPrivate ? "🔒 private" : "⚡ quick"} sends: <b>${minAmount} SOL</b>\n\n` +
-      `<b>Fee breakdown:</b>\n${feeBreakdown}`
+      `Minimum send: <b>${MIN_SEND} SOL</b>\n\n` +
+      `<b>Fee:</b> ${feeInfo}`
     );
   }
   return null;
@@ -235,47 +237,146 @@ async function editToHomeScreen(ctx: Context) {
 /** Claim a payment on behalf of a user (used by receive buttons) */
 async function claimPaymentForUser(
   paymentId: number,
-  recipientWalletAddress: string,
-  recipientPrivacy: string
+  recipientTgUserId: number,
+  recipientPrivacy: string = "quick"
 ): Promise<{ success: boolean; amountReceived?: number; error?: string }> {
   const payment = await getPaymentById(paymentId);
   if (!payment) return { success: false, error: "Payment not found" };
   if (payment.status === "claimed")
     return { success: false, error: "Already claimed" };
 
-  const note = extractDoubleHopNoteFromUrl(payment.claim_url);
+  const recipientWallet = await getWallet(recipientTgUserId);
+  if (!recipientWallet) return { success: false, error: "No wallet found" };
+  const recipientWalletAddress = recipientWallet.wallet_address;
+
+  const note = extractNoteFromUrl(payment.claim_url);
   if (!note) return { success: false, error: "Invalid claim link" };
 
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 180_000); // 3 min timeout
-
-  let result: { success: boolean; error?: string; amountReceived?: number };
   try {
-    const response = await fetch(`${APP_URL}/api/privacy-cash/claim`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        note,
-        recipientAddress: recipientWalletAddress,
-        recipientPrivacy,
-      }),
-      signal: controller.signal,
-    });
-    result = await response.json();
-  } catch (fetchErr: unknown) {
-    clearTimeout(timeout);
-    const msg = fetchErr instanceof Error && fetchErr.name === "AbortError"
-      ? "Claim timed out — please try again"
-      : "Network error during claim";
+    const compositeSecret = decodeCompositeSecret(note.secret);
+    if (!compositeSecret) return { success: false, error: "Invalid claim secret" };
+    const ephemeralKeypair = compositeSecret.ephemeralKeypair;
+    const ephemeralPubkey = ephemeralKeypair.publicKey;
+
+    const connection = new Connection(RPC_URL, "confirmed");
+
+    // Close wSOL ATA if exists (backward compat with old links that wrapped wSOL)
+    const wsolMint = new PublicKey(WSOL_MINT);
+    const wsolAta = await getAssociatedTokenAddress(wsolMint, ephemeralPubkey);
+    try {
+      await getAccount(connection, wsolAta);
+      const closeTx = new Transaction().add(
+        createCloseAccountInstruction(wsolAta, ephemeralPubkey, ephemeralPubkey)
+      );
+      await sendAndConfirmTransaction(connection, closeTx, [ephemeralKeypair], { commitment: "confirmed" });
+    } catch {
+      // No wSOL ATA
+    }
+
+    if (recipientPrivacy === "quick") {
+      // ---- BASIC CLAIM: Direct transfer ephemeral → recipient, no Umbra ----
+      const balance = await connection.getBalance(ephemeralPubkey);
+      const TX_FEE = 5000;
+      const transferAmount = Math.max(0, balance - TX_FEE);
+      if (transferAmount > 0) {
+        const tx = new Transaction().add(
+          SystemProgram.transfer({
+            fromPubkey: ephemeralPubkey,
+            toPubkey: new PublicKey(recipientWalletAddress),
+            lamports: transferAmount,
+          })
+        );
+        await sendAndConfirmTransaction(connection, tx, [ephemeralKeypair], { commitment: "confirmed" });
+      }
+      await updatePaymentStatus(paymentId, "claimed");
+      return { success: true, amountReceived: transferAmount || note.amount };
+    } else {
+      // ---- PRIVATE CLAIM: Ephemeral → Umbra pool → Receiver (receiver-claimable UTXO) ----
+      const ephBalance = await connection.getBalance(ephemeralPubkey);
+      const gasReserve = EPHEMERAL_GAS_BUFFER;
+      const available = Math.max(0, ephBalance - gasReserve);
+      if (available <= 0) throw new Error("Insufficient ephemeral balance for private claim");
+
+      // 1. Wrap SOL → wSOL on ephemeral
+      const ephWsolAta = await getAssociatedTokenAddress(wsolMint, ephemeralPubkey);
+      const wrapTx = new Transaction();
+      wrapTx.add(createAssociatedTokenAccountInstruction(ephemeralPubkey, ephWsolAta, ephemeralPubkey, wsolMint));
+      wrapTx.add(SystemProgram.transfer({ fromPubkey: ephemeralPubkey, toPubkey: ephWsolAta, lamports: available }));
+      wrapTx.add(createSyncNativeInstruction(ephWsolAta));
+      await sendAndConfirmTransaction(connection, wrapTx, [ephemeralKeypair], { commitment: "confirmed" });
+
+      // 2. Register ephemeral on Umbra
+      const ephUmbraClient = await createUmbraClientFromKeypair(ephemeralKeypair);
+      await ensureRegistered(ephUmbraClient);
+
+      // 3. Register receiver on Umbra
+      const recipientSecretKey = decryptSecretKey(recipientWallet.encrypted_secret_key, recipientTgUserId);
+      const recipientKeypair = keypairFromBase58(recipientSecretKey);
+      const receiverUmbraClient = await createUmbraClientFromKeypair(recipientKeypair);
+      await ensureRegistered(receiverUmbraClient);
+
+      // 4. Ephemeral creates receiver-claimable UTXO for receiver
+      const utxoAmount = Math.floor(available / (1 + UMBRA_FEE_PERCENT));
+      const { getPublicBalanceToReceiverClaimableUtxoCreatorFunction } = await import("@umbra-privacy/sdk");
+      const { getCreateReceiverClaimableUtxoFromPublicBalanceProver } = await import("@umbra-privacy/web-zk-prover");
+      const createProver = getCreateReceiverClaimableUtxoFromPublicBalanceProver();
+      const createUtxo = getPublicBalanceToReceiverClaimableUtxoCreatorFunction(
+        { client: ephUmbraClient },
+        { zkProver: createProver }
+      );
+      await createUtxo({
+        amount: BigInt(utxoAmount) as any,
+        destinationAddress: recipientWalletAddress as any,
+        mint: WSOL_MINT as any,
+      });
+
+      // 5. Receiver claims from pool → encrypted balance
+      const { getReceiverClaimableUtxoToEncryptedBalanceClaimerFunction, getClaimableUtxoScannerFunction, getBatchMerkleProofFetcher: getMerkleProofFetcher } =
+        await import("@umbra-privacy/sdk");
+      const { getClaimReceiverClaimableUtxoIntoEncryptedBalanceProver } =
+        await import("@umbra-privacy/web-zk-prover");
+      const relayer = await getRelayer();
+      const umbraConfig = getUmbraConfig();
+      const fetchBatchMerkleProof = getMerkleProofFetcher({ apiEndpoint: umbraConfig.indexerUrl });
+      const claimProver = getClaimReceiverClaimableUtxoIntoEncryptedBalanceProver();
+      const claimFn = getReceiverClaimableUtxoToEncryptedBalanceClaimerFunction(
+        { client: receiverUmbraClient },
+        { zkProver: claimProver, relayer, fetchBatchMerkleProof }
+      );
+      const fetchClaimable = getClaimableUtxoScannerFunction({ client: receiverUmbraClient });
+      const fetchResult = await fetchClaimable(BigInt(0) as any, BigInt(0) as any, BigInt(10000) as any);
+      const utxos = fetchResult.received || [];
+      if (utxos.length === 0) throw new Error("No claimable UTXOs found for receiver");
+      await claimFn(utxos);
+
+      // 6. Receiver withdraws encrypted → public (wSOL)
+      const { getEncryptedBalanceToPublicBalanceDirectWithdrawerFunction } = await import("@umbra-privacy/sdk");
+      const withdrawFn = getEncryptedBalanceToPublicBalanceDirectWithdrawerFunction({ client: receiverUmbraClient });
+      await withdrawFn(
+        recipientWalletAddress as any,
+        WSOL_MINT as any,
+        BigInt(utxoAmount) as any,
+      );
+
+      // 7. Unwrap wSOL → SOL on receiver (close ATA)
+      const receiverWsolAta = await getAssociatedTokenAddress(wsolMint, recipientKeypair.publicKey);
+      try {
+        await getAccount(connection, receiverWsolAta);
+        const closeReceiverTx = new Transaction().add(
+          createCloseAccountInstruction(receiverWsolAta, recipientKeypair.publicKey, recipientKeypair.publicKey)
+        );
+        await sendAndConfirmTransaction(connection, closeReceiverTx, [recipientKeypair], { commitment: "confirmed" });
+      } catch {
+        // No wSOL ATA on receiver
+      }
+
+      await updatePaymentStatus(paymentId, "claimed");
+      return { success: true, amountReceived: utxoAmount };
+    }
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : "Claim failed";
     return { success: false, error: msg };
   }
-  clearTimeout(timeout);
-  if (!result.success) {
-    return { success: false, error: result.error || "Claim failed" };
-  }
-
-  await updatePaymentStatus(paymentId, "claimed");
-  return { success: true, amountReceived: result.amountReceived || note.amount };
 }
 
 // ================================================================
@@ -369,11 +470,22 @@ function registerHandlers(bot: Bot) {
     const text = ctx.message?.text || "";
     const rest = text.replace(/^\/send\s*/i, "").trim();
     if (!rest) {
+      // Show privacy selection
       clearSendFlow(ctx.from!.id);
-      const replyMsg = await ctx.reply(sendFlowPrivacyMessage(), {
-        parse_mode: "HTML",
-        reply_markup: sendPrivacyKeyboard(),
-      });
+      const replyMsg = await ctx.reply(
+        [
+          `💸 <b>New Payment</b>`,
+          ``,
+          `Choose send mode:`,
+          ``,
+          `🔒 <b>Private</b> — ZK mixer hides your wallet (0.3% fee)`,
+          `⚡ <b>Basic</b> — Direct transfer, cheaper but visible on-chain`,
+        ].join("\n"),
+        {
+          parse_mode: "HTML",
+          reply_markup: sendPrivacyKeyboard(),
+        }
+      );
       setSendFlow(ctx.from!.id, {
         step: "awaiting_privacy",
         startedAt: Date.now(),
@@ -438,10 +550,21 @@ function registerHandlers(bot: Bot) {
   bot.callbackQuery(CB.SEND, async (ctx) => {
     await ctx.answerCallbackQuery();
     clearSendFlow(ctx.from.id);
-    const replyMsg = await ctx.reply(sendFlowPrivacyMessage(), {
-      parse_mode: "HTML",
-      reply_markup: sendPrivacyKeyboard(),
-    });
+    // Show privacy selection
+    const replyMsg = await ctx.reply(
+      [
+        `💸 <b>New Payment</b>`,
+        ``,
+        `Choose send mode:`,
+        ``,
+        `🔒 <b>Private</b> — ZK mixer hides your wallet (0.3% fee)`,
+        `⚡ <b>Basic</b> — Direct transfer, cheaper but visible on-chain`,
+      ].join("\n"),
+      {
+        parse_mode: "HTML",
+        reply_markup: sendPrivacyKeyboard(),
+      }
+    );
     setSendFlow(ctx.from.id, {
       step: "awaiting_privacy",
       startedAt: Date.now(),
@@ -602,7 +725,7 @@ function registerHandlers(bot: Bot) {
   bot.callbackQuery(CB.SEND_PRIV, async (ctx) => {
     await ctx.answerCallbackQuery();
     const flow = getSendFlow(ctx.from.id);
-    if (!flow || flow.step !== "awaiting_privacy") return;
+    if (!flow) return;
     setSendFlow(ctx.from.id, {
       ...flow,
       step: "awaiting_recipient",
@@ -617,7 +740,7 @@ function registerHandlers(bot: Bot) {
   bot.callbackQuery(CB.SEND_QUICK, async (ctx) => {
     await ctx.answerCallbackQuery();
     const flow = getSendFlow(ctx.from.id);
-    if (!flow || flow.step !== "awaiting_privacy") return;
+    if (!flow) return;
     setSendFlow(ctx.from.id, {
       ...flow,
       step: "awaiting_recipient",
@@ -661,7 +784,7 @@ function registerHandlers(bot: Bot) {
     const privacyWord = flow.privacy === "private" ? "privately" : "";
     const sendText =
       `send ${flow.amount} SOL to ${flow.recipient} ${privacyWord}`.trim();
-    await executeSend(ctx, sendText, anonymous);
+    await executeSend(ctx, sendText, anonymous, (flow.privacy as SenderPrivacy) || "basic");
   });
 
   bot.callbackQuery(CB.SEND_ANON, async (ctx) => {
@@ -750,7 +873,7 @@ function registerHandlers(bot: Bot) {
     const chatId = ctx.chat!.id;
 
     // Fire and forget — don't block webhook response
-    claimPaymentForUser(paymentId, wallet.wallet_address, "quick")
+    claimPaymentForUser(paymentId, ctx.from.id, "quick")
       .then(async (result) => {
         if (result.success) {
           await ctx.api.editMessageText(
@@ -802,7 +925,7 @@ function registerHandlers(bot: Bot) {
     const chatId = ctx.chat!.id;
 
     // Fire and forget — don't block webhook response
-    claimPaymentForUser(paymentId, wallet.wallet_address, "private")
+    claimPaymentForUser(paymentId, ctx.from.id, "private")
       .then(async (result) => {
         if (result.success) {
           await ctx.api.editMessageText(
@@ -1161,7 +1284,7 @@ async function handleSend(ctx: Context, text: string) {
     return;
   }
 
-  const privacy = parsed.privacy || "basic";
+  const privacy: SenderPrivacy = /\bprivate(ly)?\b/i.test(text) ? "private" : "basic";
   const minErr = getMinAmountError(parsed.amount, privacy);
   if (minErr) {
     await ctx.reply(errorMessageHtml(minErr), { parse_mode: "HTML" });
@@ -1176,7 +1299,7 @@ async function handleSend(ctx: Context, text: string) {
   });
   setSendFlow(tgUserId, {
     step: "awaiting_confirm",
-    privacy: parsed.privacy || "basic",
+    privacy,
     recipient: parsed.recipient,
     amount: parsed.amount,
     anonymous: defaultAnonymous,
@@ -1196,7 +1319,7 @@ async function handleSend(ctx: Context, text: string) {
   );
 }
 
-async function executeSend(ctx: Context, text: string, anonymous = true) {
+async function executeSend(ctx: Context, text: string, anonymous = true, privacy: SenderPrivacy = "basic") {
   const tgUserId = ctx.from!.id;
   const parsed = await parseIntent(text);
 
@@ -1216,7 +1339,6 @@ async function executeSend(ctx: Context, text: string, anonymous = true) {
   }
 
   const token = parsed.token || "SOL";
-  const privacy = parsed.privacy || "basic";
 
   if (token !== "SOL") {
     await ctx.reply(
@@ -1228,22 +1350,19 @@ async function executeSend(ctx: Context, text: string, anonymous = true) {
 
   const amountLamports = solToLamports(parsed.amount);
   const balance = await getBalance(wallet.wallet_address);
+  const cost = calculateSenderCost(amountLamports, privacy);
 
-  const fee = privacy === "private" ? FEE_PRIVATE : FEE_QUICK;
-  const totalNeeded = amountLamports + fee;
-
-  if (balance < totalNeeded) {
-    const feeSol = lamportsToSol(fee).toFixed(3);
-    const feeDetail = privacy === "private"
-      ? `~${feeSol} SOL (pool entry/exit + 0.35% + ZK proof + rent)`
-      : `~${feeSol} SOL (tx fee + rent)`;
+  if (balance < cost.senderPays) {
+    const feeDesc = privacy === "basic"
+      ? `Tx fee: <b>~0.000005 SOL</b>`
+      : `Commission: <b>~${lamportsToSol(cost.senderFee).toFixed(4)} SOL (0.3% + gas)</b>`;
     await ctx.reply(
       errorMessageHtml(
         `Insufficient balance.\n\n` +
         `You have: <b>${lamportsToSol(balance).toFixed(4)} SOL</b>\n` +
         `Amount: <b>${parsed.amount} SOL</b>\n` +
-        `Network fee: <b>${feeDetail}</b>\n` +
-        `Total needed: <b>~${lamportsToSol(totalNeeded).toFixed(4)} SOL</b>`
+        `${feeDesc}\n` +
+        `Total needed: <b>~${lamportsToSol(cost.senderPays).toFixed(4)} SOL</b>`
       ),
       { parse_mode: "HTML" }
     );
@@ -1256,90 +1375,123 @@ async function executeSend(ctx: Context, text: string, anonymous = true) {
   );
 
   try {
-    const compositeSecret = generateCompositeSecret();
-    const ephemeralAddress =
-      compositeSecret.ephemeralKeypair.publicKey.toBase58();
+    const ephemeral = generateEphemeralKey();
+    const ephemeralAddress = ephemeral.address;
 
     const connection = new Connection(RPC_URL, "confirmed");
     const secretKey = decryptSecretKey(wallet.encrypted_secret_key, tgUserId);
     const userKeypair = keypairFromBase58(secretKey);
 
-    const BUFFER = privacy === "private" ? 6_000_000 : 1_000_000;
-    const fundingAmount = amountLamports + BUFFER;
+    if (privacy === "basic") {
+      // ---- BASIC SEND: Direct transfer sender → ephemeral, no Umbra ----
+      const fundingAmount = amountLamports + 5000; // amount + tx fee reserve for claim
+      const fundingTx = new Transaction().add(
+        SystemProgram.transfer({
+          fromPubkey: userKeypair.publicKey,
+          toPubkey: new PublicKey(ephemeralAddress),
+          lamports: fundingAmount,
+        })
+      );
+      await sendAndConfirmTransaction(connection, fundingTx, [userKeypair], { commitment: "confirmed" });
+    } else {
+      // ---- PRIVATE SEND: Sender → Umbra pool → Ephemeral (receiver-claimable UTXO) ----
 
-    const fundingTx = new Transaction().add(
-      SystemProgram.transfer({
-        fromPubkey: userKeypair.publicKey,
-        toPubkey: new PublicKey(ephemeralAddress),
-        lamports: fundingAmount,
-      })
-    );
+      // 1. Send gas to ephemeral for Umbra registration
+      const gasTx = new Transaction().add(
+        SystemProgram.transfer({
+          fromPubkey: userKeypair.publicKey,
+          toPubkey: new PublicKey(ephemeralAddress),
+          lamports: EPHEMERAL_GAS_BUFFER,
+        })
+      );
+      await sendAndConfirmTransaction(connection, gasTx, [userKeypair], { commitment: "confirmed" });
 
-    const fundingTxHash = await sendAndConfirmTransaction(
-      connection,
-      fundingTx,
-      [userKeypair],
-      { commitment: "confirmed" }
-    );
+      // 2. Wrap SOL → wSOL on sender's wallet
+      const commission = Math.ceil(amountLamports * UMBRA_FEE_PERCENT);
+      const wsolMint = new PublicKey(WSOL_MINT);
+      const senderWsolAta = await getAssociatedTokenAddress(wsolMint, userKeypair.publicKey);
+      const wrapAmount = amountLamports + commission;
 
-    // Wait for tx to propagate before calling create-link
-    await sleep(2000);
+      const wrapTx = new Transaction();
+      wrapTx.add(createAssociatedTokenAccountInstruction(userKeypair.publicKey, senderWsolAta, userKeypair.publicKey, wsolMint));
+      wrapTx.add(SystemProgram.transfer({ fromPubkey: userKeypair.publicKey, toPubkey: senderWsolAta, lamports: wrapAmount }));
+      wrapTx.add(createSyncNativeInstruction(senderWsolAta));
+      await sendAndConfirmTransaction(connection, wrapTx, [userKeypair], { commitment: "confirmed" });
 
-    const baseUrl = APP_URL;
+      // 3. Register sender on Umbra
+      const senderUmbraClient = await createUmbraClientFromKeypair(userKeypair);
+      await ensureRegistered(senderUmbraClient);
 
-    // Retry create-link once on failure (with 55s timeout per attempt)
-    let result: any = null;
-    for (let attempt = 0; attempt < 2; attempt++) {
-      try {
-        const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), 55_000);
-        const response = await fetch(
-          `${baseUrl}/api/privacy-cash/create-link`,
-          {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              amount: amountLamports,
-              compositeSecret: compositeSecret.full,
-              ephemeralAddress,
-              fundingTxHash,
-              senderPrivacy: privacy,
-              senderAddress: wallet.wallet_address,
-            }),
-            signal: controller.signal,
-          }
-        );
-        clearTimeout(timeout);
-        result = await response.json();
-        if (result.success && result.note) break;
-      } catch (fetchErr) {
-        console.error(`[TG Bot] create-link attempt ${attempt} failed:`, fetchErr);
-        result = { success: false, error: "Network error calling create-link" };
-      }
-      if (attempt === 0) await sleep(3000); // Wait before retry
+      // 4. Register ephemeral on Umbra
+      const ephUmbraClient = await createUmbraClientFromKeypair(ephemeral.keypair);
+      await ensureRegistered(ephUmbraClient);
+
+      // 5. Sender creates receiver-claimable UTXO for ephemeral
+      const { getPublicBalanceToReceiverClaimableUtxoCreatorFunction } = await import("@umbra-privacy/sdk");
+      const { getCreateReceiverClaimableUtxoFromPublicBalanceProver } = await import("@umbra-privacy/web-zk-prover");
+      const createProver = getCreateReceiverClaimableUtxoFromPublicBalanceProver();
+      const createUtxo = getPublicBalanceToReceiverClaimableUtxoCreatorFunction(
+        { client: senderUmbraClient },
+        { zkProver: createProver }
+      );
+      await createUtxo({
+        amount: BigInt(amountLamports) as any,
+        destinationAddress: ephemeralAddress as any,
+        mint: WSOL_MINT as any,
+      });
+
+      // 6. Ephemeral claims from pool → encrypted balance
+      const { getReceiverClaimableUtxoToEncryptedBalanceClaimerFunction, getClaimableUtxoScannerFunction, getBatchMerkleProofFetcher: getMerkleProofFetcher } =
+        await import("@umbra-privacy/sdk");
+      const { getClaimReceiverClaimableUtxoIntoEncryptedBalanceProver } =
+        await import("@umbra-privacy/web-zk-prover");
+      const relayer = await getRelayer();
+      const umbraConfig = getUmbraConfig();
+      const fetchBatchMerkleProof = getMerkleProofFetcher({ apiEndpoint: umbraConfig.indexerUrl });
+      const claimProver = getClaimReceiverClaimableUtxoIntoEncryptedBalanceProver();
+      const claimFn = getReceiverClaimableUtxoToEncryptedBalanceClaimerFunction(
+        { client: ephUmbraClient },
+        { zkProver: claimProver, relayer, fetchBatchMerkleProof }
+      );
+      const fetchClaimable = getClaimableUtxoScannerFunction({ client: ephUmbraClient });
+      const fetchResult = await fetchClaimable(BigInt(0) as any, BigInt(0) as any, BigInt(10000) as any);
+      const utxos = fetchResult.received || [];
+      if (utxos.length === 0) throw new Error("No claimable UTXOs found for ephemeral");
+      await claimFn(utxos);
+
+      // 7. Ephemeral withdraws encrypted → public balance (wSOL)
+      const { getEncryptedBalanceToPublicBalanceDirectWithdrawerFunction } = await import("@umbra-privacy/sdk");
+      const withdrawFn = getEncryptedBalanceToPublicBalanceDirectWithdrawerFunction({ client: ephUmbraClient });
+      await withdrawFn(
+        ephemeralAddress as any,
+        WSOL_MINT as any,
+        BigInt(amountLamports) as any,
+      );
+
+      // 8. Unwrap wSOL → SOL (close ATA)
+      const ephWsolAta = await getAssociatedTokenAddress(wsolMint, ephemeral.keypair.publicKey);
+      const closeTx = new Transaction().add(
+        createCloseAccountInstruction(ephWsolAta, ephemeral.keypair.publicKey, ephemeral.keypair.publicKey)
+      );
+      await sendAndConfirmTransaction(connection, closeTx, [ephemeral.keypair], { commitment: "confirmed" });
     }
 
-    // Handle create-link failure — always show ephemeral address for manual recovery
-    if (!result || !result.success || !result.note) {
-      if (result?.recoverySuccess && result?.sweptAmount) {
-        const sweptSol = lamportsToSol(result.sweptAmount).toFixed(4);
-        await ctx.reply(recoverySuccessMessage(sweptSol), {
-          parse_mode: "HTML",
-        });
-      } else {
-        // Always show ephemeral address so user can recover via /recall
-        await ctx.reply(
-          recoveryFailedMessage(
-            ephemeralAddress,
-            result?.error || "Payment link creation failed or timed out"
-          ),
-          { parse_mode: "HTML" }
-        );
-      }
-      return;
-    }
-
-    const claimUrl = createDoubleHopClaimUrl(result.note, baseUrl);
+    // Create claim URL with ephemeral seed
+    const note: UmbraNote = {
+      ephemeralSeed: ephemeral.seed,
+      amount: amountLamports,
+      network: "mainnet",
+      token: "SOL",
+      tokenMint: WSOL_MINT,
+      createdAt: Date.now(),
+      ephemeralAddress: ephemeralAddress,
+      status: "funded",
+      fundsLocation: "ephemeral",
+      senderPrivacy: privacy,
+      senderAddress: "",
+      secret: ephemeral.seed,
+    };
+    const claimUrl = createClaimUrl(note, APP_URL);
 
     let delivered = false;
     const recipientId = parsed.recipient;
@@ -1349,7 +1501,6 @@ async function executeSend(ctx: Context, text: string, anonymous = true) {
       const recipientUsername = recipientId.slice(1);
       const recipientWallet = await getWalletByUsername(recipientUsername);
 
-      // Always save the payment record first
       const paymentId = await savePayment({
         senderTgId: tgUserId,
         recipientIdentifier: recipientUsername.toLowerCase(),
@@ -1363,13 +1514,12 @@ async function executeSend(ctx: Context, text: string, anonymous = true) {
       if (recipientWallet) {
         try {
           const senderName = anonymous ? undefined : ctx.from?.username;
-          // Send image + message with claim buttons
           await ctx.api.sendPhoto(
             recipientWallet.tg_user_id,
             `${APP_URL}/hoppy-tgcarrot.png`,
             {
               caption: receivedPaymentMessage(
-                fundingAmount,
+                amountLamports,
                 senderName,
                 recipientWallet.wallet_address
               ),
@@ -1497,7 +1647,7 @@ async function handleClaim(
     return;
   }
 
-  const note = extractDoubleHopNoteFromUrl(urlOrText);
+  const note = extractNoteFromUrl(urlOrText);
   if (!note) {
     await ctx.reply(
       errorMessage(
@@ -1513,26 +1663,132 @@ async function handleClaim(
   });
 
   try {
-    const baseUrl = APP_URL;
-    const response = await fetch(`${baseUrl}/api/privacy-cash/claim`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        note,
-        recipientAddress: wallet.wallet_address,
-        recipientPrivacy,
-      }),
-    });
+    const compositeSecret = decodeCompositeSecret(note.secret);
+    if (!compositeSecret) throw new Error("Invalid claim secret");
+    const ephemeralKeypair = compositeSecret.ephemeralKeypair;
+    const ephemeralPubkey = ephemeralKeypair.publicKey;
 
-    const result = await response.json();
-    if (!result.success) {
-      throw new Error(result.error || "Claim failed");
+    const connection = new Connection(RPC_URL, "confirmed");
+
+    // Close wSOL ATA if exists (backward compat with old links)
+    const wsolMint = new PublicKey(WSOL_MINT);
+    const wsolAta = await getAssociatedTokenAddress(wsolMint, ephemeralPubkey);
+    try {
+      await getAccount(connection, wsolAta);
+      const closeTx = new Transaction().add(
+        createCloseAccountInstruction(wsolAta, ephemeralPubkey, ephemeralPubkey)
+      );
+      await sendAndConfirmTransaction(connection, closeTx, [ephemeralKeypair], { commitment: "confirmed" });
+    } catch {
+      // No wSOL ATA
     }
 
-    await ctx.reply(
-      claimSuccessMessage(result.amountReceived || note.amount),
-      { parse_mode: "HTML" }
-    );
+    if (recipientPrivacy === "quick") {
+      // ---- BASIC CLAIM: Direct transfer ephemeral → recipient, no Umbra ----
+      const balance = await connection.getBalance(ephemeralPubkey);
+      const TX_FEE = 5000;
+      const transferAmount = Math.max(0, balance - TX_FEE);
+
+      if (transferAmount > 0) {
+        const tx = new Transaction().add(
+          SystemProgram.transfer({
+            fromPubkey: ephemeralPubkey,
+            toPubkey: new PublicKey(wallet.wallet_address),
+            lamports: transferAmount,
+          })
+        );
+        await sendAndConfirmTransaction(connection, tx, [ephemeralKeypair], { commitment: "confirmed" });
+      }
+
+      await ctx.reply(
+        claimSuccessMessage(transferAmount || note.amount),
+        { parse_mode: "HTML" }
+      );
+    } else {
+      // ---- PRIVATE CLAIM: Ephemeral → Umbra pool → Receiver ----
+      const ephBalance = await connection.getBalance(ephemeralPubkey);
+      const gasReserve = EPHEMERAL_GAS_BUFFER;
+      const available = Math.max(0, ephBalance - gasReserve);
+      if (available <= 0) throw new Error("Insufficient balance for private claim");
+
+      // 1. Wrap SOL → wSOL on ephemeral
+      const ephWsolAta = await getAssociatedTokenAddress(wsolMint, ephemeralPubkey);
+      const wrapTx = new Transaction();
+      wrapTx.add(createAssociatedTokenAccountInstruction(ephemeralPubkey, ephWsolAta, ephemeralPubkey, wsolMint));
+      wrapTx.add(SystemProgram.transfer({ fromPubkey: ephemeralPubkey, toPubkey: ephWsolAta, lamports: available }));
+      wrapTx.add(createSyncNativeInstruction(ephWsolAta));
+      await sendAndConfirmTransaction(connection, wrapTx, [ephemeralKeypair], { commitment: "confirmed" });
+
+      // 2. Register ephemeral on Umbra
+      const ephUmbraClient = await createUmbraClientFromKeypair(ephemeralKeypair);
+      await ensureRegistered(ephUmbraClient);
+
+      // 3. Register receiver on Umbra
+      const recipientSecretKey = decryptSecretKey(wallet.encrypted_secret_key, tgUserId);
+      const recipientKeypair = keypairFromBase58(recipientSecretKey);
+      const receiverUmbraClient = await createUmbraClientFromKeypair(recipientKeypair);
+      await ensureRegistered(receiverUmbraClient);
+
+      // 4. Ephemeral creates receiver-claimable UTXO for receiver
+      const utxoAmount = Math.floor(available / (1 + UMBRA_FEE_PERCENT));
+      const { getPublicBalanceToReceiverClaimableUtxoCreatorFunction } = await import("@umbra-privacy/sdk");
+      const { getCreateReceiverClaimableUtxoFromPublicBalanceProver } = await import("@umbra-privacy/web-zk-prover");
+      const createProver = getCreateReceiverClaimableUtxoFromPublicBalanceProver();
+      const createUtxo = getPublicBalanceToReceiverClaimableUtxoCreatorFunction(
+        { client: ephUmbraClient },
+        { zkProver: createProver }
+      );
+      await createUtxo({
+        amount: BigInt(utxoAmount) as any,
+        destinationAddress: wallet.wallet_address as any,
+        mint: WSOL_MINT as any,
+      });
+
+      // 5. Receiver claims from pool → encrypted balance
+      const { getReceiverClaimableUtxoToEncryptedBalanceClaimerFunction, getClaimableUtxoScannerFunction, getBatchMerkleProofFetcher: getMerkleProofFetcher } =
+        await import("@umbra-privacy/sdk");
+      const { getClaimReceiverClaimableUtxoIntoEncryptedBalanceProver } =
+        await import("@umbra-privacy/web-zk-prover");
+      const relayer = await getRelayer();
+      const umbraConfig = getUmbraConfig();
+      const fetchBatchMerkleProof = getMerkleProofFetcher({ apiEndpoint: umbraConfig.indexerUrl });
+      const claimProver = getClaimReceiverClaimableUtxoIntoEncryptedBalanceProver();
+      const claimFn = getReceiverClaimableUtxoToEncryptedBalanceClaimerFunction(
+        { client: receiverUmbraClient },
+        { zkProver: claimProver, relayer, fetchBatchMerkleProof }
+      );
+      const fetchClaimable = getClaimableUtxoScannerFunction({ client: receiverUmbraClient });
+      const fetchResult = await fetchClaimable(BigInt(0) as any, BigInt(0) as any, BigInt(10000) as any);
+      const utxos = fetchResult.received || [];
+      if (utxos.length === 0) throw new Error("No claimable UTXOs found for receiver");
+      await claimFn(utxos);
+
+      // 6. Receiver withdraws encrypted → public (wSOL)
+      const { getEncryptedBalanceToPublicBalanceDirectWithdrawerFunction } = await import("@umbra-privacy/sdk");
+      const withdrawFn = getEncryptedBalanceToPublicBalanceDirectWithdrawerFunction({ client: receiverUmbraClient });
+      await withdrawFn(
+        wallet.wallet_address as any,
+        WSOL_MINT as any,
+        BigInt(utxoAmount) as any,
+      );
+
+      // 7. Unwrap wSOL → SOL on receiver (close ATA)
+      const receiverWsolAta = await getAssociatedTokenAddress(wsolMint, recipientKeypair.publicKey);
+      try {
+        await getAccount(connection, receiverWsolAta);
+        const closeReceiverTx = new Transaction().add(
+          createCloseAccountInstruction(receiverWsolAta, recipientKeypair.publicKey, recipientKeypair.publicKey)
+        );
+        await sendAndConfirmTransaction(connection, closeReceiverTx, [recipientKeypair], { commitment: "confirmed" });
+      } catch {
+        // No wSOL ATA on receiver
+      }
+
+      await ctx.reply(
+        claimSuccessMessage(utxoAmount),
+        { parse_mode: "HTML" }
+      );
+    }
   } catch (err) {
     const msg = err instanceof Error ? err.message : "Claim failed";
     await ctx.reply(errorMessage(msg), { parse_mode: "HTML" });
@@ -1573,7 +1829,7 @@ async function handleRecall(ctx: Context, paymentId: number) {
   });
 
   try {
-    const note = extractDoubleHopNoteFromUrl(payment.claim_url);
+    const note = extractNoteFromUrl(payment.claim_url);
     if (!note) throw new Error("Could not parse payment link");
 
     const compositeSecret = decodeCompositeSecret(note.secret);
@@ -1581,7 +1837,22 @@ async function handleRecall(ctx: Context, paymentId: number) {
 
     const connection = new Connection(RPC_URL, "confirmed");
     const ephemeralKeypair = compositeSecret.ephemeralKeypair;
-    const balance = await connection.getBalance(ephemeralKeypair.publicKey);
+    const ephemeralPubkey = ephemeralKeypair.publicKey;
+
+    // Close wSOL ATA if it exists (unwrap to native SOL)
+    const wsolMint = new PublicKey(WSOL_MINT);
+    const wsolAta = await getAssociatedTokenAddress(wsolMint, ephemeralPubkey);
+    try {
+      await getAccount(connection, wsolAta);
+      const closeTx = new Transaction().add(
+        createCloseAccountInstruction(wsolAta, ephemeralPubkey, ephemeralPubkey)
+      );
+      await sendAndConfirmTransaction(connection, closeTx, [ephemeralKeypair], { commitment: "confirmed" });
+    } catch {
+      // No wSOL ATA
+    }
+
+    const balance = await connection.getBalance(ephemeralPubkey);
     const TX_FEE = 5000;
     const transferAmount = Math.max(0, balance - TX_FEE);
 
@@ -1598,7 +1869,7 @@ async function handleRecall(ctx: Context, paymentId: number) {
 
     const tx = new Transaction().add(
       SystemProgram.transfer({
-        fromPubkey: ephemeralKeypair.publicKey,
+        fromPubkey: ephemeralPubkey,
         toPubkey: new PublicKey(wallet.wallet_address),
         lamports: transferAmount,
       })
@@ -1640,7 +1911,7 @@ async function deliverPendingPayments(ctx: Context, username: string) {
 
       await ctx.replyWithPhoto(`${APP_URL}/hoppy-tgcarrot.png`, {
         caption: receivedPaymentDeliveredMessage(
-          payment.amount + (payment.sender_privacy === "private" ? BUFFER_PRIVATE : BUFFER_QUICK),
+          payment.amount,
           walletAddr,
           senderUsername,
         ),

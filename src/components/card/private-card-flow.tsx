@@ -1,8 +1,8 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import { usePrivy } from "@privy-io/react-auth";
-import { useWallets, useSignAndSendTransaction } from "@privy-io/react-auth/solana";
+import { useWallet, useConnection } from "@solana/wallet-adapter-react";
+import { useWalletModal } from "@solana/wallet-adapter-react-ui";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   CreditCard,
@@ -21,7 +21,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { cn, solToLamports, lamportsToSol } from "@/lib/utils";
-import { Connection, Transaction, Keypair, PublicKey } from "@solana/web3.js";
+import { Transaction, Keypair, PublicKey } from "@solana/web3.js";
 
 type CardType = "visa" | "mastercard";
 type FlowStep = "configure" | "depositing" | "withdrawing" | "waiting" | "complete" | "error";
@@ -44,10 +44,9 @@ interface OrderData {
 }
 
 export function PrivateCardFlow({ disabled = false }: { disabled?: boolean }) {
-  const { authenticated, login, user } = usePrivy();
-  // Privy Solana wallet hooks for embedded wallet support
-  const { wallets: privyWallets } = useWallets();
-  const { signAndSendTransaction: privySignAndSend } = useSignAndSendTransaction();
+  const { publicKey, connected, sendTransaction } = useWallet();
+  const { connection } = useConnection();
+  const { setVisible } = useWalletModal();
 
   // Form state
   const [amount, setAmount] = useState<number>(50);
@@ -69,18 +68,10 @@ export function PrivateCardFlow({ disabled = false }: { disabled?: boolean }) {
     message: string;
   } | null>(null);
 
-  // Get user's Solana wallet
+  // Get user's Solana wallet address
   const getSolanaWallet = useCallback((): string | null => {
-    const solanaWallet = user?.linkedAccounts?.find(
-      (a) => a.type === "wallet" && (a as any).chainType === "solana"
-    ) as { address?: string } | undefined;
-    if (solanaWallet?.address) return solanaWallet.address;
-    
-    const mainAddress = user?.wallet?.address;
-    if (mainAddress && !mainAddress.startsWith("0x")) return mainAddress;
-    
-    return null;
-  }, [user]);
+    return publicKey?.toBase58() ?? null;
+  }, [publicKey]);
 
   // Poll for order status
   useEffect(() => {
@@ -105,8 +96,8 @@ export function PrivateCardFlow({ disabled = false }: { disabled?: boolean }) {
   }, [order, step]);
 
   const handleCreateOrder = async () => {
-    if (!authenticated) {
-      login();
+    if (!connected) {
+      setVisible(true);
       return;
     }
 
@@ -137,51 +128,23 @@ export function PrivateCardFlow({ disabled = false }: { disabled?: boolean }) {
       // 2. Deposit to Privacy Cash pool
       setProgress("Depositing to privacy pool...");
       
-      const rpcUrl = process.env.NEXT_PUBLIC_SOLANA_RPC_URL || "https://api.devnet.solana.com";
-      
-      // Check for Privy embedded wallet first, then fall back to browser extensions
-      const privyWallet = privyWallets?.find(
-        (w) => w.address?.toLowerCase() === walletAddress.toLowerCase()
-      );
-      const isPrivyEmbeddedWallet = !!privyWallet;
-      
-      // Get browser extension provider as fallback
-      let solanaProvider: any = null;
-      if (!isPrivyEmbeddedWallet && typeof window !== "undefined") {
-        if ((window as any).phantom?.solana?.isPhantom) {
-          solanaProvider = (window as any).phantom.solana;
-        } else if ((window as any).solflare?.isSolflare) {
-          solanaProvider = (window as any).solflare;
-        } else if ((window as any).solana) {
-          solanaProvider = (window as any).solana;
-        }
-      }
-      
-      if (!isPrivyEmbeddedWallet && !solanaProvider) {
-        throw new Error("Solana wallet not found. Please connect a wallet or install Phantom.");
-      }
-
       // Create ephemeral keypair for the deposit
       const ephemeralKeypair = Keypair.generate();
-      
+
       // Calculate deposit amount (Starpay amount + Privacy Cash fees + overhead)
-      // Privacy Cash withdrawal fee is DEDUCTED from withdrawal, so we need to send more
       const starpayAmountLamports = solToLamports(data.payment.amountSol);
       const PRIVACY_CASH_FEE = 6_000_000; // 0.006 SOL flat withdrawal fee
       const PRIVACY_CASH_PERCENT = 0.0035; // 0.35% withdrawal fee
-      // Privacy Cash needs minimal buffer for tx fees during deposit + withdraw
-      const MIN_TX_BUFFER = 5_000_000; // ~0.005 SOL - slightly more for deposit+withdraw combo
-      const TX_FEES = 15_000; // Multiple transaction fees
-      
-      // Gross withdrawal = (starpayAmount + flatFee) / (1 - percent) so Starpay gets exact amount after fees
+      const MIN_TX_BUFFER = 5_000_000; // ~0.005 SOL
+      const TX_FEES = 15_000;
+
       const grossWithdrawal = Math.ceil((starpayAmountLamports + PRIVACY_CASH_FEE) / (1 - PRIVACY_CASH_PERCENT));
       const depositAmount = grossWithdrawal + MIN_TX_BUFFER + TX_FEES;
-      
+
       // Fund ephemeral wallet
-      const connection = new Connection(rpcUrl, "confirmed");
       const fundingTx = new Transaction();
       const { SystemProgram } = await import("@solana/web3.js");
-      
+
       fundingTx.add(
         SystemProgram.transfer({
           fromPubkey: new PublicKey(walletAddress),
@@ -189,31 +152,8 @@ export function PrivateCardFlow({ disabled = false }: { disabled?: boolean }) {
           lamports: depositAmount,
         })
       );
-      
-      const { blockhash } = await connection.getLatestBlockhash();
-      fundingTx.recentBlockhash = blockhash;
-      fundingTx.feePayer = new PublicKey(walletAddress);
-      
-      // Sign and send with user's wallet (Privy embedded or browser extension)
-      let fundingTxHash: string;
-      
-      if (isPrivyEmbeddedWallet && privyWallet) {
-        // Use Privy embedded wallet
-        const bs58 = (await import("bs58")).default;
-        const serializedTx = fundingTx.serialize({ requireAllSignatures: false });
-        const result = await privySignAndSend({
-          transaction: new Uint8Array(serializedTx),
-          wallet: privyWallet,
-        });
-        fundingTxHash = bs58.encode(result.signature);
-      } else if (solanaProvider) {
-        // Use browser extension wallet
-        const signedFundingTx = await solanaProvider.signTransaction(fundingTx);
-        fundingTxHash = await connection.sendRawTransaction(signedFundingTx.serialize());
-      } else {
-        throw new Error("No wallet available for signing");
-      }
-      
+
+      const fundingTxHash = await sendTransaction(fundingTx, connection);
       await connection.confirmTransaction(fundingTxHash, "confirmed");
 
       // Wait for balance
@@ -441,7 +381,7 @@ export function PrivateCardFlow({ disabled = false }: { disabled?: boolean }) {
 
                 <Button
                   onClick={disabled ? undefined : handleCreateOrder}
-                  disabled={isLoading || amount < 5 || (disabled && authenticated)}
+                  disabled={isLoading || amount < 5 || (disabled && connected)}
                   className="w-full py-6 text-lg"
                 >
                   {isLoading ? (
@@ -449,7 +389,7 @@ export function PrivateCardFlow({ disabled = false }: { disabled?: boolean }) {
                       <Loader2 className="w-5 h-5 mr-2 animate-spin" />
                       {progress || "Processing..."}
                     </>
-                  ) : !authenticated ? (
+                  ) : !connected ? (
                     "Connect Wallet"
                   ) : disabled ? (
                     "Temporarily Unavailable"
