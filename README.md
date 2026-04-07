@@ -307,8 +307,7 @@ hoppy/
 ## Links
 
 - **Live Demo:** [hoppy.cash](https://hoppy.cash)
-- **GitHub:** [github.com/hamzaskewl/hoppy](https://github.com/hamzaskewl/hoppy)
-- **Twitter:** [@hoppyprivacy](https://x.com/hoppyprivacy)
+- **GitHub:** [github.com/hamzaskewl/hoppy](https://github.com/hamzaskewl/)
 - **Roadmap:** [hoppy.cash/roadmap](https://hoppy.cash/roadmap)
 
 ---
