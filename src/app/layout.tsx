@@ -69,7 +69,7 @@ export default function RootLayout({
           <footer className="fixed bottom-0 left-0 right-0 bg-background/80 backdrop-blur-sm border-t border-border py-3 px-4 z-50">
             <div className="max-w-7xl mx-auto flex items-center justify-center">
               <p className="text-xs text-muted-foreground font-mono">
-                CA: <span className="text-foreground select-all">DufBH7d71rvu1aourkEwHYardYXND6sGU9ULDBRzpump</span>
+                Hoppy — Privacy-first payments
               </p>
             </div>
           </footer>

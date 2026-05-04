@@ -1442,7 +1442,7 @@ export function CreateLinkForm() {
                     {(Object.keys(SENDER_PRIVACY) as SenderPrivacy[]).map((mode) => {
                       const info = SENDER_PRIVACY[mode];
                       const isSelected = senderPrivacy === mode;
-                      const isDisabled = mode === "private"; // Umbra indexer not yet live — can deposit but can't claim
+                      const isDisabled = false;
                       return (
                         <button
                           key={mode}

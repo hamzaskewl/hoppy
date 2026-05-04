@@ -291,7 +291,7 @@ export function ClaimFlow() {
 
         // Claim self-claimable UTXO into public wSOL balance
         setClaimProgress("Claiming from privacy pool...");
-        const { getSelfClaimableUtxoToPublicBalanceClaimerFunction, getClaimableUtxoScannerFunction, getUmbraRelayer, getBatchMerkleProofFetcher } =
+        const { getSelfClaimableUtxoToPublicBalanceClaimerFunction, getClaimableUtxoScannerFunction, getUmbraRelayer } =
           await import("@umbra-privacy/sdk");
         const { getClaimSelfClaimableUtxoIntoPublicBalanceProver } =
           await import("@umbra-privacy/web-zk-prover");
@@ -300,7 +300,8 @@ export function ClaimFlow() {
         const relayer = getUmbraRelayer({
           apiEndpoint: config.relayerUrl,
         } as any);
-        const fetchBatchMerkleProof = getBatchMerkleProofFetcher({ apiEndpoint: config.indexerUrl });
+        // v4: client exposes fetchBatchMerkleProof directly
+        const fetchBatchMerkleProof = (umbraClient as any).fetchBatchMerkleProof;
         const claimProver = getClaimSelfClaimableUtxoIntoPublicBalanceProver({ assetProvider: zkProvider });
         const claimFn = getSelfClaimableUtxoToPublicBalanceClaimerFunction(
           { client: umbraClient },
@@ -308,9 +309,17 @@ export function ClaimFlow() {
         );
 
         const scanUtxos = getClaimableUtxoScannerFunction({ client: umbraClient });
-        const fetchResult = await scanUtxos(BigInt(0) as any, BigInt(0) as any, BigInt(10000) as any);
-        const utxos = (fetchResult as any).self || [];
-        if (utxos.length === 0) throw new Error("No claimable UTXOs found — payment may have already been claimed");
+        const fetchResult: any = await scanUtxos(BigInt(0) as any, BigInt(0) as any, BigInt(10000) as any);
+        // v4 result fields: selfBurnable | received | publicSelfBurnable | publicReceived
+        // Private send from public wSOL → publicSelfBurnable
+        const utxos = fetchResult.publicSelfBurnable || fetchResult.selfBurnable || fetchResult.self || [];
+        console.log("[Claim] Scan result:", {
+          publicSelfBurnable: fetchResult.publicSelfBurnable?.length ?? 0,
+          selfBurnable: fetchResult.selfBurnable?.length ?? 0,
+          received: fetchResult.received?.length ?? 0,
+          publicReceived: fetchResult.publicReceived?.length ?? 0,
+        });
+        if (utxos.length === 0) throw new Error("No claimable UTXOs found — indexer may not have synced yet, try again in 30s");
         await claimFn(utxos);
 
         // Close wSOL ATA to unwrap → native SOL
@@ -490,8 +499,16 @@ export function ClaimFlow() {
       }));
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : "Claim failed";
+      console.error("[Claim] Failed:", error);
 
-      if (errorMessage.includes("insufficient") || errorMessage.includes("balance") || errorMessage.includes("already")) {
+      // Only mark "already claimed" for actual already-claimed signals,
+      // not for transient indexer/UTXO scan failures
+      const isReallyAlreadyClaimed =
+        errorMessage.includes("already been claimed") ||
+        errorMessage.includes("insufficient funds") ||
+        errorMessage.includes("nullifier");
+
+      if (isReallyAlreadyClaimed) {
         setState((prev) => ({
           ...prev,
           status: "already-claimed",

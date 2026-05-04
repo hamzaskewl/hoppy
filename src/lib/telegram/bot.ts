@@ -331,13 +331,13 @@ async function claimPaymentForUser(
       });
 
       // 5. Receiver claims from pool → encrypted balance
-      const { getReceiverClaimableUtxoToEncryptedBalanceClaimerFunction, getClaimableUtxoScannerFunction, getBatchMerkleProofFetcher: getMerkleProofFetcher } =
+      const { getReceiverClaimableUtxoToEncryptedBalanceClaimerFunction, getClaimableUtxoScannerFunction } =
         await import("@umbra-privacy/sdk");
       const { getClaimReceiverClaimableUtxoIntoEncryptedBalanceProver } =
         await import("@umbra-privacy/web-zk-prover");
       const relayer = await getRelayer();
-      const umbraConfig = getUmbraConfig();
-      const fetchBatchMerkleProof = getMerkleProofFetcher({ apiEndpoint: umbraConfig.indexerUrl });
+      // v4: client exposes fetchBatchMerkleProof directly when indexerApiEndpoint is provided
+      const fetchBatchMerkleProof = (receiverUmbraClient as any).fetchBatchMerkleProof;
       const claimProver = getClaimReceiverClaimableUtxoIntoEncryptedBalanceProver();
       const claimFn = getReceiverClaimableUtxoToEncryptedBalanceClaimerFunction(
         { client: receiverUmbraClient },
@@ -345,7 +345,8 @@ async function claimPaymentForUser(
       );
       const fetchClaimable = getClaimableUtxoScannerFunction({ client: receiverUmbraClient });
       const fetchResult = await fetchClaimable(BigInt(0) as any, BigInt(0) as any, BigInt(10000) as any);
-      const utxos = fetchResult.received || [];
+      // v4: from public balance → publicReceived. Fallback to received for safety.
+      const utxos = (fetchResult as any).publicReceived || fetchResult.received || [];
       if (utxos.length === 0) throw new Error("No claimable UTXOs found for receiver");
       await claimFn(utxos);
 
@@ -1441,13 +1442,13 @@ async function executeSend(ctx: Context, text: string, anonymous = true, privacy
       });
 
       // 6. Ephemeral claims from pool → encrypted balance
-      const { getReceiverClaimableUtxoToEncryptedBalanceClaimerFunction, getClaimableUtxoScannerFunction, getBatchMerkleProofFetcher: getMerkleProofFetcher } =
+      const { getReceiverClaimableUtxoToEncryptedBalanceClaimerFunction, getClaimableUtxoScannerFunction } =
         await import("@umbra-privacy/sdk");
       const { getClaimReceiverClaimableUtxoIntoEncryptedBalanceProver } =
         await import("@umbra-privacy/web-zk-prover");
       const relayer = await getRelayer();
-      const umbraConfig = getUmbraConfig();
-      const fetchBatchMerkleProof = getMerkleProofFetcher({ apiEndpoint: umbraConfig.indexerUrl });
+      // v4: client exposes fetchBatchMerkleProof directly
+      const fetchBatchMerkleProof = (ephUmbraClient as any).fetchBatchMerkleProof;
       const claimProver = getClaimReceiverClaimableUtxoIntoEncryptedBalanceProver();
       const claimFn = getReceiverClaimableUtxoToEncryptedBalanceClaimerFunction(
         { client: ephUmbraClient },
@@ -1455,7 +1456,8 @@ async function executeSend(ctx: Context, text: string, anonymous = true, privacy
       );
       const fetchClaimable = getClaimableUtxoScannerFunction({ client: ephUmbraClient });
       const fetchResult = await fetchClaimable(BigInt(0) as any, BigInt(0) as any, BigInt(10000) as any);
-      const utxos = fetchResult.received || [];
+      // v4: from public balance → publicReceived. Fallback to received for safety.
+      const utxos = (fetchResult as any).publicReceived || fetchResult.received || [];
       if (utxos.length === 0) throw new Error("No claimable UTXOs found for ephemeral");
       await claimFn(utxos);
 
@@ -1745,13 +1747,13 @@ async function handleClaim(
       });
 
       // 5. Receiver claims from pool → encrypted balance
-      const { getReceiverClaimableUtxoToEncryptedBalanceClaimerFunction, getClaimableUtxoScannerFunction, getBatchMerkleProofFetcher: getMerkleProofFetcher } =
+      const { getReceiverClaimableUtxoToEncryptedBalanceClaimerFunction, getClaimableUtxoScannerFunction } =
         await import("@umbra-privacy/sdk");
       const { getClaimReceiverClaimableUtxoIntoEncryptedBalanceProver } =
         await import("@umbra-privacy/web-zk-prover");
       const relayer = await getRelayer();
-      const umbraConfig = getUmbraConfig();
-      const fetchBatchMerkleProof = getMerkleProofFetcher({ apiEndpoint: umbraConfig.indexerUrl });
+      // v4: client exposes fetchBatchMerkleProof directly when indexerApiEndpoint is provided
+      const fetchBatchMerkleProof = (receiverUmbraClient as any).fetchBatchMerkleProof;
       const claimProver = getClaimReceiverClaimableUtxoIntoEncryptedBalanceProver();
       const claimFn = getReceiverClaimableUtxoToEncryptedBalanceClaimerFunction(
         { client: receiverUmbraClient },
@@ -1759,7 +1761,8 @@ async function handleClaim(
       );
       const fetchClaimable = getClaimableUtxoScannerFunction({ client: receiverUmbraClient });
       const fetchResult = await fetchClaimable(BigInt(0) as any, BigInt(0) as any, BigInt(10000) as any);
-      const utxos = fetchResult.received || [];
+      // v4: from public balance → publicReceived. Fallback to received for safety.
+      const utxos = (fetchResult as any).publicReceived || fetchResult.received || [];
       if (utxos.length === 0) throw new Error("No claimable UTXOs found for receiver");
       await claimFn(utxos);
 

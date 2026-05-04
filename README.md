@@ -203,9 +203,7 @@ hoppy/
 │   │   ├── card/                # Virtual cards (WIP)
 │   │   ├── roadmap/             # Project roadmap
 │   │   └── api/                 # API routes
-│   │       ├── privacy-cash/    # Shielded pool integration
-│   │       │   ├── create-link/ # Create deposit + claim link
-│   │       │   └── claim/       # Process claim
+│   │       ├── relayer/         # Gas-funding relayer (breaks on-chain link)
 │   │       ├── card/            # Virtual card issuance
 │   │       └── sol-price/       # Price feed
 │   │

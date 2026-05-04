@@ -1,12 +1,12 @@
 /**
  * Umbra Privacy Adapter
  *
- * Replaces the PrivacyCash adapter with Umbra Privacy SDK integration.
+ * Wraps the Umbra Privacy SDK for use throughout the Hoppy app.
  *
- * KEY DIFFERENCES FROM PRIVACYCASH:
- * - Uses wSOL instead of native SOL (auto-wrap/unwrap handled transparently)
+ * NOTES:
+ * - Uses wSOL (auto-wrap/unwrap handled transparently)
  * - Users must register on Umbra before receiving (1-3 on-chain txs, idempotent)
- * - ZK proofs via WASM prover (1-5 seconds, no 19MB circuit download)
+ * - ZK proofs via WASM prover (1-5 seconds)
  * - UTXO lookup via indexer (instant, no brute-force scanning)
  *
  * PRIVACY MODEL (hybrid — sender & receiver choose independently):
@@ -68,7 +68,7 @@ export interface TokenInfo {
 
 /**
  * Token mints for Umbra.
- * NOTE: SOL uses wSOL mint (not null like PrivacyCash).
+ * NOTE: SOL uses wSOL mint (Umbra wraps SOL automatically).
  */
 export const TOKEN_MINTS: Record<SupportedToken, TokenInfo> = {
   SOL: {
@@ -446,7 +446,7 @@ export type CompositeSecret = {
 
 /**
  * Legacy compatibility: generates a CompositeSecret-compatible object.
- * SYNC — matches old PrivacyCash API.
+ * SYNC helper for legacy call sites.
  */
 export function generateCompositeSecret(): CompositeSecret {
   const eph = generateEphemeralKey();
@@ -460,7 +460,7 @@ export function generateCompositeSecret(): CompositeSecret {
 
 /**
  * Legacy compatibility: decodes a composite secret.
- * SYNC — matches old PrivacyCash API.
+ * SYNC helper for legacy call sites.
  */
 export function decodeCompositeSecret(encoded: string): CompositeSecret | null {
   const eph = decodeEphemeralSeed(encoded);
@@ -546,26 +546,6 @@ export function deserializeUmbraNote(encoded: string): UmbraNote | null {
       };
     }
 
-    // Legacy PrivacyCash format (v1) — parse into UmbraNote shape for display
-    // These links can't actually be claimed via Umbra, but we can show an error
-    if (data.s && data.fl !== undefined) {
-      return {
-        ephemeralSeed: data.s,
-        amount: data.a || 0,
-        network: data.n === "mainnet-beta" ? "mainnet" : (data.n || "devnet"),
-        token: (data.t || "SOL") as SupportedToken,
-        tokenMint: data.tm || WSOL_MINT,
-        createdAt: Date.now(),
-        ephemeralAddress: data.e || "",
-        senderPrivacy: (data.sp === "p" ? "private" : "basic") as SenderPrivacy,
-        // Legacy fields
-        secret: data.s,
-        status: data.st || "funded",
-        fundsLocation: data.fl || "ephemeral",
-        senderAddress: data.sa || "",
-      };
-    }
-
     return null;
   } catch {
     return null;
@@ -636,12 +616,20 @@ export function getUmbraConfig(): UmbraConfig {
   const wsUrl = process.env.NEXT_PUBLIC_SOLANA_WS_URL ||
     rpcUrl.replace("https://", "wss://").replace("http://", "ws://");
 
+  // Network-specific Umbra infra (devnet vs mainnet have different subdomains)
+  const defaultIndexer = network === "mainnet"
+    ? "https://utxo-indexer.api.umbraprivacy.com"
+    : "https://utxo-indexer.api-devnet.umbraprivacy.com";
+  const defaultRelayer = network === "mainnet"
+    ? "https://relayer.api.umbraprivacy.com"
+    : "https://relayer.api-devnet.umbraprivacy.com";
+
   return {
     network,
     rpcUrl,
     wsUrl,
-    indexerUrl: process.env.NEXT_PUBLIC_UMBRA_INDEXER_URL || "https://indexer.api.umbraprivacy.com",
-    relayerUrl: process.env.NEXT_PUBLIC_UMBRA_RELAYER_URL || "https://relayer.api.umbraprivacy.com",
+    indexerUrl: process.env.NEXT_PUBLIC_UMBRA_INDEXER_URL || defaultIndexer,
+    relayerUrl: process.env.NEXT_PUBLIC_UMBRA_RELAYER_URL || defaultRelayer,
   };
 }
 

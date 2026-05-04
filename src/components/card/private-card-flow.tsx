@@ -125,21 +125,21 @@ export function PrivateCardFlow({ disabled = false }: { disabled?: boolean }) {
       setOrder(data);
       setStep("depositing");
 
-      // 2. Deposit to Privacy Cash pool
+      // 2. Deposit to privacy pool
       setProgress("Depositing to privacy pool...");
-      
+
       // Create ephemeral keypair for the deposit
       const ephemeralKeypair = Keypair.generate();
 
-      // Calculate deposit amount (Starpay amount + Privacy Cash fees + overhead)
+      // Calculate deposit amount (Starpay amount + Umbra fees + gas overhead)
       const starpayAmountLamports = solToLamports(data.payment.amountSol);
-      const PRIVACY_CASH_FEE = 6_000_000; // 0.006 SOL flat withdrawal fee
-      const PRIVACY_CASH_PERCENT = 0.0035; // 0.35% withdrawal fee
-      const MIN_TX_BUFFER = 5_000_000; // ~0.005 SOL
+      const UMBRA_FEE_BPS = 35;
+      const UMBRA_BPS_DIVISOR = 16384;
+      const GAS_BUFFER = 10_000_000; // 0.01 SOL — registration + proof account + tx fees
       const TX_FEES = 15_000;
 
-      const grossWithdrawal = Math.ceil((starpayAmountLamports + PRIVACY_CASH_FEE) / (1 - PRIVACY_CASH_PERCENT));
-      const depositAmount = grossWithdrawal + MIN_TX_BUFFER + TX_FEES;
+      const grossWithdrawal = Math.ceil(starpayAmountLamports * UMBRA_BPS_DIVISOR / (UMBRA_BPS_DIVISOR - UMBRA_FEE_BPS));
+      const depositAmount = grossWithdrawal + GAS_BUFFER + TX_FEES;
 
       // Fund ephemeral wallet
       const fundingTx = new Transaction();
@@ -159,8 +159,7 @@ export function PrivateCardFlow({ disabled = false }: { disabled?: boolean }) {
       // Wait for balance
       await new Promise(r => setTimeout(r, 2000));
       
-      // Call server-side API to handle Privacy Cash deposit/withdraw
-      // (Privacy Cash SDK only works on server)
+      // Call server-side API to handle privacy pool deposit/withdraw
       setStep("withdrawing");
       setProgress("Processing private payment...");
       
@@ -275,7 +274,7 @@ export function PrivateCardFlow({ disabled = false }: { disabled?: boolean }) {
                   Private Gift Card
                 </CardTitle>
                 <CardDescription>
-                  Create a virtual card using Privacy Cash. No email required - you&apos;ll receive a private claim link.
+                  Create a virtual card using Umbra privacy. No email required - you&apos;ll receive a private claim link.
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-6">
