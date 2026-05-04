@@ -201,13 +201,13 @@ export function sendFlowPrivacyMessage(): string {
   return [
     `💸 <b>New Payment</b>`,
     ``,
-    `Choose your privacy level:`,
+    `Choose your send mode:`,
     ``,
-    `🔒 <b>Private</b> — Sender hidden via ZK proof`,
-    `  Fee: ~0.006 SOL + 0.35%`,
+    `⚡ <b>Basic</b> — Direct transfer, cheapest`,
+    `  Fee: ~0.000005 SOL (tx fee only)`,
     ``,
-    `⚡ <b>Quick</b> — Fast & cheap, sender visible`,
-    `  Fee: ~0.000005 SOL`,
+    `🔒 <b>Private</b> — Sender hidden via ZK mixer`,
+    `  Fee: 0.3% + ~0.02 SOL gas`,
   ].join("\n");
 }
 
@@ -448,8 +448,8 @@ export function helpMessage(): string {
     "/balance - Check your balance",
     "/transfer - Direct SOL transfer (not private)",
     "",
-    "<b>Privacy Payments:</b>",
-    "/send - Send a private payment",
+    "<b>Payments:</b>",
+    "/send - Send SOL (choose basic or private)",
     "  Example: <code>send 0.5 sol to @alice privately</code>",
     "/claim - Claim a payment link",
     "  Or just paste any hoppy.cash link",
@@ -460,7 +460,7 @@ export function helpMessage(): string {
     "",
     "<b>Tips:</b>",
     '- You can type naturally: "pay @bob 1 SOL"',
-    '- Add "privately" for sender privacy',
+    '- Add "privately" for ZK mixer privacy',
     "- Paste any hoppy.cash link to auto-claim",
   ].join("\n");
 }

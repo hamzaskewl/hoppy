@@ -1,7 +1,6 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import { usePrivy } from "@privy-io/react-auth";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   CreditCard,
@@ -45,8 +44,6 @@ interface OrderData {
 type FlowStep = "configure" | "payment" | "processing" | "complete" | "error";
 
 export function CardPurchaseFlow({ disabled = false }: { disabled?: boolean }) {
-  const { authenticated, login } = usePrivy();
-
   // Form state
   const [amount, setAmount] = useState<number>(50);
   const [amountInput, setAmountInput] = useState<string>("50");

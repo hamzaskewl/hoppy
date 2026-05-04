@@ -1,6 +1,15 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  serverExternalPackages: ['privacycash', '@solana/web3.js', '@lightprotocol/hasher.rs', 'imapflow', 'mailparser', 'pg'],
+  serverExternalPackages: ['@solana/web3.js', '@lightprotocol/hasher.rs', 'imapflow', 'mailparser', 'pg', 'snarkjs'],
+  async rewrites() {
+    return [
+      {
+        // Proxy Umbra ZK prover circuit files to avoid CORS issues
+        source: '/umbra-zk/:path*',
+        destination: 'https://d3j9fjdkre529f.cloudfront.net/:path*',
+      },
+    ];
+  },
   images: {
     remotePatterns: [
       {
@@ -19,25 +28,21 @@ const nextConfig = {
       path: false,
       crypto: false,
     };
-    
-    // Exclude Privacy Cash SDK from client bundle
+
     if (!isServer) {
-      config.externals = config.externals || [];
-      if (Array.isArray(config.externals)) {
-        config.externals.push('privacycash');
-      } else {
-        config.externals = [config.externals, 'privacycash'];
-      }
-      
       // Fix for @solana/web3.js CURVE error - ensure it uses the correct build
-      // The issue is that Webpack tries to bundle Node.js-specific crypto code
       config.resolve.alias = {
         ...config.resolve.alias,
-        // Force use of browser-compatible build
         '@solana/web3.js': require.resolve('@solana/web3.js'),
       };
     }
-    
+
+    // Enable WASM support for @umbra-privacy/web-zk-prover
+    config.experiments = {
+      ...config.experiments,
+      asyncWebAssembly: true,
+    };
+
     return config;
   },
 };
