@@ -1,6 +1,6 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  serverExternalPackages: ['privacycash', '@solana/web3.js', '@lightprotocol/hasher.rs', 'imapflow', 'mailparser', 'pg'],
+  serverExternalPackages: ['privacycash', '@solana/web3.js', '@lightprotocol/hasher.rs', 'imapflow', 'mailparser', 'pg', '@umbra-privacy/sdk', '@umbra-privacy/web-zk-prover'],
   images: {
     remotePatterns: [
       {

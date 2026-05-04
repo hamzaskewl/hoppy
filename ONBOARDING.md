@@ -15,7 +15,7 @@ A one-page onboarding view of this repo: what the project is, what's in it, and 
 - Both sides can independently choose **basic** (cheap, public) or **private** (routed through Privacy Cash ZK pool).
 - Live on Solana mainnet. Won the $1k Privacy Cash SDK bounty.
 
-Bonus surfaces: a **Telegram bot** for send/claim, and a **virtual debit card** flow (Starpay).
+Bonus surfaces: a **Telegram bot** for send/claim, a **virtual debit card** flow (Starpay), and a **Payroll dashboard** (`/payroll`) on the Umbra Privacy SDK for businesses paying many recipients at once.
 
 ---
 
@@ -33,10 +33,12 @@ hoppy/
 │   ├── page.tsx                landing
 │   ├── create/                 sender flow page
 │   ├── claim/                  recipient flow page
+│   ├── payroll/                business dashboard + /payroll/claim (Umbra)
 │   ├── card/                   virtual card flow
 │   ├── how-it-works, roadmap   marketing
 │   └── api/
 │       ├── privacy-cash/       create-link, claim  ← CORE
+│       ├── umbra/payroll/      deposit, issue-link, claim (Umbra-backed)
 │       ├── card/               init, gift-order, claim, poll-emails
 │       ├── starpay/            order, status, price
 │       ├── telegram/           webhook, set-webhook
@@ -44,6 +46,9 @@ hoppy/
 ├── src/components/           React UI (create/, claim/, card/, ui/, nav)
 ├── src/lib/
 │   ├── privacy/                Privacy Cash adapter + UTXO cache  ← CORE
+│   ├── umbra/                  Umbra Privacy SDK adapter (payroll backend)
+│   ├── payroll/                payroll types + encrypted localStorage
+│   ├── local-storage-crypto.ts shared AES-GCM helpers (wallet-keyed)
 │   ├── solana/                 chain helpers
 │   ├── card/                   db, encryption, IMAP email worker
 │   └── telegram/               bot, intents, state, wallet, db
@@ -133,6 +138,27 @@ hoppy/
 
 On-chain you only see: `sender → POOL` and `POOL → recipient`. No edge connects them.
 
+### Payroll on Umbra (separate stack)
+
+```
+ business wallet ──one Privy sig──▶ bulk deposit (Umbra encrypted balance, wSOL)
+                                              │
+                       per-row server-side issuance (no extra sigs)
+                                              │
+                    ┌────────────┬────────────┼────────────┐
+                    ▼            ▼            ▼            ▼
+              stealth Eph1  stealth Eph2  stealth Eph3  ... (one per employee)
+                    │            │            │
+              /payroll/claim#<base58 note>  ← link the business shares
+
+ employee opens link → connects any wallet → server uses stealth keypair to
+ withdraw from Umbra encrypted balance → unwraps wSOL → SOL arrives.
+```
+
+Storage: encrypted in browser localStorage, keyed by the connected business
+wallet (mirrors the existing `create-link-form.tsx` pattern). Nothing
+sensitive on the backend.
+
 ---
 
 ## 6. Notable Architectural Choices
@@ -144,6 +170,7 @@ On-chain you only see: `sender → POOL` and `POOL → recipient`. No edge conne
 - **UTXO preseed** (`utxo-cache.ts`) skips the SDK's full pool scan for fresh ephemerals — big speedup on create-link.
 - **Server-externalized packages** in `next.config.js`: `privacycash`, `@solana/web3.js` etc. are Node-only (crypto / curve issues in browser bundles).
 - **Email polling, not webhook**, for Starpay card delivery — `cards+{orderId}@hoppy.cash` mailbox scraped by `/api/card/poll-emails` cron.
+- **Payroll uses a separate stack (Umbra, not Privacy Cash).** Same "secret in the URL hash" idea, but the secret is an Umbra stealth keypair seed instead of a Privacy Cash composite secret. Business signs one bulk deposit; per-row link issuance happens server-side using a Hoppy-derived escrow signer (deterministic from `UMBRA_ESCROW_MASTER_KEY` + business wallet) so employees don't need to sign N times.
 
 ---
 
@@ -166,3 +193,4 @@ On-chain you only see: `sender → POOL` and `POOL → recipient`. No edge conne
 - `GET /api/relayer/status` → relayer SOL balance (must be > ~0.05 SOL or SPL claims fail silently).
 - `GET /api/stats` → anonymous link-created / link-claimed counters.
 - Manual flow: `/create` (devnet) → copy link → open in incognito → `/claim` → confirm tx hash on Solscan.
+- Payroll flow: `/payroll` → connect → add 3 rows → "Generate payroll links" → open each in incognito → `/payroll/claim#…` → "Claim payment". Adapter is currently mocked (see banner on the page); real Umbra wiring is the next iteration.

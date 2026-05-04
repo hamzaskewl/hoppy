@@ -6,7 +6,9 @@
       "Bash(npx skills:*)",
       "WebFetch(domain:www.reddit.com)",
       "Bash(del /q srcscenesIntroScene.tsx srcscenesProblemScene.tsx srcscenesCreateScene.tsx srcscenesShareScene.tsx srcscenesClaimScene.tsx srcscenesOutroScene.tsx)",
-      "Bash(npx tsc:*)"
+      "Bash(npx tsc:*)",
+      "WebFetch(domain:sdk.umbraprivacy.com)",
+      "WebFetch(domain:docs.umbraprivacy.com)"
     ],
     "additionalDirectories": [
       "c:\\Users\\wante\\Downloads\\hopy\\hoppy-demo"

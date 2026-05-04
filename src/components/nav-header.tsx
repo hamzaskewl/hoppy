@@ -3,13 +3,14 @@
 import Link from "next/link";
 import Image from "next/image";
 import { usePathname } from "next/navigation";
-import { CreditCard, Send, Sun, Moon, HelpCircle, Map } from "lucide-react";
+import { CreditCard, Send, Sun, Moon, HelpCircle, Map, Users } from "lucide-react";
 import { WalletButton } from "./wallet-button";
 import { cn } from "@/lib/utils";
 import { useEffect, useState } from "react";
 
 const navItems = [
   { href: "/create", label: "Send Payments", icon: Send },
+  { href: "/payroll", label: "Payroll", icon: Users },
   { href: "/card", label: "Virtual Cards", icon: CreditCard },
   { href: "/roadmap", label: "Roadmap", icon: Map },
   { href: "/how-it-works", label: "How it works", icon: HelpCircle },
