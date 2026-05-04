@@ -82,6 +82,7 @@ import {
 } from "./state";
 import {
   Connection,
+  Keypair,
   Transaction,
   SystemProgram,
   PublicKey,
@@ -120,6 +121,67 @@ const APP_URL =
     : "http://localhost:3000");
 
 console.log("[TG Bot] APP_URL resolved to:", APP_URL);
+
+/**
+ * Drain an ephemeral wallet to a recipient in a single tx: closes the wSOL ATA
+ * (if present) and sends all native SOL plus recovered ATA rent. Doing close +
+ * transfer atomically prevents a silent close failure from leaving the ATA's
+ * 2,039,280 lamports stuck on the ephemeral.
+ */
+async function drainEphemeralToRecipient(
+  connection: Connection,
+  ephemeralKeypair: Keypair,
+  recipientAddress: string
+): Promise<{ signature: string | null; amountSent: number }> {
+  const ephemeralPubkey = ephemeralKeypair.publicKey;
+  const recipientPubkey = new PublicKey(recipientAddress);
+  const wsolAta = await getAssociatedTokenAddress(new PublicKey(WSOL_MINT), ephemeralPubkey);
+
+  const drainTx = new Transaction();
+  let ataLamports = 0;
+  const ataInfo = await connection.getAccountInfo(wsolAta);
+  if (ataInfo) {
+    ataLamports = ataInfo.lamports;
+    drainTx.add(createCloseAccountInstruction(wsolAta, ephemeralPubkey, ephemeralPubkey));
+  }
+
+  const nativeBalance = await connection.getBalance(ephemeralPubkey);
+  const totalAfterCloses = nativeBalance + ataLamports;
+  if (totalAfterCloses <= 0) return { signature: null, amountSent: 0 };
+
+  drainTx.add(
+    SystemProgram.transfer({
+      fromPubkey: ephemeralPubkey,
+      toPubkey: recipientPubkey,
+      lamports: totalAfterCloses,
+    })
+  );
+  const { blockhash } = await connection.getLatestBlockhash();
+  drainTx.recentBlockhash = blockhash;
+  drainTx.feePayer = ephemeralPubkey;
+
+  const fee = Number((await connection.getFeeForMessage(drainTx.compileMessage()))?.value ?? 5000);
+  const toSend = Math.max(0, totalAfterCloses - fee);
+  if (toSend <= 0) return { signature: null, amountSent: 0 };
+
+  const finalTx = new Transaction();
+  for (let i = 0; i < drainTx.instructions.length - 1; i++) {
+    finalTx.add(drainTx.instructions[i]);
+  }
+  finalTx.add(
+    SystemProgram.transfer({
+      fromPubkey: ephemeralPubkey,
+      toPubkey: recipientPubkey,
+      lamports: toSend,
+    })
+  );
+  finalTx.recentBlockhash = blockhash;
+  finalTx.feePayer = ephemeralPubkey;
+  const signature = await sendAndConfirmTransaction(connection, finalTx, [ephemeralKeypair], {
+    commitment: "confirmed",
+  });
+  return { signature, amountSent: toSend };
+}
 
 // Fee constants — Umbra v2 model: 35 BPS (~0.21%) commission + gas buffer for registration/proofs
 const MIN_SEND = 0.005;  // 0.005 SOL minimum
@@ -259,39 +321,31 @@ async function claimPaymentForUser(
     const ephemeralPubkey = ephemeralKeypair.publicKey;
 
     const connection = new Connection(RPC_URL, "confirmed");
-
-    // Close wSOL ATA if exists (backward compat with old links that wrapped wSOL)
     const wsolMint = new PublicKey(WSOL_MINT);
-    const wsolAta = await getAssociatedTokenAddress(wsolMint, ephemeralPubkey);
-    try {
-      await getAccount(connection, wsolAta);
-      const closeTx = new Transaction().add(
-        createCloseAccountInstruction(wsolAta, ephemeralPubkey, ephemeralPubkey)
-      );
-      await sendAndConfirmTransaction(connection, closeTx, [ephemeralKeypair], { commitment: "confirmed" });
-    } catch {
-      // No wSOL ATA
-    }
 
     if (recipientPrivacy === "quick") {
-      // ---- BASIC CLAIM: Direct transfer ephemeral → recipient, no Umbra ----
-      const balance = await connection.getBalance(ephemeralPubkey);
-      const TX_FEE = 5000;
-      const transferAmount = Math.max(0, balance - TX_FEE);
-      if (transferAmount > 0) {
-        const tx = new Transaction().add(
-          SystemProgram.transfer({
-            fromPubkey: ephemeralPubkey,
-            toPubkey: new PublicKey(recipientWalletAddress),
-            lamports: transferAmount,
-          })
-        );
-        await sendAndConfirmTransaction(connection, tx, [ephemeralKeypair], { commitment: "confirmed" });
-      }
+      // ---- BASIC CLAIM: bundle wSOL ATA close + native SOL drain in one tx
+      // so the ATA's ~0.00204 SOL rent is recovered into the transfer.
+      const { amountSent } = await drainEphemeralToRecipient(
+        connection,
+        ephemeralKeypair,
+        recipientWalletAddress
+      );
       await updatePaymentStatus(paymentId, "claimed");
-      return { success: true, amountReceived: transferAmount || note.amount };
+      return { success: true, amountReceived: amountSent || note.amount };
     } else {
       // ---- PRIVATE CLAIM: Ephemeral → Umbra pool → Receiver (receiver-claimable UTXO) ----
+      // Close any pre-existing wSOL ATA before wrapping fresh, so we don't
+      // collide with the create-ATA instruction below.
+      const wsolAta = await getAssociatedTokenAddress(wsolMint, ephemeralPubkey);
+      const preWsolInfo = await connection.getAccountInfo(wsolAta);
+      if (preWsolInfo) {
+        const closeTx = new Transaction().add(
+          createCloseAccountInstruction(wsolAta, ephemeralPubkey, ephemeralPubkey)
+        );
+        await sendAndConfirmTransaction(connection, closeTx, [ephemeralKeypair], { commitment: "confirmed" });
+      }
+
       const ephBalance = await connection.getBalance(ephemeralPubkey);
       const gasReserve = EPHEMERAL_GAS_BUFFER;
       const available = Math.max(0, ephBalance - gasReserve);
@@ -1671,43 +1725,32 @@ async function handleClaim(
     const ephemeralPubkey = ephemeralKeypair.publicKey;
 
     const connection = new Connection(RPC_URL, "confirmed");
-
-    // Close wSOL ATA if exists (backward compat with old links)
     const wsolMint = new PublicKey(WSOL_MINT);
-    const wsolAta = await getAssociatedTokenAddress(wsolMint, ephemeralPubkey);
-    try {
-      await getAccount(connection, wsolAta);
-      const closeTx = new Transaction().add(
-        createCloseAccountInstruction(wsolAta, ephemeralPubkey, ephemeralPubkey)
-      );
-      await sendAndConfirmTransaction(connection, closeTx, [ephemeralKeypair], { commitment: "confirmed" });
-    } catch {
-      // No wSOL ATA
-    }
 
     if (recipientPrivacy === "quick") {
-      // ---- BASIC CLAIM: Direct transfer ephemeral → recipient, no Umbra ----
-      const balance = await connection.getBalance(ephemeralPubkey);
-      const TX_FEE = 5000;
-      const transferAmount = Math.max(0, balance - TX_FEE);
-
-      if (transferAmount > 0) {
-        const tx = new Transaction().add(
-          SystemProgram.transfer({
-            fromPubkey: ephemeralPubkey,
-            toPubkey: new PublicKey(wallet.wallet_address),
-            lamports: transferAmount,
-          })
-        );
-        await sendAndConfirmTransaction(connection, tx, [ephemeralKeypair], { commitment: "confirmed" });
-      }
-
+      // ---- BASIC CLAIM: bundle wSOL ATA close + native SOL drain in one tx
+      // so the ATA's ~0.00204 SOL rent is recovered into the transfer.
+      const { amountSent } = await drainEphemeralToRecipient(
+        connection,
+        ephemeralKeypair,
+        wallet.wallet_address
+      );
       await ctx.reply(
-        claimSuccessMessage(transferAmount || note.amount),
+        claimSuccessMessage(amountSent || note.amount),
         { parse_mode: "HTML" }
       );
     } else {
       // ---- PRIVATE CLAIM: Ephemeral → Umbra pool → Receiver ----
+      // Close any pre-existing wSOL ATA before wrapping fresh below.
+      const wsolAta = await getAssociatedTokenAddress(wsolMint, ephemeralPubkey);
+      const preWsolInfo = await connection.getAccountInfo(wsolAta);
+      if (preWsolInfo) {
+        const closeTx = new Transaction().add(
+          createCloseAccountInstruction(wsolAta, ephemeralPubkey, ephemeralPubkey)
+        );
+        await sendAndConfirmTransaction(connection, closeTx, [ephemeralKeypair], { commitment: "confirmed" });
+      }
+
       const ephBalance = await connection.getBalance(ephemeralPubkey);
       const gasReserve = EPHEMERAL_GAS_BUFFER;
       const available = Math.max(0, ephBalance - gasReserve);
@@ -1840,26 +1883,16 @@ async function handleRecall(ctx: Context, paymentId: number) {
 
     const connection = new Connection(RPC_URL, "confirmed");
     const ephemeralKeypair = compositeSecret.ephemeralKeypair;
-    const ephemeralPubkey = ephemeralKeypair.publicKey;
 
-    // Close wSOL ATA if it exists (unwrap to native SOL)
-    const wsolMint = new PublicKey(WSOL_MINT);
-    const wsolAta = await getAssociatedTokenAddress(wsolMint, ephemeralPubkey);
-    try {
-      await getAccount(connection, wsolAta);
-      const closeTx = new Transaction().add(
-        createCloseAccountInstruction(wsolAta, ephemeralPubkey, ephemeralPubkey)
-      );
-      await sendAndConfirmTransaction(connection, closeTx, [ephemeralKeypair], { commitment: "confirmed" });
-    } catch {
-      // No wSOL ATA
-    }
+    // Bundle wSOL ATA close + native SOL drain in one tx so the ATA's
+    // ~0.00204 SOL rent is recovered into the recall.
+    const { amountSent } = await drainEphemeralToRecipient(
+      connection,
+      ephemeralKeypair,
+      wallet.wallet_address
+    );
 
-    const balance = await connection.getBalance(ephemeralPubkey);
-    const TX_FEE = 5000;
-    const transferAmount = Math.max(0, balance - TX_FEE);
-
-    if (transferAmount <= 0) {
+    if (amountSent <= 0) {
       await updatePaymentStatus(paymentId, "claimed");
       await ctx.reply(
         errorMessage(
@@ -1870,23 +1903,11 @@ async function handleRecall(ctx: Context, paymentId: number) {
       return;
     }
 
-    const tx = new Transaction().add(
-      SystemProgram.transfer({
-        fromPubkey: ephemeralPubkey,
-        toPubkey: new PublicKey(wallet.wallet_address),
-        lamports: transferAmount,
-      })
-    );
-
-    await sendAndConfirmTransaction(connection, tx, [ephemeralKeypair], {
-      commitment: "confirmed",
-    });
-
     await updatePaymentStatus(paymentId, "recalled");
 
     await ctx.reply(
       escapeMarkdown(
-        `✅ Recalled ${lamportsToSol(transferAmount).toFixed(4)} SOL from payment #${paymentId} back to your wallet.`
+        `✅ Recalled ${lamportsToSol(amountSent).toFixed(4)} SOL from payment #${paymentId} back to your wallet.`
       ),
       { parse_mode: "HTML" }
     );

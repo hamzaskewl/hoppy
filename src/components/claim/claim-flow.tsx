@@ -22,7 +22,7 @@ import {
   type ClaimMode,
 } from "@/lib/privacy";
 import { formatSol, shortenAddress, lamportsToSol } from "@/lib/utils";
-import { Connection, PublicKey, SystemProgram, Transaction } from "@solana/web3.js";
+import { Connection, Keypair, PublicKey, SystemProgram, Transaction } from "@solana/web3.js";
 import {
   getAssociatedTokenAddress,
   createAssociatedTokenAccountInstruction,
@@ -31,6 +31,66 @@ import {
   TOKEN_PROGRAM_ID,
   getAccount,
 } from "@solana/spl-token";
+
+/**
+ * Drain an ephemeral wallet to a recipient in a single tx: closes the wSOL ATA
+ * (if present) and sends all native SOL plus recovered ATA rent. Doing close +
+ * transfer atomically prevents a silent close failure from leaving the ATA's
+ * 2,039,280 lamports stuck on the ephemeral.
+ */
+async function drainEphemeralToRecipient(
+  connection: Connection,
+  ephemeralKeypair: Keypair,
+  recipientPubkey: PublicKey
+): Promise<string | null> {
+  const ephemeralPubkey = ephemeralKeypair.publicKey;
+  const wsolAta = await getAssociatedTokenAddress(new PublicKey(WSOL_MINT), ephemeralPubkey);
+
+  const drainTx = new Transaction();
+  let ataLamports = 0;
+  const ataInfo = await connection.getAccountInfo(wsolAta);
+  if (ataInfo) {
+    ataLamports = ataInfo.lamports;
+    drainTx.add(createCloseAccountInstruction(wsolAta, ephemeralPubkey, ephemeralPubkey));
+  }
+
+  const nativeBalance = await connection.getBalance(ephemeralPubkey);
+  const totalAfterCloses = nativeBalance + ataLamports;
+  if (totalAfterCloses <= 0) return null;
+
+  drainTx.add(
+    SystemProgram.transfer({
+      fromPubkey: ephemeralPubkey,
+      toPubkey: recipientPubkey,
+      lamports: totalAfterCloses,
+    })
+  );
+  const { blockhash } = await connection.getLatestBlockhash();
+  drainTx.recentBlockhash = blockhash;
+  drainTx.feePayer = ephemeralPubkey;
+
+  const fee = Number((await connection.getFeeForMessage(drainTx.compileMessage()))?.value ?? 5000);
+  const toSend = Math.max(0, totalAfterCloses - fee);
+  if (toSend <= 0) return null;
+
+  const finalTx = new Transaction();
+  for (let i = 0; i < drainTx.instructions.length - 1; i++) {
+    finalTx.add(drainTx.instructions[i]);
+  }
+  finalTx.add(
+    SystemProgram.transfer({
+      fromPubkey: ephemeralPubkey,
+      toPubkey: recipientPubkey,
+      lamports: toSend,
+    })
+  );
+  finalTx.recentBlockhash = blockhash;
+  finalTx.feePayer = ephemeralPubkey;
+  finalTx.sign(ephemeralKeypair);
+  const sig = await connection.sendRawTransaction(finalTx.serialize());
+  await connection.confirmTransaction(sig, "confirmed");
+  return sig;
+}
 
 type ClaimStatus =
   | "parsing"      // Extracting note from URL
@@ -322,104 +382,25 @@ export function ClaimFlow() {
         if (utxos.length === 0) throw new Error("No claimable UTXOs found — indexer may not have synced yet, try again in 30s");
         await claimFn(utxos);
 
-        // Close wSOL ATA to unwrap → native SOL
-        setClaimProgress("Unwrapping SOL...");
-        const wsolMint = new PublicKey(WSOL_MINT);
-        const wsolAta = await getAssociatedTokenAddress(wsolMint, ephemeralPubkey);
-        try {
-          const closeTx = new Transaction().add(
-            createCloseAccountInstruction(wsolAta, ephemeralPubkey, ephemeralPubkey)
-          );
-          const { blockhash: closeHash } = await connection.getLatestBlockhash();
-          closeTx.recentBlockhash = closeHash;
-          closeTx.feePayer = ephemeralPubkey;
-          closeTx.sign(ephemeralKeypair);
-          const closeSig = await connection.sendRawTransaction(closeTx.serialize());
-          await connection.confirmTransaction(closeSig, "confirmed");
-        } catch {
-          // ATA may not exist if claim went to native balance
-        }
-
-        // Transfer all SOL to recipient (same drain logic as basic)
+        // Bundle wSOL ATA close + SOL transfer into a single tx so the ATA's
+        // ~0.00204 SOL rent gets recovered into the drain. A separate close
+        // tx that silently catches errors leaves rent stuck on the ephemeral.
         setClaimProgress("Sending to your wallet...");
-        const balance = await connection.getBalance(ephemeralPubkey);
-        if (balance > 0) {
-          const { blockhash } = await connection.getLatestBlockhash();
-          const dummyTx = new Transaction();
-          dummyTx.recentBlockhash = blockhash;
-          dummyTx.feePayer = ephemeralPubkey;
-          dummyTx.add(SystemProgram.transfer({ fromPubkey: ephemeralPubkey, toPubkey: recipientPubkey, lamports: balance }));
-          const fee = Number((await connection.getFeeForMessage(dummyTx.compileMessage()))?.value ?? 5000);
-          const toSend = balance - fee;
-          if (toSend > 0) {
-            const finalTx = new Transaction().add(
-              SystemProgram.transfer({ fromPubkey: ephemeralPubkey, toPubkey: recipientPubkey, lamports: toSend })
-            );
-            finalTx.recentBlockhash = blockhash;
-            finalTx.feePayer = ephemeralPubkey;
-            finalTx.sign(ephemeralKeypair);
-            transferSig = await connection.sendRawTransaction(finalTx.serialize());
-            await connection.confirmTransaction(transferSig, "confirmed");
-          }
-        }
+        transferSig = await drainEphemeralToRecipient(
+          connection,
+          ephemeralKeypair,
+          recipientPubkey
+        );
       } else if (isSOL) {
         // ── Basic send: funds are native SOL on the ephemeral ──
-        // Step 1: Close wSOL ATA if it exists (unwrap leftover wSOL back to native SOL)
-        const wsolMint = new PublicKey(WSOL_MINT);
-        const wsolAta = await getAssociatedTokenAddress(wsolMint, ephemeralPubkey);
-        try {
-          await getAccount(connection, wsolAta);
-          const closeTx = new Transaction().add(
-            createCloseAccountInstruction(wsolAta, ephemeralPubkey, ephemeralPubkey)
-          );
-          const { blockhash: closeHash } = await connection.getLatestBlockhash();
-          closeTx.recentBlockhash = closeHash;
-          closeTx.feePayer = ephemeralPubkey;
-          closeTx.sign(ephemeralKeypair);
-          const closeSig = await connection.sendRawTransaction(closeTx.serialize());
-          await connection.confirmTransaction(closeSig, "confirmed");
-        } catch {
-          // No wSOL ATA — funds are already native SOL
-        }
-
-        // Step 2: Transfer all SOL to recipient (drain ephemeral to exactly 0)
+        // Bundle wSOL ATA close (if a prior wrap left one) + SOL transfer in
+        // one tx so the ATA's rent flows into the drain.
         setClaimProgress("Sending to your wallet...");
-        const balance = await connection.getBalance(ephemeralPubkey);
-
-        if (balance > 0) {
-          // Build a dummy transfer to calculate the exact fee
-          const { blockhash } = await connection.getLatestBlockhash();
-          const transferTx = new Transaction();
-          transferTx.recentBlockhash = blockhash;
-          transferTx.feePayer = ephemeralPubkey;
-          transferTx.add(
-            SystemProgram.transfer({
-              fromPubkey: ephemeralPubkey,
-              toPubkey: recipientPubkey,
-              lamports: balance, // placeholder
-            })
-          );
-          // Get the actual fee for this tx
-          const feeRaw = (await connection.getFeeForMessage(transferTx.compileMessage()))?.value ?? 5000;
-          const fee = Number(feeRaw);
-          const toSend = balance - fee;
-
-          if (toSend > 0) {
-            // Rebuild with correct amount
-            const finalTx = new Transaction().add(
-              SystemProgram.transfer({
-                fromPubkey: ephemeralPubkey,
-                toPubkey: recipientPubkey,
-                lamports: toSend,
-              })
-            );
-            finalTx.recentBlockhash = blockhash;
-            finalTx.feePayer = ephemeralPubkey;
-            finalTx.sign(ephemeralKeypair);
-            transferSig = await connection.sendRawTransaction(finalTx.serialize());
-            await connection.confirmTransaction(transferSig, "confirmed");
-          }
-        }
+        transferSig = await drainEphemeralToRecipient(
+          connection,
+          ephemeralKeypair,
+          recipientPubkey
+        );
       } else {
         // SPL token transfer
         setClaimProgress("Sending tokens to your wallet...");
