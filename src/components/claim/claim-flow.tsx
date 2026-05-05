@@ -18,6 +18,7 @@ import {
   TOKEN_MINTS,
   createUmbraClientFromKeypair,
   ensureRegistered,
+  estimatePrivateClaimReceives,
   type UmbraNote,
   type ClaimMode,
 } from "@/lib/privacy";
@@ -138,11 +139,16 @@ export function ClaimFlow() {
   
   const hasStartedParsing = useRef(false);
 
-  // In Umbra, fees are on the deposit side. Recipient gets the full UTXO amount.
+  // For private sends the claimer also receives the recovered ATA rent and any
+  // unused gas buffer the ephemeral didn't burn during deposit/registration.
   const receiveBreakdown = useMemo(() => {
     if (!state.note) return null;
+    const isSOL = !state.note.token || state.note.token === "SOL";
+    const recipientReceives = state.note.senderPrivacy === "private" && isSOL
+      ? estimatePrivateClaimReceives(state.note.amount)
+      : state.note.amount;
     return {
-      recipientReceives: state.note.amount,
+      recipientReceives,
       fee: 0,
       privacyInfo: CLAIM_MODES[claimMode],
     };

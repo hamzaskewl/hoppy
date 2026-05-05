@@ -41,6 +41,7 @@ export {
   calculateUmbraFees,
   calculateDepositForRecipientAmount,
   calculateRecipientReceives,
+  estimatePrivateClaimReceives,
   calculateFees,
   calculateSPLFees,
   calculateSenderCost,

@@ -16,6 +16,7 @@ import {
   decodeCompositeSecret,
   extractNoteFromUrl,
   calculateSenderCost,
+  estimatePrivateClaimReceives,
   EPHEMERAL_GAS_BUFFER,
   WSOL_ATA_RENT,
   UMBRA_FEE_PERCENT,
@@ -1614,11 +1615,15 @@ export function CreateLinkForm() {
               <p className="text-2xl font-bold text-hop-700 dark:text-hop-400">
                 {(() => {
                   const isSOL = !umbraNote.token || umbraNote.token === "SOL";
+                  // For private sends, recipient gets UTXO + recovered ATA rent + leftover gas
+                  const actualReceived = umbraNote.senderPrivacy === "private" && isSOL
+                    ? estimatePrivateClaimReceives(umbraNote.amount)
+                    : umbraNote.amount;
                   if (isSOL) {
-                    return `~${lamportsToSol(umbraNote.amount).toFixed(4)} SOL`;
+                    return `~${lamportsToSol(actualReceived).toFixed(4)} SOL`;
                   } else {
                     const decimals = umbraNote.token === "USDC" || umbraNote.token === "USDT" ? 6 : 9;
-                    return `~${(umbraNote.amount / (10 ** decimals)).toFixed(2)} ${umbraNote.token}`;
+                    return `~${(actualReceived / (10 ** decimals)).toFixed(2)} ${umbraNote.token}`;
                   }
                 })()}
               </p>
@@ -1626,10 +1631,12 @@ export function CreateLinkForm() {
                 {(() => {
                   const isSOL = !umbraNote.token || umbraNote.token === "SOL";
                   if (isSOL) {
-                    return `Claimable balance: ${lamportsToSol(umbraNote.amount).toFixed(4)} SOL`;
+                    const isPrivate = umbraNote.senderPrivacy === "private";
+                    const label = isPrivate ? "UTXO" : "Claimable";
+                    return `${label}: ${lamportsToSol(umbraNote.amount).toFixed(4)} SOL${isPrivate ? " (+ recovered rent + unused gas)" : ""}`;
                   } else {
                     const decimals = umbraNote.token === "USDC" || umbraNote.token === "USDT" ? 6 : 9;
-                    return `Claimable balance: ${(umbraNote.amount / (10 ** decimals)).toFixed(2)} ${umbraNote.token}`;
+                    return `Claimable: ${(umbraNote.amount / (10 ** decimals)).toFixed(2)} ${umbraNote.token}`;
                   }
                 })()}
               </p>

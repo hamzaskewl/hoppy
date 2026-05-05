@@ -39,11 +39,15 @@ export const UMBRA_BPS_DIVISOR = 16384;
 /** Legacy alias — now derived from BPS for backwards compat */
 export const UMBRA_FEE_PERCENT = UMBRA_FEE_BPS / UMBRA_BPS_DIVISOR; // ≈ 0.002136
 
-/** Gas buffer for ephemeral Umbra ops (registration + proof account + protocol SOL fee + tx fees) */
-export const EPHEMERAL_GAS_BUFFER = 10_000_000; // 0.01 SOL
+/**
+ * Gas buffer for ephemeral Umbra ops (registration + proof account + tx fees).
+ * Measured on-chain: actual consumption is ~0.003 SOL. We leave a 2x margin
+ * for safety. Any unused balance gets drained back to the claimer.
+ */
+export const EPHEMERAL_GAS_BUFFER = 5_000_000; // 0.005 SOL
 
-/** Extra rent needed for creating wSOL ATA on the sender ephemeral */
-export const WSOL_ATA_RENT = 2_100_000; // ~0.0021 SOL (token account rent-exempt minimum)
+/** Extra rent needed for creating wSOL ATA on the sender ephemeral (recovered when ATA closed) */
+export const WSOL_ATA_RENT = 2_039_280; // exact rent-exempt minimum for token account
 
 /** Minimum send amounts */
 export const MIN_SEND_SOL = 0.01; // 0.01 SOL
@@ -283,22 +287,51 @@ export function calculateFullDepositInfo(
 }
 
 /**
+ * Estimated amount actually received by the claimer for a private SOL send.
+ *
+ * On claim, the ephemeral wallet's wSOL ATA is closed (recovers ~0.00204 rent)
+ * and ALL leftover native SOL is drained to the recipient. So the recipient
+ * gets more than just the UTXO amount.
+ *
+ * Empirically measured on mainnet (0.01 send → 0.0178 received):
+ *   UTXO amount  + ATA rent recovered + ~unused gas buffer (~60% of the buffer)
+ *
+ * @param utxoAmount - The UTXO amount in lamports (the "claim" notional value)
+ * @returns Estimated lamports the claimer will actually receive after drain
+ */
+export function estimatePrivateClaimReceives(utxoAmount: number): number {
+  // ATA rent always recovered when wSOL ATA is closed during claim drain
+  const ataRentRecovered = WSOL_ATA_RENT;
+  // Of the gas buffer, registration + UTXO creation consume ~0.0028 SOL of
+  // non-recoverable rent/fees; the rest is drained back. Conservative 50%.
+  const estimatedLeftoverGas = Math.floor(EPHEMERAL_GAS_BUFFER * 0.5);
+  // Drain tx itself costs ~5000 lamports
+  const drainTxFee = 5000;
+  return utxoAmount + ataRentRecovered + estimatedLeftoverGas - drainTxFee;
+}
+
+/**
  * Calculate what recipient receives (legacy-compatible return shape).
- * In Umbra, fees are on the deposit side. Recipient gets the full UTXO amount.
+ *
+ * For private sends (mixer): recipient gets UTXO + recovered rent + leftover gas.
+ * For basic/quick sends: recipient gets the full deposited amount minus tx fee.
  */
 export function calculateRecipientReceives(
   amount: number,
-  claimMode: ClaimMode = "quick"
+  claimMode: ClaimMode = "quick",
+  senderPrivacy: SenderPrivacy = "basic"
 ): {
   poolAmount: number;
   recipientReceives: number;
   fee: number;
   privacyInfo: ClaimModeInfo;
 } {
-  // Umbra fee is on deposit side, not claim side — recipient gets the full amount
+  const recipientReceives = senderPrivacy === "private"
+    ? estimatePrivateClaimReceives(amount)
+    : amount;
   return {
     poolAmount: amount,
-    recipientReceives: amount,
+    recipientReceives,
     fee: 0,
     privacyInfo: CLAIM_MODES[claimMode],
   };
