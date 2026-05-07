@@ -1,6 +1,11 @@
 import { NextResponse } from "next/server";
 import { inspect } from "util";
-import { umbraPayrollIssueLink, encodeNoteToUrl } from "@/lib/umbra";
+import { umbraPayrollIssueLink } from "@/lib/umbra";
+import {
+  serializeUmbraNote,
+  WSOL_MINT,
+  type UmbraNote as RegularUmbraNote,
+} from "@/lib/privacy";
 
 // ZK proof + on-chain UTXO creation can take 30–120s.
 export const maxDuration = 300;
@@ -37,10 +42,32 @@ export async function POST(req: Request) {
       amount,
       from,
     });
+
+    // Re-encode the payroll note into the regular UmbraNote URL format so
+    // recipients land on /claim and use the standard claim flow (same UI,
+    // wallet-connect, paste-address, quick vs private claim modes, etc).
+    const regularNote: RegularUmbraNote = {
+      ephemeralSeed: note.secret,
+      amount: note.amount,
+      network: note.network === "mainnet-beta" ? "mainnet" : "devnet",
+      token: "SOL",
+      tokenMint: WSOL_MINT,
+      createdAt: Date.now(),
+      ephemeralAddress: note.stealthAddress,
+      senderPrivacy: "private",
+      // Legacy compat
+      status: "funded",
+      fundsLocation: "pool",
+      senderAddress: from ?? "",
+      secret: note.secret,
+    };
+    const encoded = serializeUmbraNote(regularNote);
+    const claimUrl = `${linkOrigin.replace(/\/$/, "")}/claim#${encoded}`;
+
     return NextResponse.json({
       note,
       issueTxHash,
-      claimUrl: encodeNoteToUrl(note, linkOrigin),
+      claimUrl,
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : "issue-link failed";

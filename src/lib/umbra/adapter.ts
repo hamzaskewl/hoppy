@@ -21,12 +21,9 @@
 import {
   getUserRegistrationFunction,
   getPublicBalanceToEncryptedBalanceDirectDepositorFunction,
-  getEncryptedBalanceToReceiverClaimableUtxoCreatorFunction,
+  getEncryptedBalanceToSelfClaimableUtxoCreatorFunction,
   getEncryptedBalanceToPublicBalanceDirectWithdrawerFunction,
-  getReceiverClaimableUtxoToEncryptedBalanceClaimerFunction,
-  getClaimableUtxoScannerFunction,
 } from "@umbra-privacy/sdk";
-import type { ScannedUtxoData } from "@umbra-privacy/sdk/interfaces";
 import bs58 from "bs58";
 import type { UmbraNote } from "@/lib/payroll/types";
 import {
@@ -36,9 +33,7 @@ import {
 } from "./keys";
 import {
   umbraClientFor,
-  umbraRelayer,
   createUtxoProver,
-  claimUtxoProver,
   registrationProver,
   networkName,
 } from "./client";
@@ -220,8 +215,16 @@ export interface PayrollIssueLinkResult {
 
 /**
  * Generate a stealth keypair and use the escrow's Umbra client to create a
- * receiver-claimable UTXO destined for the stealth address. The stealth seed
- * is embedded in the returned note (which goes in the URL hash).
+ * SELF-claimable UTXO whose destination is the stealth address. The stealth
+ * seed goes into the URL hash; the recipient just opens /claim and the
+ * existing claim flow (same as a regular private send) handles withdrawal.
+ *
+ * Why self-claimable instead of receiver-claimable:
+ *   - Receiver-claimable UTXOs require the recipient to be Umbra-registered
+ *     and to claim into their encrypted balance first (extra friction).
+ *   - Self-claimable UTXOs can be claimed directly to a public balance by
+ *     anyone holding the seed — exactly the regular Hoppy flow.
+ *   - Lets us reuse src/components/claim/claim-flow.tsx unchanged.
  */
 export async function umbraPayrollIssueLink(
   input: PayrollIssueLinkInput,
@@ -232,24 +235,15 @@ export async function umbraPayrollIssueLink(
   const stealthSeed = crypto.getRandomValues(new Uint8Array(32));
   const stealth = stealthKeypairFromSeed(stealthSeed);
 
-  // Step 1: fund the stealth with SOL. Required so the stealth can pay for its
-  // own Umbra registration (next step) and for the eventual claim flow's txs.
+  // Fund the stealth with SOL so it has rent + tx-fee budget for the eventual
+  // claim flow (close ATA, transfer to recipient, etc.).
   await transferSol(escrow, stealth.publicKey, STEALTH_FUND_BUDGET);
 
-  // Step 2: register the stealth on Umbra. Required because createUtxo's ZK
-  // proof needs to encrypt the UTXO commitment against the receiver's
-  // registered Umbra public commitment — fails with "Receiver is not
-  // registered" otherwise.
-  const stealthClient = await umbraClientFor(stealth);
-  const registerStealth = getUserRegistrationFunction(
-    { client: stealthClient },
-    { zkProver: registrationProver() },
-  );
-  await registerStealth({ confidential: true, anonymous: true });
-
-  // Step 3: escrow creates the receiver-claimable UTXO destined for stealth.
+  // Escrow creates a self-claimable UTXO destined for the stealth address.
+  // No stealth registration required — anyone with the stealth seed claims it
+  // by reconstructing the keypair and proving knowledge of the secret.
   const escrowClient = await umbraClientFor(escrow);
-  const createUtxo = getEncryptedBalanceToReceiverClaimableUtxoCreatorFunction(
+  const createUtxo = getEncryptedBalanceToSelfClaimableUtxoCreatorFunction(
     { client: escrowClient },
     { zkProver: createUtxoProver() },
   );
@@ -287,154 +281,12 @@ export async function umbraPayrollIssueLink(
 }
 
 // ============================================================================
-// Claim
+// Claim — unified with regular /claim flow
 // ============================================================================
-
-export interface PayrollClaimInput {
-  note: UmbraNote;
-  recipientAddress: string;
-}
-
-export interface PayrollClaimResult {
-  /** Signature of the final SOL transfer to the recipient. */
-  withdrawTxHash: string;
-  claimQueueSignature?: string;
-  unwrapTxHash?: string;
-}
-
-/**
- * Recipient claim:
- *   1. Reconstruct stealth keypair from note.secret.
- *   2. Build stealth's Umbra client; register stealth (one-time).
- *   3. Stealth needs SOL for tx fees — escrow tops it up if empty.
- *   4. Scan stealth's claimable UTXOs and find the one matching this note.
- *   5. Claim the UTXO into stealth's encrypted balance.
- *   6. Withdraw wSOL from encrypted to stealth's wSOL ATA.
- *   7. Unwrap stealth's wSOL → native SOL.
- *   8. Stealth transfers SOL to recipient.
- */
-export async function umbraPayrollClaim(
-  input: PayrollClaimInput,
-): Promise<PayrollClaimResult> {
-  if (input.note.status !== "pending") {
-    throw new Error(`note already ${input.note.status}`);
-  }
-
-  const recipientPk = (() => {
-    try {
-      return new PublicKey(input.recipientAddress);
-    } catch {
-      throw new Error("invalid recipient address");
-    }
-  })();
-
-  const seed = bs58.decode(input.note.secret);
-  if (seed.length !== 32) throw new Error("invalid note secret");
-  const stealth = stealthKeypairFromSeed(new Uint8Array(seed));
-
-  // Top up stealth with a tiny gas budget if it's empty. Server-paid (escrow).
-  const STEALTH_GAS_BUDGET = 10_000_000; // 0.01 SOL
-  const escrow = getEscrowKeypairFromNote(input.note);
-  if (escrow) {
-    const { getSolBalance } = await import("./wsol");
-    const bal = await getSolBalance(stealth.publicKey);
-    if (bal < STEALTH_GAS_BUDGET) {
-      await transferSol(escrow, stealth.publicKey, STEALTH_GAS_BUDGET);
-    }
-  }
-
-  const client = await umbraClientFor(stealth);
-
-  // Register stealth (idempotent — no-op if already registered).
-  const register = getUserRegistrationFunction(
-    { client },
-    { zkProver: registrationProver() },
-  );
-  await register({ confidential: true, anonymous: true });
-
-  // Find the receiver-claimable UTXO targeting this stealth.
-  // The claim function fetches merkle proofs internally via the
-  // fetchBatchMerkleProof dep — we just pass the scanned UTXOs.
-  const scan = getClaimableUtxoScannerFunction({ client });
-  const scanned = await scan(BigInt(0) as never, BigInt(0) as never);
-  console.log("[umbra/payroll/claim] scanner result", {
-    receivedCount: scanned.received.length,
-    receivedAmounts: scanned.received.map((u) => String(u.amount)),
-    publicReceivedCount: scanned.publicReceived?.length ?? 0,
-    selfBurnableCount: scanned.selfBurnable?.length ?? 0,
-    publicSelfBurnableCount: scanned.publicSelfBurnable?.length ?? 0,
-    expectedAmount: input.note.amount,
-    stealthAddress: stealth.publicKey.toBase58(),
-    network: networkName(),
-    indexerUrl:
-      process.env.UMBRA_INDEXER_URL ??
-      (networkName() === "mainnet-beta"
-        ? "https://utxo-indexer.api.umbraprivacy.com"
-        : "https://utxo-indexer.api-devnet.umbraprivacy.com"),
-  });
-
-  // A fresh stealth wallet only ever has one UTXO destined for it (the one
-  // we created at issuance). Take the first received UTXO regardless of
-  // exact amount — the on-chain amount may differ from the note amount by
-  // Umbra's protocol fee.
-  const matching: ScannedUtxoData[] = scanned.received;
-  if (matching.length === 0) {
-    throw new Error(
-      "no claimable UTXO found for this link — receiver-claimable computation may not have finalized yet, or the indexer hasn't picked it up",
-    );
-  }
-
-  // The IUmbraClient runtime exposes fetchBatchMerkleProof directly even
-  // though the public d.ts hides it. Cast to bypass the missing type.
-  const fetchBatchMerkleProof = (
-    client as unknown as {
-      fetchBatchMerkleProof: import("@umbra-privacy/sdk/interfaces").BatchMerkleProofFetcherFunction;
-    }
-  ).fetchBatchMerkleProof;
-
-  // Claim into encrypted balance (relayer-paid).
-  const claim = getReceiverClaimableUtxoToEncryptedBalanceClaimerFunction(
-    { client },
-    {
-      fetchBatchMerkleProof,
-      zkProver: claimUtxoProver(),
-      relayer: umbraRelayer(),
-    },
-  );
-  const claimResult = await claim(matching);
-
-  // Withdraw wSOL from stealth's encrypted balance to stealth's own wSOL ATA.
-  const withdraw =
-    getEncryptedBalanceToPublicBalanceDirectWithdrawerFunction({ client });
-  await withdraw(
-    client.signer.address,
-    WSOL_MINT_STR as never,
-    BigInt(input.note.amount) as never,
-  );
-
-  // Unwrap stealth's wSOL → native SOL on the stealth wallet.
-  await unwrapAllWsol(stealth);
-
-  // Forward the stealth's SOL balance (minus a tiny dust buffer) to recipient.
-  const { getSolBalance } = await import("./wsol");
-  const stealthBal = await getSolBalance(stealth.publicKey);
-  const sendAmount = stealthBal - 5_000; // leave 5k lamports for tx fee
-  if (sendAmount <= 0) throw new Error("stealth wallet ended up empty");
-  const sig = await transferSol(stealth, recipientPk, sendAmount);
-
-  return {
-    withdrawTxHash: sig,
-    claimQueueSignature: getFirstClaimSig(claimResult),
-  };
-}
-
-/** Recall = claim sent to the business wallet. */
-export async function umbraPayrollRecall(
-  note: UmbraNote,
-  businessWallet: string,
-): Promise<PayrollClaimResult> {
-  return umbraPayrollClaim({ note, recipientAddress: businessWallet });
-}
+// The per-link claim runs entirely client-side via the stealth keypair from
+// the URL hash. The legacy server-side claim/recall helpers were removed.
+// Recall, if needed, can be done by visiting the claim URL with the
+// business wallet selected as the recipient.
 
 // ============================================================================
 // Bulk refund — drain escrow's encrypted balance + native SOL back to business
@@ -529,36 +381,6 @@ export async function umbraPayrollRefund(
   }
 
   return result;
-}
-
-// ============================================================================
-// helpers
-// ============================================================================
-
-function getFirstClaimSig(claimResult: unknown): string | undefined {
-  // ClaimUtxoIntoEncryptedBalanceResult shape varies; keep this defensive.
-  const r = claimResult as {
-    results?: { queueSignature?: string }[];
-    queueSignature?: string;
-  };
-  if (Array.isArray(r.results) && r.results.length > 0) {
-    return r.results[0]?.queueSignature;
-  }
-  return r.queueSignature;
-}
-
-/**
- * Best-effort lookup of which escrow funded a given note's stealth wallet.
- *
- * The note doesn't carry the business wallet, so we can't directly derive
- * the escrow keypair on claim. For now we skip the gas top-up if we can't
- * identify the source — the stealth can use whatever SOL the issuance flow
- * left in it (Umbra's deposit mechanics seed the destination address with
- * rent). If that's insufficient, real Hoppy ops will add an explicit
- * `escrowHint` field to the note in the next iteration.
- */
-function getEscrowKeypairFromNote(_note: UmbraNote): null {
-  return null;
 }
 
 // Re-exports for the wsolAtaFor used elsewhere.

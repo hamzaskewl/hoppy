@@ -87,9 +87,38 @@ export function PayrollDashboard() {
   }, [businessWallet]);
 
   // Local pool balance: lamports the business has deposited into the Umbra
-  // pool but not yet issued as links. Tracked client-side for now since the
-  // adapter is mocked.
+  // pool but not yet issued as links. Persisted to localStorage per wallet
+  // so it survives page refresh.
   const [poolBalance, setPoolBalance] = useState<number>(0);
+
+  const poolBalanceKey = useMemo(
+    () => (businessWallet ? `hoppy_payroll_pool_${businessWallet}` : null),
+    [businessWallet],
+  );
+
+  // Load persisted pool balance whenever wallet changes
+  useEffect(() => {
+    if (!poolBalanceKey) return;
+    try {
+      const raw = localStorage.getItem(poolBalanceKey);
+      if (raw) {
+        const v = parseInt(raw, 10);
+        if (!isNaN(v) && v >= 0) setPoolBalance(v);
+      }
+    } catch {
+      /* ignore */
+    }
+  }, [poolBalanceKey]);
+
+  // Persist pool balance whenever it changes
+  useEffect(() => {
+    if (!poolBalanceKey) return;
+    try {
+      localStorage.setItem(poolBalanceKey, String(poolBalance));
+    } catch {
+      /* ignore */
+    }
+  }, [poolBalanceKey, poolBalance]);
 
   // Load history when wallet connects.
   useEffect(() => {
