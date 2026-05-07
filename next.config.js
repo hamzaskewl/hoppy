@@ -1,6 +1,6 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  serverExternalPackages: ['@solana/web3.js', '@lightprotocol/hasher.rs', 'imapflow', 'mailparser', 'pg', 'snarkjs'],
+  serverExternalPackages: ['@solana/web3.js', '@lightprotocol/hasher.rs', 'imapflow', 'mailparser', 'pg', 'snarkjs', '@umbra-privacy/sdk', '@umbra-privacy/web-zk-prover'],
   async rewrites() {
     return [
       {
