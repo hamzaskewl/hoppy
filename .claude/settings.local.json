@@ -19,7 +19,16 @@
       "Bash(npm install *)",
       "mcp__helius__parseTransactions",
       "Bash(git checkout *)",
-      "Bash(git add *)"
+      "Bash(git add *)",
+      "Bash(git commit *)",
+      "Bash(git fetch *)",
+      "Bash(git stash *)",
+      "Bash(git merge *)",
+      "Bash(git ls-tree *)",
+      "Bash(echo \"---exit:$?\")",
+      "Bash(echo \"exit:$?\")",
+      "Bash(echo \"---grep_exit:$?\")",
+      "Bash(awk -F: '{print $1\":\"$2\":\"$3}')"
     ],
     "additionalDirectories": [
       "c:\\Users\\wante\\Downloads\\hopy\\hoppy-demo"

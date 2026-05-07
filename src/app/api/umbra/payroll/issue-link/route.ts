@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { inspect } from "util";
 import { umbraPayrollIssueLink, encodeNoteToUrl } from "@/lib/umbra";
 
 // ZK proof + on-chain UTXO creation can take 30–120s.
@@ -43,7 +44,7 @@ export async function POST(req: Request) {
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : "issue-link failed";
-    console.error("[umbra/payroll/issue-link]", err);
+    console.error("[umbra/payroll/issue-link]", inspect(err, { depth: null, colors: false }));
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }

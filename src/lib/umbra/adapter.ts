@@ -39,6 +39,7 @@ import {
   umbraRelayer,
   createUtxoProver,
   claimUtxoProver,
+  registrationProver,
   networkName,
 } from "./client";
 import {
@@ -54,7 +55,17 @@ import { PublicKey } from "@solana/web3.js";
 const WSOL_MINT_STR = WSOL_MINT.toBase58();
 
 /** Minimum SOL we keep in the escrow as gas/rent buffer (lamports). */
-const ESCROW_BUFFER = 20_000_000; // 0.02 SOL
+const ESCROW_BUFFER = 100_000_000; // 0.1 SOL — covers per-link stealth funding for ~3 links per top-up
+
+/**
+ * SOL transferred to each stealth wallet at issuance time. Pays for:
+ *   1. Stealth's own Umbra registration (required so issuance can encrypt to it).
+ *   2. Later: register-noop + claim + withdraw + unwrap + transfer when the
+ *      recipient claims (5 txs).
+ * 0.03 SOL is generous; unused remainder is drained back to the recipient on
+ * claim by the existing transferSol(stealth → recipient) step.
+ */
+const STEALTH_FUND_BUDGET = 30_000_000; // 0.03 SOL
 
 // ============================================================================
 // URL codec
@@ -143,7 +154,10 @@ export async function umbraPayrollDeposit(
 
   // 3. Build Umbra client + register escrow.
   const client = await umbraClientFor(escrow);
-  const register = getUserRegistrationFunction({ client });
+  const register = getUserRegistrationFunction(
+    { client },
+    { zkProver: registrationProver() },
+  );
   await register({ confidential: true, anonymous: true });
 
   // 4. Deposit wSOL into encrypted balance.
@@ -194,9 +208,25 @@ export async function umbraPayrollIssueLink(
   const stealthSeed = crypto.getRandomValues(new Uint8Array(32));
   const stealth = stealthKeypairFromSeed(stealthSeed);
 
-  const client = await umbraClientFor(escrow);
+  // Step 1: fund the stealth with SOL. Required so the stealth can pay for its
+  // own Umbra registration (next step) and for the eventual claim flow's txs.
+  await transferSol(escrow, stealth.publicKey, STEALTH_FUND_BUDGET);
+
+  // Step 2: register the stealth on Umbra. Required because createUtxo's ZK
+  // proof needs to encrypt the UTXO commitment against the receiver's
+  // registered Umbra public commitment — fails with "Receiver is not
+  // registered" otherwise.
+  const stealthClient = await umbraClientFor(stealth);
+  const registerStealth = getUserRegistrationFunction(
+    { client: stealthClient },
+    { zkProver: registrationProver() },
+  );
+  await registerStealth({ confidential: true, anonymous: true });
+
+  // Step 3: escrow creates the receiver-claimable UTXO destined for stealth.
+  const escrowClient = await umbraClientFor(escrow);
   const createUtxo = getEncryptedBalanceToReceiverClaimableUtxoCreatorFunction(
-    { client },
+    { client: escrowClient },
     { zkProver: createUtxoProver() },
   );
 
@@ -204,6 +234,15 @@ export async function umbraPayrollIssueLink(
     amount: BigInt(input.amount) as never,
     destinationAddress: stealth.publicKey.toBase58() as never,
     mint: WSOL_MINT_STR as never,
+  });
+
+  console.log("[umbra/payroll/issue-link] createUtxo result", {
+    stealthAddress: stealth.publicKey.toBase58(),
+    amount: input.amount,
+    queueSignature: (result as { queueSignature?: string }).queueSignature,
+    callbackSignature: (result as { callbackSignature?: string }).callbackSignature,
+    callbackElapsedMs: (result as { callbackElapsedMs?: number }).callbackElapsedMs,
+    network: networkName(),
   });
 
   const note: UmbraNote = {
@@ -283,19 +322,42 @@ export async function umbraPayrollClaim(
   const client = await umbraClientFor(stealth);
 
   // Register stealth (idempotent — no-op if already registered).
-  const register = getUserRegistrationFunction({ client });
+  const register = getUserRegistrationFunction(
+    { client },
+    { zkProver: registrationProver() },
+  );
   await register({ confidential: true, anonymous: true });
 
   // Find the receiver-claimable UTXO targeting this stealth.
   // The claim function fetches merkle proofs internally via the
   // fetchBatchMerkleProof dep — we just pass the scanned UTXOs.
   const scan = getClaimableUtxoScannerFunction({ client });
-  const scanned = await scan(0 as never, 0 as never);
-  const matching: ScannedUtxoData[] = scanned.received.filter(
-    (u) => BigInt(u.amount) === BigInt(input.note.amount),
-  );
+  const scanned = await scan(BigInt(0) as never, BigInt(0) as never);
+  console.log("[umbra/payroll/claim] scanner result", {
+    receivedCount: scanned.received.length,
+    receivedAmounts: scanned.received.map((u) => String(u.amount)),
+    publicReceivedCount: scanned.publicReceived?.length ?? 0,
+    selfBurnableCount: scanned.selfBurnable?.length ?? 0,
+    publicSelfBurnableCount: scanned.publicSelfBurnable?.length ?? 0,
+    expectedAmount: input.note.amount,
+    stealthAddress: stealth.publicKey.toBase58(),
+    network: networkName(),
+    indexerUrl:
+      process.env.UMBRA_INDEXER_URL ??
+      (networkName() === "mainnet-beta"
+        ? "https://utxo-indexer.api.umbraprivacy.com"
+        : "https://utxo-indexer.api-devnet.umbraprivacy.com"),
+  });
+
+  // A fresh stealth wallet only ever has one UTXO destined for it (the one
+  // we created at issuance). Take the first received UTXO regardless of
+  // exact amount — the on-chain amount may differ from the note amount by
+  // Umbra's protocol fee.
+  const matching: ScannedUtxoData[] = scanned.received;
   if (matching.length === 0) {
-    throw new Error("no claimable UTXO found for this link");
+    throw new Error(
+      "no claimable UTXO found for this link — receiver-claimable computation may not have finalized yet, or the indexer hasn't picked it up",
+    );
   }
 
   // The IUmbraClient runtime exposes fetchBatchMerkleProof directly even

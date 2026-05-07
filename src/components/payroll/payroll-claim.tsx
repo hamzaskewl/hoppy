@@ -3,7 +3,8 @@
 import { useEffect, useMemo, useState } from "react";
 import bs58 from "bs58";
 import Image from "next/image";
-import { usePrivy } from "@privy-io/react-auth";
+import { useWallet } from "@solana/wallet-adapter-react";
+import { useWalletModal } from "@solana/wallet-adapter-react-ui";
 import {
   Wallet,
   Check,
@@ -18,23 +19,17 @@ import type { UmbraNote } from "@/lib/payroll/types";
 type Phase = "loading" | "ready" | "claiming" | "claimed" | "error";
 
 export function PayrollClaim() {
-  const { login, ready, authenticated, user } = usePrivy();
+  const { publicKey, connected } = useWallet();
+  const { setVisible: openWalletModal } = useWalletModal();
   const [note, setNote] = useState<UmbraNote | null>(null);
   const [phase, setPhase] = useState<Phase>("loading");
   const [error, setError] = useState<string | null>(null);
   const [txHash, setTxHash] = useState<string | null>(null);
 
-  const recipientWallet = useMemo<string | null>(() => {
-    if (!user) return null;
-    const linked = user.linkedAccounts?.find((a) => {
-      const acct = a as { type?: string; chainType?: string; address?: string };
-      return acct.type === "wallet" && acct.chainType === "solana";
-    }) as { address?: string } | undefined;
-    if (linked?.address) return linked.address;
-    const main = user.wallet?.address;
-    if (main && !main.startsWith("0x")) return main;
-    return null;
-  }, [user]);
+  const recipientWallet = useMemo<string | null>(
+    () => publicKey?.toBase58() ?? null,
+    [publicKey],
+  );
 
   // Decode the note from the URL hash on mount.
   useEffect(() => {
@@ -81,7 +76,7 @@ export function PayrollClaim() {
     }
   };
 
-  if (!ready || phase === "loading") {
+  if (phase === "loading") {
     return <div className="text-center py-16 text-muted-foreground">…</div>;
   }
 
@@ -160,8 +155,8 @@ export function PayrollClaim() {
         </div>
       )}
 
-      {!authenticated || !recipientWallet ? (
-        <Button onClick={() => login()} size="lg" className="w-full">
+      {!connected || !recipientWallet ? (
+        <Button onClick={() => openWalletModal(true)} size="lg" className="w-full">
           <Wallet className="w-5 h-5" />
           Connect wallet to claim
         </Button>

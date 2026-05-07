@@ -18,18 +18,20 @@ async function deriveKey(
   config: CryptoConfig,
 ): Promise<CryptoKey> {
   const encoder = new TextEncoder();
+  const rawKey = encoder.encode(walletAddress + config.keyMaterialSuffix);
   const keyMaterial = await crypto.subtle.importKey(
     "raw",
-    encoder.encode(walletAddress + config.keyMaterialSuffix),
+    rawKey.buffer as ArrayBuffer,
     "PBKDF2",
     false,
     ["deriveKey"],
   );
 
+  const salt = encoder.encode(config.salt);
   return crypto.subtle.deriveKey(
     {
       name: "PBKDF2",
-      salt: encoder.encode(config.salt),
+      salt: salt.buffer as ArrayBuffer,
       iterations: 100_000,
       hash: "SHA-256",
     },
@@ -47,10 +49,11 @@ export async function encryptData(
 ): Promise<string> {
   const key = await deriveKey(walletAddress, config);
   const iv = crypto.getRandomValues(new Uint8Array(12));
+  const encoded = new TextEncoder().encode(data);
   const encrypted = await crypto.subtle.encrypt(
-    { name: "AES-GCM", iv },
+    { name: "AES-GCM", iv: iv.buffer as ArrayBuffer },
     key,
-    new TextEncoder().encode(data),
+    encoded.buffer as ArrayBuffer,
   );
 
   const combined = new Uint8Array(iv.length + encrypted.byteLength);
@@ -81,9 +84,9 @@ export async function decryptData(
     const ciphertext = combined.slice(12);
 
     const decrypted = await crypto.subtle.decrypt(
-      { name: "AES-GCM", iv },
+      { name: "AES-GCM", iv: iv.buffer as ArrayBuffer },
       key,
-      ciphertext,
+      ciphertext.buffer as ArrayBuffer,
     );
 
     return new TextDecoder().decode(decrypted);

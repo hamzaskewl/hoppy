@@ -2,14 +2,10 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Image from "next/image";
-import { usePrivy } from "@privy-io/react-auth";
-import {
-  useSignAndSendTransaction,
-  useWallets,
-} from "@privy-io/react-auth/solana";
+import { useConnection, useWallet } from "@solana/wallet-adapter-react";
+import { useWalletModal } from "@solana/wallet-adapter-react-ui";
 import bs58 from "bs58";
 import {
-  Connection,
   PublicKey,
   SystemProgram,
   Transaction,
@@ -40,25 +36,15 @@ function emptyRow(): EmployeeRow {
   return { id: crypto.randomUUID(), label: "", amount: "" };
 }
 
-const SOLANA_RPC =
-  process.env.NEXT_PUBLIC_SOLANA_RPC_URL ?? "https://api.devnet.solana.com";
-
 export function PayrollDashboard() {
-  const { login, logout, ready, authenticated, user } = usePrivy();
-  const { signAndSendTransaction } = useSignAndSendTransaction();
-  const { wallets: privyWallets } = useWallets();
+  const { publicKey, connected, sendTransaction, disconnect } = useWallet();
+  const { connection } = useConnection();
+  const { setVisible: openWalletModal } = useWalletModal();
 
-  const businessWallet = useMemo<string | null>(() => {
-    if (!user) return null;
-    const linked = user.linkedAccounts?.find((a) => {
-      const acct = a as { type?: string; chainType?: string; address?: string };
-      return acct.type === "wallet" && acct.chainType === "solana";
-    }) as { address?: string } | undefined;
-    if (linked?.address) return linked.address;
-    const main = user.wallet?.address;
-    if (main && !main.startsWith("0x")) return main;
-    return null;
-  }, [user]);
+  const businessWallet = useMemo<string | null>(
+    () => publicKey?.toBase58() ?? null,
+    [publicKey],
+  );
 
   const [rows, setRows] = useState<EmployeeRow[]>([emptyRow()]);
   const [showCsv, setShowCsv] = useState(false);
@@ -146,33 +132,24 @@ export function PayrollDashboard() {
         setProgress(
           `Sending ${lamportsToSol(delta).toFixed(4)} SOL to escrow…`,
         );
-        const privyWallet = privyWallets.find(
-          (w) => w.address === businessWallet,
-        );
-        if (!privyWallet) {
-          throw new Error("Connected Privy wallet not found");
+        if (!publicKey) {
+          throw new Error("Wallet not connected");
         }
-        const conn = new Connection(SOLANA_RPC, "confirmed");
-        const { blockhash } = await conn.getLatestBlockhash("confirmed");
+        const { blockhash } = await connection.getLatestBlockhash("confirmed");
         const tx = new Transaction({
-          feePayer: new PublicKey(businessWallet),
+          feePayer: publicKey,
           recentBlockhash: blockhash,
         }).add(
           SystemProgram.transfer({
-            fromPubkey: new PublicKey(businessWallet),
+            fromPubkey: publicKey,
             toPubkey: escrowPk,
             lamports: delta,
           }),
         );
-        const serialized = tx.serialize({ requireAllSignatures: false });
-        const result = await signAndSendTransaction({
-          transaction: new Uint8Array(serialized),
-          wallet: privyWallet,
-        });
-        const sigStr = bs58.encode(result.signature);
+        const sigStr = await sendTransaction(tx, connection);
 
         setProgress("Waiting for confirmation…");
-        await conn.confirmTransaction(sigStr, "confirmed");
+        await connection.confirmTransaction(sigStr, "confirmed");
 
         setProgress(
           "Wrapping SOL → wSOL and depositing into Umbra (this can take 30–120s)…",
@@ -215,8 +192,7 @@ export function PayrollDashboard() {
           body: JSON.stringify({
             businessWallet,
             amount,
-            from:
-              user?.email?.address ?? shortenAddress(businessWallet, 4),
+            from: shortenAddress(businessWallet, 4),
             origin: window.location.origin,
           }),
         });
@@ -309,11 +285,7 @@ export function PayrollDashboard() {
     setHistory([]);
   };
 
-  if (!ready) {
-    return <div className="text-center py-12 text-muted-foreground">…</div>;
-  }
-
-  if (!authenticated || !businessWallet) {
+  if (!connected || !businessWallet) {
     return (
       <div className="max-w-xl mx-auto">
         <div className="rounded-2xl bg-card border-2 border-border p-8 text-center space-y-4">
@@ -327,7 +299,7 @@ export function PayrollDashboard() {
               History is encrypted in your browser, scoped to this wallet.
             </p>
           </div>
-          <Button onClick={() => login()} size="lg">
+          <Button onClick={() => openWalletModal(true)} size="lg">
             <Wallet className="w-5 h-5" />
             Connect wallet
           </Button>
@@ -369,7 +341,7 @@ export function PayrollDashboard() {
           <div className="text-xs text-muted-foreground font-mono mt-1">
             {shortenAddress(businessWallet, 4)} ·{" "}
             <button
-              onClick={() => logout()}
+              onClick={() => disconnect()}
               className="underline hover:text-foreground"
             >
               disconnect

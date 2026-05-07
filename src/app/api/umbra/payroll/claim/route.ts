@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { inspect } from "util";
 import { umbraPayrollClaim, umbraPayrollRecall } from "@/lib/umbra";
 import type { UmbraNote } from "@/lib/payroll/types";
 
@@ -36,7 +37,7 @@ export async function POST(req: Request) {
     return NextResponse.json(result);
   } catch (err) {
     const message = err instanceof Error ? err.message : "claim failed";
-    console.error("[umbra/payroll/claim]", err);
+    console.error("[umbra/payroll/claim]", inspect(err, { depth: null, colors: false }));
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }

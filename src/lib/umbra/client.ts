@@ -7,6 +7,8 @@
 
 import {
   createSignerFromPrivateKeyBytes,
+  getPollingComputationMonitor,
+  getPollingTransactionForwarder,
   getUmbraClient,
   getUmbraRelayer,
 } from "@umbra-privacy/sdk";
@@ -46,10 +48,11 @@ function rpcSubscriptionsUrl(): string {
 }
 
 function indexerUrl(): string {
-  return env(
-    "UMBRA_INDEXER_URL",
-    "https://utxo-indexer.api.umbraprivacy.com",
-  );
+  const defaultUrl =
+    networkName() === "mainnet-beta"
+      ? "https://utxo-indexer.api.umbraprivacy.com"
+      : "https://utxo-indexer.api-devnet.umbraprivacy.com";
+  return env("UMBRA_INDEXER_URL", defaultUrl);
 }
 
 function relayerUrl(): string {
@@ -73,13 +76,20 @@ export async function umbraClientFor(kp: Keypair): Promise<IUmbraClient> {
 
   promise = (async () => {
     const signer = await createSignerFromPrivateKeyBytes(kp.secretKey);
-    return await getUmbraClient({
-      signer,
-      network: networkName() === "mainnet-beta" ? "mainnet" : "devnet",
-      rpcUrl: rpcUrl(),
-      rpcSubscriptionsUrl: rpcSubscriptionsUrl(),
-      indexerApiEndpoint: indexerUrl(),
-    });
+    const url = rpcUrl();
+    return await getUmbraClient(
+      {
+        signer,
+        network: networkName() === "mainnet-beta" ? "mainnet" : "devnet",
+        rpcUrl: url,
+        rpcSubscriptionsUrl: rpcSubscriptionsUrl(),
+        indexerApiEndpoint: indexerUrl(),
+      },
+      {
+        transactionForwarder: getPollingTransactionForwarder({ rpcUrl: url }),
+        computationMonitor: getPollingComputationMonitor({ rpcUrl: url }),
+      },
+    );
   })();
 
   clientCache.set(cacheKey, promise);
