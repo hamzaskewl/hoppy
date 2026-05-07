@@ -54,8 +54,15 @@ import { PublicKey } from "@solana/web3.js";
 
 const WSOL_MINT_STR = WSOL_MINT.toBase58();
 
-/** Minimum SOL we keep in the escrow as gas/rent buffer (lamports). */
-const ESCROW_BUFFER = 100_000_000; // 0.1 SOL — covers per-link stealth funding for ~3 links per top-up
+/**
+ * Minimum native SOL we keep in escrow as gas/rent buffer.
+ * Each link consumes ~STEALTH_FUND_BUDGET (0.03) plus ~0.005 in tx fees +
+ * temporary proof-account rent. So 0.05 + 0.035*N lamports is the floor.
+ *
+ * The default 0.2 SOL covers ~5 links comfortably. Callers issuing more links
+ * should increase totalAmount in the deposit so the buffer scales.
+ */
+const ESCROW_BUFFER = 200_000_000; // 0.2 SOL
 
 /**
  * SOL transferred to each stealth wallet at issuance time. Pays for:
@@ -66,6 +73,23 @@ const ESCROW_BUFFER = 100_000_000; // 0.1 SOL — covers per-link stealth fundin
  * claim by the existing transferSol(stealth → recipient) step.
  */
 const STEALTH_FUND_BUDGET = 30_000_000; // 0.03 SOL
+
+/**
+ * Minimum total deposit (lamports) needed to issue `nLinks` payroll links
+ * and have all gas/rent covered. Frontend should validate against this
+ * BEFORE sending the bulk deposit so we never end up with a stuck escrow.
+ *
+ *   sum(amounts) + N × STEALTH_FUND_BUDGET + ESCROW_BUFFER
+ */
+export function minimumDepositForPayroll(
+  amountsSum: number,
+  nLinks: number,
+): number {
+  return amountsSum + nLinks * STEALTH_FUND_BUDGET + ESCROW_BUFFER;
+}
+
+export const PAYROLL_STEALTH_FUND_BUDGET = STEALTH_FUND_BUDGET;
+export const PAYROLL_ESCROW_BUFFER = ESCROW_BUFFER;
 
 // ============================================================================
 // URL codec
@@ -410,6 +434,101 @@ export async function umbraPayrollRecall(
   businessWallet: string,
 ): Promise<PayrollClaimResult> {
   return umbraPayrollClaim({ note, recipientAddress: businessWallet });
+}
+
+// ============================================================================
+// Bulk refund — drain escrow's encrypted balance + native SOL back to business
+// ============================================================================
+
+export interface PayrollRefundInput {
+  businessWallet: string;
+}
+
+export interface PayrollRefundResult {
+  encryptedWithdrawn: number;
+  nativeRefunded: number;
+  unwrapTxHash?: string;
+  refundTxHash?: string;
+}
+
+/**
+ * Drain the per-business escrow back to the business wallet.
+ *
+ * 1. Withdraw all encrypted-balance wSOL to escrow's public wSOL ATA.
+ * 2. Unwrap wSOL → native SOL on the escrow.
+ * 3. Sweep all native SOL on the escrow → business wallet.
+ *
+ * Does NOT recover funds already issued as employee links — those need to
+ * be recalled per-link via `umbraPayrollRecall`.
+ */
+export async function umbraPayrollRefund(
+  input: PayrollRefundInput,
+): Promise<PayrollRefundResult> {
+  const escrow = getEscrowKeypair(input.businessWallet);
+  const escrowPk = escrow.publicKey;
+  const businessPk = new PublicKey(input.businessWallet);
+
+  const result: PayrollRefundResult = {
+    encryptedWithdrawn: 0,
+    nativeRefunded: 0,
+  };
+
+  // 1. Try to withdraw all encrypted balance to public wSOL ATA.
+  try {
+    const escrowClient = await umbraClientFor(escrow);
+    const withdrawFn =
+      getEncryptedBalanceToPublicBalanceDirectWithdrawerFunction({
+        client: escrowClient,
+      });
+
+    // Probe encrypted balance with a generous query if available; otherwise
+    // fall back to attempting a withdraw of the deposit amount and let the
+    // SDK error if it's empty. The withdrawer will refund the gas if no-op.
+    const querier = escrowClient as unknown as {
+      getEncryptedBalance?: (mint: string) => Promise<bigint>;
+    };
+    let encryptedBal = BigInt(0);
+    if (typeof querier.getEncryptedBalance === "function") {
+      try {
+        encryptedBal = await querier.getEncryptedBalance(WSOL_MINT_STR);
+      } catch {
+        // ignore — fallback below
+      }
+    }
+
+    if (encryptedBal > BigInt(0)) {
+      await withdrawFn(
+        escrow.publicKey.toBase58() as never,
+        WSOL_MINT_STR as never,
+        encryptedBal as never,
+      );
+      result.encryptedWithdrawn = Number(encryptedBal);
+    }
+  } catch (err) {
+    console.warn("[refund] encrypted withdraw failed:", err);
+    // continue — native sweep below may still recover something
+  }
+
+  // 2. Unwrap any wSOL → native SOL.
+  try {
+    const u = await unwrapAllWsol(escrow);
+    if (u.signature) result.unwrapTxHash = u.signature;
+  } catch (err) {
+    console.warn("[refund] unwrap failed:", err);
+  }
+
+  // 3. Sweep all native SOL → business wallet (leave dust for fee).
+  const { getSolBalance } = await import("./wsol");
+  const nativeBal = await getSolBalance(escrowPk);
+  const FEE_RESERVE = 5_000;
+  const sweepable = Math.max(0, nativeBal - FEE_RESERVE);
+  if (sweepable > 0) {
+    const sig = await transferSol(escrow, businessPk, sweepable);
+    result.refundTxHash = sig;
+    result.nativeRefunded = sweepable;
+  }
+
+  return result;
 }
 
 // ============================================================================

@@ -53,6 +53,38 @@ export function PayrollDashboard() {
   const [error, setError] = useState<string | null>(null);
   const [history, setHistory] = useState<PayrollRun[]>([]);
   const [latestRun, setLatestRun] = useState<PayrollRun | null>(null);
+  const [refunding, setRefunding] = useState(false);
+  const [refundResult, setRefundResult] = useState<string | null>(null);
+
+  const handleRefund = useCallback(async () => {
+    if (!businessWallet) return;
+    if (!confirm("Drain ALL escrow funds (encrypted balance + native SOL) back to your wallet? This won't recover funds already issued as employee links.")) return;
+    setRefunding(true);
+    setRefundResult(null);
+    setError(null);
+    try {
+      const res = await fetch("/api/umbra/payroll/refund", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ businessWallet }),
+      });
+      const json = (await res.json()) as {
+        encryptedWithdrawn?: number;
+        nativeRefunded?: number;
+        error?: string;
+      };
+      if (!res.ok) throw new Error(json.error ?? "refund failed");
+      const total = (json.encryptedWithdrawn ?? 0) + (json.nativeRefunded ?? 0);
+      setRefundResult(
+        `Refunded ${(total / 1e9).toFixed(4)} SOL back to your wallet (${((json.encryptedWithdrawn ?? 0) / 1e9).toFixed(4)} from encrypted, ${((json.nativeRefunded ?? 0) / 1e9).toFixed(4)} native).`,
+      );
+      setPoolBalance(0);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "refund failed");
+    } finally {
+      setRefunding(false);
+    }
+  }, [businessWallet]);
 
   // Local pool balance: lamports the business has deposited into the Umbra
   // pool but not yet issued as links. Tracked client-side for now since the
@@ -111,7 +143,13 @@ export function PayrollDashboard() {
       let poolPositionId: string | null = null;
       let depositTxHash = "";
       if (poolBalance < totalLamports) {
-        const delta = totalLamports - poolBalance;
+        // Need: sum(amounts) + N × 0.03 SOL stealth funding + 0.2 SOL escrow buffer
+        const STEALTH_FUND_BUDGET = 30_000_000;
+        const ESCROW_BUFFER = 200_000_000;
+        const gasNeeded = rows.length * STEALTH_FUND_BUDGET + ESCROW_BUFFER;
+        const amountDelta = totalLamports - poolBalance;
+        // Always include enough native gas/rent for issuance to succeed
+        const delta = amountDelta + gasNeeded;
 
         setPhase("depositing");
         setProgress("Resolving escrow address…");
@@ -130,7 +168,7 @@ export function PayrollDashboard() {
         const escrowPk = new PublicKey(escrowJson.escrowAddress);
 
         setProgress(
-          `Sending ${lamportsToSol(delta).toFixed(4)} SOL to escrow…`,
+          `Sending ${lamportsToSol(delta).toFixed(4)} SOL to escrow (incl. ${lamportsToSol(gasNeeded).toFixed(2)} SOL gas/rent for ${rows.length} link${rows.length === 1 ? "" : "s"})…`,
         );
         if (!publicKey) {
           throw new Error("Wallet not connected");
@@ -346,9 +384,23 @@ export function PayrollDashboard() {
             >
               disconnect
             </button>
+            {" · "}
+            <button
+              onClick={handleRefund}
+              disabled={refunding}
+              className="underline hover:text-red-500 disabled:opacity-50"
+              title="Drain all funds in your escrow back to this wallet"
+            >
+              {refunding ? "refunding…" : "refund escrow"}
+            </button>
           </div>
         </div>
       </header>
+      {refundResult && (
+        <div className="mb-4 p-3 rounded-lg bg-green-50 dark:bg-green-900/20 border border-green-500/30 text-sm text-green-700 dark:text-green-400">
+          {refundResult}
+        </div>
+      )}
 
       {latestRun && phase === "done" ? (
         <GeneratedLinks
