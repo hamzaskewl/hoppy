@@ -27,7 +27,7 @@ export interface GiftCardOrder {
   paymentAddress?: string;
   paymentAmountSol?: number;
   
-  // Privacy Cash data
+  // Umbra payment data
   depositTxHash?: string;
   withdrawTxHash?: string;
   

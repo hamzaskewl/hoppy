@@ -2,7 +2,7 @@
  * Confirm payment for gift card order
  * 
  * Called after client has:
- * 1. Deposited to Privacy Cash pool
+ * 1. Deposited to Umbra
  * 2. Withdrawn to Starpay payment address
  * 
  * This marks the order as "paid" so we start watching for the email.

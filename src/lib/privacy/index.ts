@@ -1,4 +1,4 @@
-// Umbra Privacy Adapter (replaces Privacy Cash)
+// Umbra Privacy Adapter
 export {
   // Types
   type UmbraNote,

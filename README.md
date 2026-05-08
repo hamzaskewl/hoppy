@@ -1,7 +1,6 @@
-# hoppy 
+# hoppy
 
 **Privacy-First Payments on Solana**
-🏆 Privacy Cash SDK Bounty $1,000 Winner 🏆
 
 Sending crypto shouldn't require the recipient to have a wallet set up, share their address, or expose their identity. With hoppy, you just share a link. The money is in the link. They claim it privately.
 
@@ -15,7 +14,7 @@ Sending crypto shouldn't require the recipient to have a wallet set up, share th
 
 ---
 
-`solana` `privacy` `zk-compression` `payments` `web3` `hackathon`
+`solana` `privacy` `stealth-addresses` `zk` `payments` `payroll` `web3`
 
 ## Table of Contents
 
@@ -24,7 +23,7 @@ Sending crypto shouldn't require the recipient to have a wallet set up, share th
 - [Demo](#demo)
 - [Features](#features)
 - [How It Works](#how-it-works)
-  - [Double Hop Privacy](#how-double-hop-privacy-works)
+  - [Stealth-Address Privacy](#stealth-address-privacy)
 - [Quick Start](#quick-start)
 - [Project Structure](#project-structure)
 - [Security Model](#security-model)
@@ -44,13 +43,13 @@ Sending crypto is harder than it should be:
 - Every transaction is publicly visible on-chain
 - Your wallet history becomes your financial identity
 
-This friction prevents everyday use cases: sending money to friends, private gifts, paying someone who doesn't have crypto yet.
+This friction prevents everyday use cases: sending money to friends, private gifts, paying someone who doesn't have crypto yet, running payroll without exposing every employee's salary on-chain.
 
 ## The Solution
 
 hoppy lets you send crypto by sharing a link.
 
-You deposit funds into a shielded pool and get a claim link. Share that link with anyone via text, email, or QR code. They open it, connect any wallet, and claim the funds. Nobody except the link holder knows what it contains, and on-chain observers cannot connect sender to recipient.
+You deposit funds into an encrypted Umbra UTXO and get a claim link. Share that link with anyone via text, email, or QR code. They open it, connect any wallet, and the funds are routed to them through a stealth address. The deposit and the withdrawal don't have a direct on-chain edge — observers can't connect sender to recipient.
 
 **No address needed. No wallet required upfront. Complete privacy.**
 
@@ -76,12 +75,14 @@ You deposit funds into a shielded pool and get a claim link. Share that link wit
 | Feature | Description |
 |---------|-------------|
 | **Link-Based Payments** | Send money by sharing a link, no recipient address needed |
-| **Complete Privacy** | On-chain observers cannot link sender to recipient |
+| **Stealth-Address Privacy** | On-chain observers cannot link sender to recipient |
 | **No Wallet Required** | Recipients can sign in with email to create a wallet instantly |
 | **QR Code Sharing** | Generate scannable codes for mobile claiming |
-| **Gasless Claims** | Recipients don't need SOL to claim, relayer pays fees |
-| **Recipient Privacy Choice** | Recipients can choose quick (cheaper) or private (hidden from sender) |
-| **Virtual Debit Cards** | Convert shielded crypto to Visa/Mastercard *(in progress)* |
+| **Gasless Claims** | Recipients don't need SOL to claim; the relayer subsidizes fees |
+| **Recipient Privacy Choice** | Recipients can choose Quick (cheaper) or Private (hidden from sender) |
+| **Private Payroll** | Upload a CSV, fund one escrow, mint a claim link per employee. Refunds unclaimed funds. |
+| **Multi-Token** | SOL, USDC, USDT on Solana mainnet |
+| **Virtual Debit Cards** | Convert encrypted balance to Visa/Mastercard *(in progress)* |
 | **Gift Card Payouts** | Redeem to Amazon, Uber, DoorDash *(in progress)* |
 | **Live on Mainnet** | Real SOL, real privacy, production-ready |
 
@@ -93,35 +94,33 @@ You deposit funds into a shielded pool and get a claim link. Share that link wit
   <img src="public/howitworks.svg" alt="How hoppy works" width="100%" />
 </p>
 
-### How Double Hop Privacy Works
+### Stealth-Address Privacy
 
-When using **Private Mode**, hoppy routes funds through the shielded pool twice, making transactions completely unlinkable.
+hoppy is built on top of the [Umbra](https://umbra.cash) privacy SDK, which combines stealth addresses with encrypted UTXOs.
 
-**Sender Side (First Hop):**
-1. Sender deposits funds into a temporary wallet
-2. That wallet sends funds through the shielded pool
-3. Funds arrive at **Ephemeral Wallet 2** (a fresh keypair)
-4. A **384-bit composite secret** (containing a 256-bit Ed25519 private key seed) is encoded into the claim link
+**Sender Side:**
+1. Sender deposits funds into Umbra's encrypted balance, bound to an ephemeral keypair
+2. The on-chain artifact is ciphertext — amount and destination aren't visible to outside observers
+3. The ephemeral keypair seed is encoded into the URL hash of the claim link
 
-**Recipient Side (Second Hop):**
-1. Recipient opens the claim link
-2. The app extracts the Ephemeral Wallet 2 keypair from the link
-3. Using that keypair, funds are sent through the shielded pool again
-4. Funds arrive at the recipient's actual wallet
+**Recipient Side:**
+1. Recipient opens the claim link; the app extracts the ephemeral key from the URL hash
+2. The encrypted UTXO is unlocked and routed to the recipient via a fresh stealth address
+3. A relayer covers gas, so recipients don't need any SOL to claim
 
 **Why Neither Party Can Trace:**
-- **Sender** doesn't have the claim note, so they can't see where funds went after Ephemeral Wallet 2
-- **Recipient** doesn't know where the funds in Ephemeral Wallet 2 came from
-- **On-chain observers** see two separate pool transactions with no connection between them
+- **On-chain observers** see a deposit into ciphertext and an unrelated withdrawal to a fresh stealth address. There's no direct edge connecting the two.
+- **Sender** doesn't have the recipient's claim destination, only the link.
+- **Recipient** doesn't know which deposit funded their UTXO.
 
-Two hops through the pool = complete sender-recipient unlinkability.
+ZK proofs (Groth16) guarantee the math is correct — the deposit was legitimately encrypted, the withdrawal corresponds to a real UTXO that hasn't been claimed before — without revealing the participants.
 
 ### Sending a Payment
 
 1. Connect your wallet (or sign in with email)
 2. Enter the amount you want to send
-3. Funds are deposited into a shielded pool
-4. You receive a claim link with a cryptographic secret
+3. Funds are deposited into Umbra's encrypted balance
+4. You receive a claim link with the ephemeral key embedded in the URL hash
 5. Share the link however you want (text, email, QR)
 
 ### Claiming Funds
@@ -130,14 +129,26 @@ Two hops through the pool = complete sender-recipient unlinkability.
 2. Connects any wallet (or creates one with email)
 3. Chooses privacy level (Quick or Private)
 4. Clicks "Claim" and funds arrive in their wallet
-5. No SOL needed for gas (relayer pays transaction fees)
+5. No SOL needed for gas — the relayer pays transaction fees
 
 ### Privacy Levels
 
 | Level | What Happens | Who Can See Recipient |
 |-------|--------------|----------------------|
-| **Quick Claim** | Direct withdrawal, cheaper | Sender can see if they check |
-| **Private Claim** | Extra routing hop, more private | Nobody, not even sender |
+| **Quick Claim** | Direct withdrawal to recipient's wallet, cheaper | Sender can see if they check |
+| **Private Claim** | Routes through Umbra's mixer first, then to recipient | Nobody, not even sender |
+
+### Private Payroll
+
+For paying multiple recipients in one go:
+
+1. Upload a CSV with names and amounts
+2. Sign **one** bulk deposit transaction into a deterministic Umbra escrow tied to your wallet
+3. The server mints a self-claimable UTXO per recipient and returns one claim link each
+4. Recipients claim through the same flow above
+5. Anything left unclaimed can be refunded to your wallet at any time
+
+Each ZK proof for link generation takes ~30–120s server-side, so larger payrolls take a moment to issue.
 
 ---
 
@@ -201,20 +212,24 @@ hoppy/
 │   │   ├── create/              # Create private payment
 │   │   ├── claim/               # Claim funds
 │   │   ├── card/                # Virtual cards (WIP)
+│   │   ├── payroll/             # Private payroll dashboard + claim
 │   │   ├── roadmap/             # Project roadmap
 │   │   └── api/                 # API routes
-│   │       ├── relayer/         # Gas-funding relayer (breaks on-chain link)
+│   │       ├── umbra/payroll/   # Bulk issuance: deposit, issue-link, refund
+│   │       ├── relayer/         # Gas-funding relayer
 │   │       ├── card/            # Virtual card issuance
 │   │       └── sol-price/       # Price feed
 │   │
 │   ├── components/
 │   │   ├── create/              # Deposit flow UI
 │   │   ├── claim/               # Claim flow UI
+│   │   ├── payroll/             # Payroll dashboard, CSV import, link table
 │   │   ├── card/                # Card purchase UI
 │   │   └── ui/                  # Reusable components
 │   │
 │   └── lib/
-│       ├── privacy/             # Privacy pool SDK integration
+│       ├── privacy/             # Umbra adapter for personal sends
+│       ├── umbra/               # Umbra adapter for payroll + escrow
 │       ├── solana/              # Solana utilities
 │       └── card/                # Card issuance logic
 │
@@ -229,11 +244,13 @@ hoppy/
 
 | Layer | Protection |
 |-------|------------|
-| **Shielded Pool** | ZK-compressed state, cryptographic commitments, unlinkable deposits/withdrawals |
-| **Claim Links** | Cryptographic secret in URL hash, only link holder can claim |
-| **Nullifiers** | Each claim link can only be used once, prevents double-spending |
-| **No Custody** | Funds flow directly through on-chain pool, hoppy never holds your crypto |
-| **Recipient Choice** | Recipients choose their privacy level when claiming |
+| **Encrypted UTXOs** | Amounts and destinations are stored as ciphertext on-chain |
+| **Stealth Addresses** | Each withdrawal lands at a fresh address derived from a viewing key |
+| **ZK Proofs (Groth16)** | Registration, deposit, and claim each require a proof of correctness |
+| **Claim Links** | Ephemeral key in the URL hash; only the link holder can derive the UTXO |
+| **Nullifiers** | Each UTXO can only be claimed once, preventing double-spending |
+| **No Custody (personal sends)** | Funds flow directly through Umbra; hoppy never holds your crypto |
+| **Server-Held Escrow (payroll only)** | Payroll escrows are derived from a server master key for bulk issuance; refundable to the depositing wallet |
 | **Open Source** | All code is auditable |
 
 ### Important Notes
@@ -241,6 +258,7 @@ hoppy/
 - **Claim link is the secret.** Anyone with the URL can claim the funds. Share securely.
 - **Quick claims are traceable.** If recipient chooses "Quick Claim", sender can see who claimed by checking the blockchain.
 - **Private claims are hidden.** If recipient chooses "Private Claim", even the sender cannot see who received the funds.
+- **Payroll escrow is custodial.** Payroll deposits are held in a server-controlled escrow until employees claim or you refund. Personal sends remain non-custodial.
 
 ---
 
@@ -254,12 +272,13 @@ hoppy/
 - Framer Motion
 
 **Privacy Infrastructure**
-- Privacy Cash SDK
-- Light Protocol (ZK Compression)
+- `@umbra-privacy/sdk` v4 — stealth addresses + encrypted UTXOs
+- `@umbra-privacy/web-zk-prover` — client-side Groth16 proofs (WASM)
+- Server-side Groth16 prover for payroll link issuance
 - Helius RPC
 
 **Authentication**
-- Embedded wallets + social login
+- Privy (embedded wallets + social login)
 - External wallet support (Phantom, Solflare, etc.)
 
 **Infrastructure**
@@ -271,13 +290,15 @@ hoppy/
 ## Roadmap
 
 ### Recently Completed
+- [x] **Private Payroll** - May 2026 - CSV bulk issuance, deterministic escrow, refund for unclaimed funds
+- [x] **Network-aware claims** - May 2026 - Claim links carry their own network so cross-network deposits resolve correctly
 - [x] **Cancel/Recall Payments** - February 4th, 2026 - Get back unclaimed funds, send to your wallet or a custom address
 - [x] **Partial Claims** - February 4th, 2026 - Claim only a portion, get a new link for the remainder
 - [x] **Multi-token support (USDC, USDT)** - February 3rd, 2026
 - [x] **Relayer for SPL gas fees** - February 3rd, 2026 - Automatic SOL subsidies for stablecoin claims
 
 ### In Progress
-- [ ] Virtual debit cards (using Reloadly) - Convert shielded crypto to Visa/Mastercard
+- [ ] Virtual debit cards (using Reloadly) - Convert encrypted balance to Visa/Mastercard
 - [ ] Gift cards (using Reloadly) - Redeem to Amazon, Uber, DoorDash, and more
 
 ### Up Next
@@ -295,8 +316,7 @@ hoppy/
 
 ## Acknowledgments
 
-- **Privacy Cash** - ZK compression infrastructure
-- **Light Protocol** - Underlying ZK technology
+- **Umbra** - Stealth-address + encrypted UTXO privacy SDK
 - **Helius** - Reliable Solana RPC
 - **Solana Foundation** - Hackathon sponsorship
 

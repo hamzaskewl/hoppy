@@ -3,7 +3,7 @@
  * 
  * 1. Creates order in local storage
  * 2. Creates Starpay order with hoppy's proxy email
- * 3. Returns payment details for Privacy Cash withdrawal
+ * 3. Returns payment details for Umbra withdrawal
  */
 
 import { NextRequest, NextResponse } from "next/server";
