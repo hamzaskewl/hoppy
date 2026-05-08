@@ -41,10 +41,17 @@ export const UMBRA_FEE_PERCENT = UMBRA_FEE_BPS / UMBRA_BPS_DIVISOR; // ≈ 0.002
 
 /**
  * Gas buffer for ephemeral Umbra ops (registration + proof account + tx fees).
- * Measured on-chain: actual consumption is ~0.003 SOL. We leave a 2x margin
- * for safety. Any unused balance gets drained back to the claimer.
+ *
+ * NET cost is only ~0.003 SOL (most rent gets reclaimed via ClaimComputationRent),
+ * but PEAK requirement is higher because Arcium's QueueComputation rent
+ * (~0.006 SOL) has to be paid before it gets reclaimed. So we need at least:
+ *   0.006 (queue rent) + 0.002 (init account + token register) + 0.001 (tx fees)
+ *   ≈ 0.009 SOL peak.
+ *
+ * We use 0.012 to be safe. Any unused balance gets drained back to the claimer
+ * on claim, so over-funding is not "wasted" — just temporarily locked.
  */
-export const EPHEMERAL_GAS_BUFFER = 5_000_000; // 0.005 SOL
+export const EPHEMERAL_GAS_BUFFER = 12_000_000; // 0.012 SOL
 
 /** Extra rent needed for creating wSOL ATA on the sender ephemeral (recovered when ATA closed) */
 export const WSOL_ATA_RENT = 2_039_280; // exact rent-exempt minimum for token account
@@ -302,9 +309,10 @@ export function calculateFullDepositInfo(
 export function estimatePrivateClaimReceives(utxoAmount: number): number {
   // ATA rent always recovered when wSOL ATA is closed during claim drain
   const ataRentRecovered = WSOL_ATA_RENT;
-  // Of the gas buffer, registration + UTXO creation consume ~0.0028 SOL of
-  // non-recoverable rent/fees; the rest is drained back. Conservative 50%.
-  const estimatedLeftoverGas = Math.floor(EPHEMERAL_GAS_BUFFER * 0.5);
+  // Most of the gas buffer is reclaimable rent (Arcium QueueComputation,
+  // proof accounts) — only ~0.003 SOL is permanently consumed. Conservative
+  // 70% leftover assumption.
+  const estimatedLeftoverGas = Math.floor(EPHEMERAL_GAS_BUFFER * 0.7);
   // Drain tx itself costs ~5000 lamports
   const drainTxFee = 5000;
   return utxoAmount + ataRentRecovered + estimatedLeftoverGas - drainTxFee;
