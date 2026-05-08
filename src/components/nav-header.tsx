@@ -13,7 +13,7 @@ const navItems = [
   { href: "/payroll", label: "Payroll", icon: Users },
   { href: "/card", label: "Virtual Cards", icon: CreditCard },
   { href: "/roadmap", label: "Roadmap", icon: Map },
-  { href: "/how-it-works", label: "How it works", icon: HelpCircle },
+  { href: "/how-it-works", label: "How it Works", icon: HelpCircle },
 ];
 
 // Hoppy Logo Component - Uses the bunny image
@@ -64,7 +64,7 @@ export function NavHeader() {
         <div className="flex items-center gap-8">
           <Link href="/" className="flex items-center gap-2">
             <HoppyLogo size={36} />
-            <span className="font-semibold text-lg">hoppy</span>
+            <span className=" text-lg">hoppy</span>
           </Link>
 
           <nav className="hidden sm:flex items-center gap-1">
