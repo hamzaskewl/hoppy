@@ -360,7 +360,7 @@ export function PayrollDashboard() {
             <Wallet className="w-7 h-7 text-hop-600 dark:text-hop-300" />
           </div>
           <div>
-            <h2 className="text-xl font-semibold">Connect to start payroll</h2>
+            <h2 className="text-xl ">Connect to start payroll</h2>
             <p className="text-sm text-muted-foreground mt-1">
               Connect a Solana wallet — this becomes the business identity.
               History is encrypted in your browser, scoped to this wallet.
@@ -391,7 +391,7 @@ export function PayrollDashboard() {
             />
           </div>
           <div>
-            <h1 className="text-2xl font-bold tracking-tight">Payroll</h1>
+            <h1 className="text-2xl  tracking-tight">Payroll</h1>
             <p className="text-sm text-muted-foreground">
               Deposit once, distribute privately to many.
             </p>
@@ -401,7 +401,7 @@ export function PayrollDashboard() {
           <div className="text-xs text-muted-foreground">
             Pool balance (this device)
           </div>
-          <div className="text-2xl font-bold tabular-nums">
+          <div className="text-2xl  tabular-nums">
             {lamportsToSol(poolBalance).toFixed(4)}{" "}
             <span className="text-base text-muted-foreground">SOL</span>
           </div>
@@ -442,7 +442,7 @@ export function PayrollDashboard() {
       ) : (
         <section className="space-y-3">
           <div className="flex items-center justify-between">
-            <h2 className="text-base font-semibold">New payroll run</h2>
+            <h2 className="text-base ">New payroll run</h2>
             {busy && (
               <div className="text-xs text-muted-foreground flex items-center gap-2">
                 <span className="inline-block w-3 h-3 rounded-full border-2 border-hop-500 border-t-transparent animate-spin" />

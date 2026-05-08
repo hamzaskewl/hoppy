@@ -1124,7 +1124,7 @@ export function CreateLinkForm() {
                       {walletBalance !== null && (
                         <div className="text-right">
                           <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Balance</p>
-                          <p className="text-sm font-semibold font-mono">{lamportsToSol(walletBalance).toFixed(4)} SOL</p>
+                          <p className="text-sm  font-mono">{lamportsToSol(walletBalance).toFixed(4)} SOL</p>
                         </div>
                       )}
                     </div>
@@ -1146,7 +1146,7 @@ export function CreateLinkForm() {
                   <div className="p-3 rounded-xl bg-honey-100 dark:bg-yellow-900/20 border-2 border-honey-400">
                     <p className="text-xs text-honey-700 dark:text-yellow-400 font-medium mb-1">No Solana Wallet</p>
                     <p className="text-xs text-muted-foreground">
-                      You're connected with an EVM wallet. Please logout and connect with <strong>Phantom</strong> or another Solana wallet.
+                      You're connected with an EVM wallet. Please logout and connect with Phantom or another Solana wallet.
                     </p>
                   </div>
                   <Button onClick={disconnect} className="w-full" variant="outline">
@@ -1266,7 +1266,7 @@ export function CreateLinkForm() {
                         }
                       }}
                       placeholder={selectedToken === "SOL" ? "0.00" : "0"}
-                      className="text-3xl h-16 text-left font-bold bg-card border-2 border-border focus:border-hop-500 pl-4 pr-28"
+                      className="text-3xl h-16 text-left  bg-card border-2 border-border focus:border-hop-500 pl-4 pr-28"
                     />
                     {/* Token Dropdown */}
                     <div className="absolute right-2 top-1/2 -translate-y-1/2">
@@ -1286,7 +1286,7 @@ export function CreateLinkForm() {
                             style={{ width: 20, height: 20 }}
                           />
                         )}
-                        <span className="font-semibold text-muted-foreground">
+                        <span className=" text-muted-foreground">
                           {selectedToken === "SOL" && currency === "USD" ? "USD" : selectedToken}
                         </span>
                         <ChevronDown className={`w-4 h-4 text-muted-foreground transition-transform ${showTokenDropdown ? "rotate-180" : ""}`} />
@@ -1417,7 +1417,7 @@ export function CreateLinkForm() {
                           }
                         </span>
                       </div>
-                      <div className="border-t border-border pt-2 flex justify-between font-semibold">
+                      <div className="border-t border-border pt-2 flex justify-between ">
                         <span>Total</span>
                         <span className="text-hop-600 dark:text-hop-400">
                           {selectedToken === "SOL"
@@ -1466,7 +1466,7 @@ export function CreateLinkForm() {
                             ) : (
                               <Lock className={`w-4 h-4 ${isDisabled ? "text-muted-foreground" : isSelected ? "text-hop-600" : "text-hop-500"}`} />
                             )}
-                            <span className={`text-sm font-semibold ${isDisabled ? "text-muted-foreground" : isSelected && (mode as string) === "private" ? "text-hop-700 dark:text-hop-300" : ""}`}>
+                            <span className={`text-sm  ${isDisabled ? "text-muted-foreground" : isSelected && (mode as string) === "private" ? "text-hop-700 dark:text-hop-300" : ""}`}>
                               {info.label}
                               {isDisabled && <span className="ml-1 text-[10px] font-normal">(Coming Soon)</span>}
                             </span>
@@ -1486,7 +1486,7 @@ export function CreateLinkForm() {
                 {costBreakdown && (
                   <div className="p-3 rounded-xl bg-hop-100/50 dark:bg-hop-900/20 border-2 border-hop-300 dark:border-hop-700">
                     <p className="text-[10px] text-muted-foreground uppercase tracking-wide mb-1">Recipient gets (max)</p>
-                    <p className="text-lg font-bold text-hop-700 dark:text-hop-300">
+                    <p className="text-lg  text-hop-700 dark:text-hop-300">
                       {selectedToken === "SOL"
                         ? `${lamportsToSol(costBreakdown.recipientQuick).toFixed(4)} SOL`
                         : `${(costBreakdown.recipientQuick / 10 ** costBreakdown.decimals).toFixed(2)} ${selectedToken}`}
@@ -1501,7 +1501,7 @@ export function CreateLinkForm() {
                 <Button
                   onClick={handleDeposit}
                   loading={isDepositing}
-                  className="w-full h-12 font-semibold text-sm"
+                  className="w-full h-12  text-sm"
                   size="lg"
                   disabled={
                     !costBreakdown ||
@@ -1557,7 +1557,7 @@ export function CreateLinkForm() {
                 />
               </motion.div>
             </div>
-            <h3 className="mt-6 text-lg font-semibold">Creating Payment Link</h3>
+            <h3 className="mt-6 text-lg ">Creating Payment Link</h3>
             <p className="mt-2 text-sm text-muted-foreground">
               {depositProgress || "Hopping through privacy..."}
             </p>
@@ -1580,7 +1580,7 @@ export function CreateLinkForm() {
             <div className="p-4 rounded-xl bg-hop-200 dark:bg-hop-500/20 border-2 border-hop-500 text-center">
               <div className="flex items-center justify-center gap-2 mb-2">
                 <Check className="w-5 h-5 text-hop-600 dark:text-hop-400" />
-                <span className="font-semibold text-hop-700 dark:text-hop-300">Link Created & Copied!</span>
+                <span className=" text-hop-700 dark:text-hop-300">Link Created & Copied!</span>
               </div>
               <p className="text-xs text-muted-foreground">
                 The claim link has been automatically copied to your clipboard and saved locally.
@@ -1612,7 +1612,7 @@ export function CreateLinkForm() {
             {/* Amount */}
             <div className="p-4 rounded-xl bg-hop-100 dark:bg-hop-500/10 border-2 border-hop-400 text-center">
               <p className="text-sm text-muted-foreground">Recipient Will Receive</p>
-              <p className="text-2xl font-bold text-hop-700 dark:text-hop-400">
+              <p className="text-2xl  text-hop-700 dark:text-hop-400">
                 {(() => {
                   const isSOL = !umbraNote.token || umbraNote.token === "SOL";
                   // For private sends, recipient gets UTXO + recovered ATA rent + leftover gas
@@ -1732,7 +1732,7 @@ export function CreateLinkForm() {
               <div className="flex items-start gap-2">
                 <Save className="w-4 h-4 text-hop-600 dark:text-hop-400 mt-0.5 flex-shrink-0" />
                 <p className="text-xs text-hop-700 dark:text-hop-200/80">
-                  <strong>Saved locally:</strong> This link is encrypted and stored in your browser. 
+                  Saved locally: This link is encrypted and stored in your browser. 
                   Only you can access it. View your history anytime.
                 </p>
               </div>
@@ -1912,7 +1912,7 @@ export function CreateLinkForm() {
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
           <div className="bg-card border-2 border-border rounded-2xl p-6 w-full max-w-md shadow-xl">
             <div className="flex items-center justify-between mb-4">
-              <h3 className="text-lg font-bold flex items-center gap-2">
+              <h3 className="text-lg  flex items-center gap-2">
                 <Undo2 className="w-5 h-5 text-amber-500" />
                 Recall Payment
               </h3>
@@ -1940,7 +1940,7 @@ export function CreateLinkForm() {
 
             <div className="mb-4">
               <p className="text-sm text-muted-foreground mb-1">Amount</p>
-              <p className="font-semibold">{lamportsToSol(recallModalLink.amount).toFixed(4)} SOL</p>
+              <p className="">{lamportsToSol(recallModalLink.amount).toFixed(4)} SOL</p>
             </div>
 
             <div className="mb-4">

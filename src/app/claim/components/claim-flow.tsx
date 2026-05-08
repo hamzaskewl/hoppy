@@ -649,7 +649,7 @@ export function ClaimFlow() {
           >
             <CardContent className="py-12 text-center">
               <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-hop-500 mx-auto" />
-              <h3 className="mt-6 text-lg font-semibold">Reading Payment Link...</h3>
+              <h3 className="mt-6 text-lg ">Reading Payment Link...</h3>
               <p className="mt-2 text-sm text-muted-foreground">
                 Validating your private payment
               </p>
@@ -679,7 +679,7 @@ export function ClaimFlow() {
                 </div>
               </div>
 
-              <h3 className="text-xl font-bold text-center mb-1">
+              <h3 className="text-xl  text-center mb-1">
                 Payment Ready to Claim
               </h3>
               <p className="text-sm text-muted-foreground text-center mb-4">
@@ -730,11 +730,11 @@ export function ClaimFlow() {
                           {mode === "private" && (
                             <Image src="/bunnypriv.png" alt="Private" width={28} height={28} className="w-7 h-7" />
                           )}
-                          <span className={`text-sm font-semibold ${isSelected && mode === "private" ? "text-hop-700 dark:text-hop-300" : ""}`}>
+                          <span className={`text-sm  ${isSelected && mode === "private" ? "text-hop-700 dark:text-hop-300" : ""}`}>
                             {info.name}
                           </span>
                         </div>
-                        <p className={`text-lg font-bold ${isSelected && mode === "private" ? "text-hop-700 dark:text-hop-300" : ""}`}>
+                        <p className={`text-lg  ${isSelected && mode === "private" ? "text-hop-700 dark:text-hop-300" : ""}`}>
                           {(() => {
                             const isSOL = !state.note!.token || state.note!.token === "SOL";
                             if (isSOL) {
@@ -896,7 +896,7 @@ export function ClaimFlow() {
                 <Check className="w-10 h-10 text-white" />
               </motion.div>
               
-              <h3 className="mt-6 text-2xl font-bold">Claim Complete!</h3>
+              <h3 className="mt-6 text-2xl ">Claim Complete!</h3>
               <p className="mt-2 text-muted-foreground">
                 {state.error ? (
                   <span className="text-amber-600 dark:text-amber-400">
@@ -974,7 +974,7 @@ export function ClaimFlow() {
                 <div className="p-4 rounded-xl bg-background border border-border mb-4">
                   <div className="flex justify-between text-sm mb-2">
                     <span className="text-muted-foreground">Original Amount</span>
-                    <span className="font-semibold">
+                    <span className="">
                       {(() => {
                         const isSOL = !state.note.token || state.note.token === "SOL";
                         if (isSOL) {

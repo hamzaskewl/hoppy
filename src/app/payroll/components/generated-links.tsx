@@ -28,7 +28,7 @@ export function GeneratedLinks({ run, onDone }: GeneratedLinksProps) {
     <div className="space-y-3">
       <div className="flex items-center justify-between">
         <div>
-          <h3 className="text-base font-semibold">
+          <h3 className="text-base ">
             Generated {run.links.length} payment link
             {run.links.length === 1 ? "" : "s"}
           </h3>

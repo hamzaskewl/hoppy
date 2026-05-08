@@ -51,7 +51,7 @@ export function PayrollHistory({
   return (
     <div className="space-y-3">
       <div className="flex items-center justify-between">
-        <h3 className="text-base font-semibold">History (local)</h3>
+        <h3 className="text-base ">History (local)</h3>
         <Button variant="ghost" size="sm" onClick={onClearAll}>
           <Trash2 className="w-4 h-4" />
           Clear all

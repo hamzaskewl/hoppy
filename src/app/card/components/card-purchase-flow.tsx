@@ -328,7 +328,7 @@ export function CardPurchaseFlow({ disabled = false }: { disabled?: boolean }) {
                   </div>
                   <div className="border-t-2 border-border pt-3 flex justify-between">
                     <span className="font-medium">Total</span>
-                    <span className="font-semibold text-lg">${order.pricing.total.toFixed(2)}</span>
+                    <span className=" text-lg">${order.pricing.total.toFixed(2)}</span>
                   </div>
                 </div>
 
@@ -359,7 +359,7 @@ export function CardPurchaseFlow({ disabled = false }: { disabled?: boolean }) {
                   <div className="flex items-center justify-between">
                     <span className="text-sm">Amount to send</span>
                     <div className="flex items-center gap-2">
-                      <span className="text-2xl font-bold text-hop-700 dark:text-hop-300">{order.payment.amountSol} SOL</span>
+                      <span className="text-2xl  text-hop-700 dark:text-hop-300">{order.payment.amountSol} SOL</span>
                       <Button
                         variant="ghost"
                         size="icon"
@@ -408,7 +408,7 @@ export function CardPurchaseFlow({ disabled = false }: { disabled?: boolean }) {
                   <CreditCard className="w-8 h-8 text-white" />
                 </div>
                 <div>
-                  <h3 className="text-xl font-semibold mb-2">Issuing Your Card</h3>
+                  <h3 className="text-xl  mb-2">Issuing Your Card</h3>
                   <p className="text-muted-foreground">
                     Payment received! Your virtual card is being created...
                   </p>
@@ -444,7 +444,7 @@ export function CardPurchaseFlow({ disabled = false }: { disabled?: boolean }) {
                   <div className="p-6 rounded-2xl bg-gradient-to-br from-slate-800 to-slate-900 border-2 border-slate-600 space-y-4 text-white">
                     <div className="flex justify-between items-start">
                       <span className="text-xs text-slate-400 uppercase">{cardType}</span>
-                      <span className="text-lg font-bold">${order.pricing.cardValue}</span>
+                      <span className="text-lg ">${order.pricing.cardValue}</span>
                     </div>
                     <div className="space-y-1">
                       <p className="text-xs text-slate-400">Card Number</p>
@@ -464,7 +464,7 @@ export function CardPurchaseFlow({ disabled = false }: { disabled?: boolean }) {
                 ) : (
                   <div className="p-4 rounded-xl bg-hop-100 dark:bg-hop-500/10 border-2 border-hop-400 text-center">
                     <p className="text-hop-700 dark:text-hop-200">
-                      Card details have been sent to <strong>{email}</strong>
+                      Card details have been sent to {email}
                     </p>
                   </div>
                 )}
@@ -491,7 +491,7 @@ export function CardPurchaseFlow({ disabled = false }: { disabled?: boolean }) {
                   <AlertTriangle className="w-8 h-8 text-red-600 dark:text-red-400" />
                 </div>
                 <div>
-                  <h3 className="text-xl font-semibold mb-2">Something went wrong</h3>
+                  <h3 className="text-xl  mb-2">Something went wrong</h3>
                   <p className="text-muted-foreground">{error}</p>
                 </div>
                 <Button onClick={resetFlow}>

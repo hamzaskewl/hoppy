@@ -424,7 +424,7 @@ export function PrivateCardFlow({ disabled = false }: { disabled?: boolean }) {
                   {step === "waiting" && <Gift className="w-8 h-8 text-white" />}
                 </div>
                 <div>
-                  <h3 className="text-xl font-semibold mb-2">
+                  <h3 className="text-xl  mb-2">
                     {step === "depositing" && "Depositing to Privacy Pool"}
                     {step === "withdrawing" && "Sending Private Payment"}
                     {step === "waiting" && "Waiting for Card"}
@@ -496,7 +496,7 @@ export function PrivateCardFlow({ disabled = false }: { disabled?: boolean }) {
 
                 <div className="p-3 rounded-xl bg-hop-100 dark:bg-hop-500/10 border-2 border-hop-400">
                   <p className="text-xs text-hop-700 dark:text-hop-300">
-                    <strong>Privacy Protected:</strong> This card was purchased anonymously. 
+                    Privacy Protected: This card was purchased anonymously. 
                     Share this link with anyone - only link holders can see the card details.
                   </p>
                 </div>
@@ -535,7 +535,7 @@ export function PrivateCardFlow({ disabled = false }: { disabled?: boolean }) {
                   )}
                 </div>
                 <div>
-                  <h3 className="text-xl font-semibold mb-2">
+                  <h3 className="text-xl  mb-2">
                     {recoveryInfo?.success ? "Funds Recovered" : "Something went wrong"}
                   </h3>
                   <p className="text-muted-foreground">{error}</p>

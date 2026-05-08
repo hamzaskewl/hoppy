@@ -98,7 +98,7 @@ export function CsvImport({ onImport, onClose }: CsvImportProps) {
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between px-5 py-4 border-b border-border">
-          <h2 className="text-lg font-semibold">Import CSV</h2>
+          <h2 className="text-lg ">Import CSV</h2>
           <button
             onClick={onClose}
             className="p-1 rounded-md hover:bg-muted"

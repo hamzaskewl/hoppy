@@ -178,7 +178,7 @@ export function ShieldingAnimation({ status, message }: ShieldingAnimationProps)
         animate={{ opacity: 1, y: 0 }}
         transition={{ delay: 0.3 }}
       >
-        <h3 className="text-xl font-semibold mb-2">
+        <h3 className="text-xl  mb-2">
           {status === "detecting" && "Finding Your Funds..."}
           {status === "shielding" && "Hopping Through Privacy..."}
           {status === "complete" && "Claim Complete!"}
