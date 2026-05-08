@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { inspect } from "util";
 import { umbraPayrollDeposit } from "@/lib/umbra";
 
 // ZK + on-chain ops can take minutes.
@@ -36,7 +37,10 @@ export async function POST(req: Request) {
     return NextResponse.json(result);
   } catch (err) {
     const message = err instanceof Error ? err.message : "deposit failed";
-    console.error("[umbra/payroll/deposit]", err);
+    console.error(
+      "[umbra/payroll/deposit] failure",
+      inspect(err, { depth: null, colors: false }),
+    );
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }

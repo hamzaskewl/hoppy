@@ -384,25 +384,97 @@ export function ClaimFlow() {
         );
 
         const scanUtxos = getClaimableUtxoScannerFunction({ client: umbraClient });
-        const fetchResult: any = await scanUtxos(BigInt(0) as any, BigInt(0) as any, BigInt(10000) as any);
+
+        // Sanity check: verify the URL's encoded ephemeral address matches
+        // the keypair we just derived from the seed. If these disagree we
+        // have an encoding bug — log loudly so it doesn't masquerade as a
+        // missing UTXO.
+        const derivedPubkey = ephemeralPubkey.toBase58();
+        const urlEphemeralAddress = state.note.ephemeralAddress;
+        if (urlEphemeralAddress && urlEphemeralAddress !== derivedPubkey) {
+          console.error(
+            "[Claim] ⚠ URL ephemeral address mismatch — encoding bug?",
+            { urlSays: urlEphemeralAddress, derivedFromSeed: derivedPubkey },
+          );
+        } else {
+          console.log("[Claim] Stealth keypair OK", { stealth: derivedPubkey });
+        }
+
         // v4 result fields: selfBurnable | received | publicSelfBurnable | publicReceived
         //   - Regular /create private send → publicSelfBurnable (from public balance)
         //   - Payroll issue-link → selfBurnable (from encrypted balance)
         // Combine ALL self-claimable UTXOs since the claim function handles both.
         // (Don't use `||` — empty arrays are truthy and would break the fallback.)
-        const utxos = [
-          ...(fetchResult.publicSelfBurnable ?? []),
-          ...(fetchResult.selfBurnable ?? []),
-          ...((fetchResult as { self?: unknown[] }).self ?? []),
-        ];
-        console.log("[Claim] Scan result:", {
-          publicSelfBurnable: fetchResult.publicSelfBurnable?.length ?? 0,
-          selfBurnable: fetchResult.selfBurnable?.length ?? 0,
-          received: fetchResult.received?.length ?? 0,
-          publicReceived: fetchResult.publicReceived?.length ?? 0,
-          combinedClaimable: utxos.length,
+        async function scanOnce(): Promise<{ utxos: any[]; raw: any }> {
+          const fetchResult: any = await scanUtxos(
+            BigInt(0) as any,
+            BigInt(0) as any,
+            BigInt(10000) as any,
+          );
+          const utxos: any[] = [
+            ...(fetchResult.publicSelfBurnable ?? []),
+            ...(fetchResult.selfBurnable ?? []),
+            ...(fetchResult.self ?? []),
+          ];
+          return { utxos, raw: fetchResult };
+        }
+
+        // Multi-shot scan with backoff. Indexer lag on devnet can be 5-30s
+        // even after the on-chain tx is confirmed, so a single quick scan
+        // is too eager. Retry up to 5 times across ~30s before giving up.
+        const scanAttempts: Array<{
+          ms: number;
+          publicSelfBurnable: number;
+          selfBurnable: number;
+          received: number;
+          publicReceived: number;
+          combined: number;
+        }> = [];
+        let scan = await scanOnce();
+        scanAttempts.push({
+          ms: 0,
+          publicSelfBurnable: scan.raw.publicSelfBurnable?.length ?? 0,
+          selfBurnable: scan.raw.selfBurnable?.length ?? 0,
+          received: scan.raw.received?.length ?? 0,
+          publicReceived: scan.raw.publicReceived?.length ?? 0,
+          combined: scan.utxos.length,
         });
-        if (utxos.length === 0) throw new Error("No claimable UTXOs found — indexer may not have synced yet, try again in 30s");
+        const RETRY_DELAYS_MS = [3000, 5000, 8000, 12000];
+        for (const delay of RETRY_DELAYS_MS) {
+          if (scan.utxos.length > 0) break;
+          console.log(
+            `[Claim] Empty scan — retrying in ${Math.round(delay / 1000)}s (attempt ${scanAttempts.length + 1})...`,
+          );
+          await new Promise((r) => setTimeout(r, delay));
+          scan = await scanOnce();
+          scanAttempts.push({
+            ms: delay,
+            publicSelfBurnable: scan.raw.publicSelfBurnable?.length ?? 0,
+            selfBurnable: scan.raw.selfBurnable?.length ?? 0,
+            received: scan.raw.received?.length ?? 0,
+            publicReceived: scan.raw.publicReceived?.length ?? 0,
+            combined: scan.utxos.length,
+          });
+        }
+        const { utxos, raw: fetchResult } = scan;
+        console.log("[Claim] Scan attempts:", {
+          stealthAddress: derivedPubkey,
+          attemptCount: scanAttempts.length,
+          attempts: scanAttempts,
+          finalCombinedClaimable: utxos.length,
+          fullFinalResult: fetchResult,
+        });
+        if (utxos.length === 0) {
+          // All scans came back empty after ~28s of retries. That's almost
+          // certainly a structurally broken link (UTXO not on-chain or
+          // mis-encrypted). Genuine indexer lag rarely exceeds 10s.
+          const stealthShort = `${derivedPubkey.slice(0, 6)}…${derivedPubkey.slice(-4)}`;
+          throw new Error(
+            `Couldn't find claimable funds for ${stealthShort} after ${scanAttempts.length} scan attempts over ${
+              scanAttempts.reduce((s, a) => s + a.ms, 0) / 1000
+            }s. The link may be invalid — please ask whoever sent it to re-issue.`,
+          );
+        }
         await claimFn(utxos);
 
         // Bundle wSOL ATA close + SOL transfer into a single tx so the ATA's

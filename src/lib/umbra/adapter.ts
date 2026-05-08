@@ -23,6 +23,7 @@ import {
   getPublicBalanceToEncryptedBalanceDirectDepositorFunction,
   getEncryptedBalanceToSelfClaimableUtxoCreatorFunction,
   getEncryptedBalanceToPublicBalanceDirectWithdrawerFunction,
+  getClaimableUtxoScannerFunction,
 } from "@umbra-privacy/sdk";
 import bs58 from "bs58";
 import type { UmbraNote } from "@/lib/payroll/types";
@@ -36,6 +37,7 @@ import {
   createUtxoProver,
   registrationProver,
   networkName,
+  rpcUrl,
 } from "./client";
 import {
   WSOL_MINT,
@@ -45,9 +47,253 @@ import {
   transferSol,
   wsolAtaFor,
 } from "./wsol";
-import { PublicKey } from "@solana/web3.js";
+import { Connection, PublicKey } from "@solana/web3.js";
+import type { IUmbraClient } from "@umbra-privacy/sdk/interfaces";
+import { randomUUID } from "crypto";
 
 const WSOL_MINT_STR = WSOL_MINT.toBase58();
+
+// ============================================================================
+// Reliability helpers
+// ============================================================================
+//
+// The Umbra SDK's "queue + callback" operations (deposit, registration, UTXO
+// creation) return as soon as the queue tx is mined, but the *effect* of the
+// op is only on-chain after a follow-up callback tx runs. Without explicitly
+// confirming the callback, the next step in our pipeline can race ahead and
+// see stale state — escrow balance still 0, stealth viewing key not yet
+// uploaded, etc. — silently producing broken UTXOs.
+//
+// These helpers make every async hop verified-on-chain before the next runs.
+
+function newCorrelationId(): string {
+  return randomUUID().slice(0, 8);
+}
+
+function newConnection(): Connection {
+  return new Connection(rpcUrl(), "confirmed");
+}
+
+/**
+ * Confirm an Umbra callback signature on-chain. No-ops cleanly if the SDK
+ * didn't return a callback sig (some operations don't have one). Throws on
+ * timeout or on a tx error.
+ */
+async function confirmCallbackOnChain(
+  conn: Connection,
+  signature: string | undefined,
+  label: string,
+  cid: string,
+  timeoutMs: number,
+): Promise<void> {
+  if (!signature) {
+    console.warn(`[payroll/${cid}][${label}] no callback signature returned`);
+    return;
+  }
+
+  const start = Date.now();
+  const { blockhash, lastValidBlockHeight } =
+    await conn.getLatestBlockhash("confirmed");
+
+  let result: { value: { err: unknown } };
+  try {
+    result = (await Promise.race([
+      conn.confirmTransaction(
+        { signature, blockhash, lastValidBlockHeight },
+        "confirmed",
+      ),
+      new Promise<never>((_, reject) =>
+        setTimeout(
+          () =>
+            reject(
+              new Error(
+                `${label} callback confirmation timed out after ${timeoutMs}ms (sig=${signature})`,
+              ),
+            ),
+          timeoutMs,
+        ),
+      ),
+    ])) as { value: { err: unknown } };
+  } catch (err) {
+    console.error(`[payroll/${cid}][${label}] callback confirm error`, err);
+    throw err;
+  }
+
+  if (result.value.err) {
+    throw new Error(
+      `${label} callback failed on-chain: ${JSON.stringify(result.value.err)} (sig=${signature})`,
+    );
+  }
+  console.log(`[payroll/${cid}][${label}] callback confirmed`, {
+    signature,
+    elapsedMs: Date.now() - start,
+  });
+}
+
+/**
+ * Poll the escrow's encrypted balance until it reaches `expectedAtLeast` or
+ * the deadline elapses. Returns the observed balance. Throws on timeout.
+ *
+ * Tolerates the SDK not exposing getEncryptedBalance — if the method is
+ * missing, logs a warning and returns 0n without throwing (so callers
+ * don't break on SDK upgrades).
+ */
+async function verifyEncryptedBalance(
+  client: IUmbraClient,
+  mint: string,
+  expectedAtLeast: bigint,
+  label: string,
+  cid: string,
+  timeoutMs: number,
+): Promise<bigint> {
+  const querier = client as unknown as {
+    getEncryptedBalance?: (mint: string) => Promise<bigint>;
+  };
+  if (typeof querier.getEncryptedBalance !== "function") {
+    console.warn(
+      `[payroll/${cid}][${label}] client.getEncryptedBalance not available, skipping balance check`,
+    );
+    return BigInt(0);
+  }
+
+  const deadline = Date.now() + timeoutMs;
+  let lastBalance = BigInt(0);
+  let attempts = 0;
+  while (Date.now() < deadline) {
+    attempts += 1;
+    try {
+      lastBalance = await querier.getEncryptedBalance(mint);
+      if (lastBalance >= expectedAtLeast) {
+        console.log(
+          `[payroll/${cid}][${label}] encrypted balance verified`,
+          {
+            balance: lastBalance.toString(),
+            expectedAtLeast: expectedAtLeast.toString(),
+            attempts,
+          },
+        );
+        return lastBalance;
+      }
+    } catch (err) {
+      console.warn(
+        `[payroll/${cid}][${label}] getEncryptedBalance error (attempt ${attempts})`,
+        err,
+      );
+    }
+    await new Promise((r) => setTimeout(r, 2000));
+  }
+
+  throw new Error(
+    `${label} encrypted balance not credited within ${timeoutMs}ms ` +
+      `(observed ${lastBalance.toString()}, needed ≥ ${expectedAtLeast.toString()})`,
+  );
+}
+
+/**
+ * Walk an error's `.cause` chain and return all messages joined.
+ * Used to recognize "already registered" / blockhash-expired errors that
+ * the Umbra SDK wraps several layers deep.
+ */
+function fullErrorMessage(err: unknown): string {
+  const messages: string[] = [];
+  let e: unknown = err;
+  while (e) {
+    const m = (e as { message?: string }).message;
+    if (m) messages.push(m);
+    e = (e as { cause?: unknown }).cause;
+  }
+  return messages.join(" | ");
+}
+
+/**
+ * Idempotent Umbra registration with retries. Mirrors the regular /create
+ * path's `ensureRegistered` (src/lib/privacy/umbra-adapter.ts:800) so the
+ * payroll path benefits from the same hardening: 3 retries on blockhash
+ * expiration, tolerance of "already registered" / AlreadyCallbacked
+ * errors. Additionally confirms each returned signature on-chain — if the
+ * SDK returns queue sigs (rather than awaiting callback completion), this
+ * closes the registration → UTXO-creation race. Idempotent; no-op when
+ * sigs are already mined.
+ */
+async function ensureRegistered(
+  client: IUmbraClient,
+  label: string,
+  cid: string,
+): Promise<void> {
+  const MAX_RETRIES = 3;
+  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+    const start = Date.now();
+    try {
+      // Re-create the registration function each attempt so it picks up a
+      // fresh blockhash when retrying.
+      const register = getUserRegistrationFunction(
+        { client },
+        { zkProver: registrationProver() },
+      );
+      const sigs = await register({ confidential: true, anonymous: true });
+      const sigList = Array.isArray(sigs) ? sigs.map((s) => String(s)) : [];
+      console.log(`[payroll/${cid}][${label}] registration sdk returned`, {
+        attempt,
+        elapsedMs: Date.now() - start,
+        sigs: sigList,
+      });
+
+      // Confirm each returned signature on-chain. Defensive: if the SDK
+      // already waits for finality, these are no-ops; if it returned queue
+      // sigs and the callback is still in flight, we wait for them here.
+      // Without this, the stealth's viewing key may not be queryable on-
+      // chain when createUtxo runs immediately after — producing a UTXO
+      // whose ciphertext can't be resolved and shows up as "missing" to
+      // the recipient's scan.
+      if (sigList.length > 0) {
+        const conn = newConnection();
+        for (const sig of sigList) {
+          await confirmCallbackOnChain(
+            conn,
+            sig,
+            `${label}/sig-confirm`,
+            cid,
+            45_000,
+          );
+        }
+      }
+      return;
+    } catch (error: unknown) {
+      const fullError = fullErrorMessage(error);
+
+      const alreadyRegistered =
+        fullError.includes("already") ||
+        fullError.includes("exists") ||
+        fullError.includes("AlreadyCallbacked") ||
+        fullError.includes("custom program error: #1");
+      if (alreadyRegistered) {
+        console.log(`[payroll/${cid}][${label}] already registered, ok`, {
+          attempt,
+        });
+        return;
+      }
+
+      const blockhashExpired =
+        fullError.includes("block height") ||
+        fullError.includes("blockhash") ||
+        fullError.includes("progressed past");
+      if (blockhashExpired && attempt < MAX_RETRIES) {
+        console.warn(
+          `[payroll/${cid}][${label}] blockhash expired, retry ${attempt}/${MAX_RETRIES}`,
+        );
+        await new Promise((r) => setTimeout(r, 1000));
+        continue;
+      }
+
+      console.error(`[payroll/${cid}][${label}] registration failed`, {
+        attempt,
+        fullError,
+        cause: (error as { cause?: unknown }).cause ?? null,
+      });
+      throw error;
+    }
+  }
+}
 
 /**
  * Minimum native SOL we keep in escrow as gas/rent buffer.
@@ -140,6 +386,8 @@ export interface PayrollDepositResult {
   wrapTxHash: string;
   umbraDepositQueueSignature: string;
   umbraDepositCallbackSignature?: string;
+  /** Correlation id surfaced to the caller for cross-log debugging. */
+  correlationId: string;
 }
 
 /**
@@ -147,6 +395,9 @@ export interface PayrollDepositResult {
  * 2. Wrap (totalAmount - buffer) SOL into wSOL on the escrow's ATA.
  * 3. Idempotent-register the escrow with Umbra.
  * 4. Deposit wSOL into the escrow's encrypted balance.
+ * 5. Confirm the deposit callback on-chain and verify the encrypted balance
+ *    actually reflects the deposit before returning. Without these the next
+ *    issue-link call can read stale state and produce a broken UTXO.
  */
 export async function umbraPayrollDeposit(
   input: PayrollDepositInput,
@@ -157,8 +408,17 @@ export async function umbraPayrollDeposit(
     );
   }
 
+  const cid = newCorrelationId();
   const escrow = getEscrowKeypair(input.businessWallet);
   const escrowPk = escrow.publicKey;
+  const overallStart = Date.now();
+
+  console.log(`[payroll/${cid}][deposit] start`, {
+    businessWallet: input.businessWallet,
+    escrow: escrowPk.toBase58(),
+    totalAmount: input.totalAmount,
+    network: networkName(),
+  });
 
   // 1. Confirm business → escrow transfer.
   const delivered = await confirmSolTransferTo(
@@ -167,19 +427,26 @@ export async function umbraPayrollDeposit(
     input.totalAmount,
   );
   const wrappable = delivered - ESCROW_BUFFER;
+  console.log(`[payroll/${cid}][deposit] business-transfer confirmed`, {
+    delivered,
+    wrappable,
+  });
 
   // 2. Wrap to wSOL on escrow's ATA.
+  const wrapStart = Date.now();
   const { signature: wrapSig } = await wrapSol(escrow, wrappable);
+  console.log(`[payroll/${cid}][deposit] wrap ok`, {
+    sig: wrapSig,
+    elapsedMs: Date.now() - wrapStart,
+  });
 
-  // 3. Build Umbra client + register escrow.
+  // 3. Build Umbra client + ensure escrow is registered (idempotent, retries).
   const client = await umbraClientFor(escrow);
-  const register = getUserRegistrationFunction(
-    { client },
-    { zkProver: registrationProver() },
-  );
-  await register({ confidential: true, anonymous: true });
+  await ensureRegistered(client, "deposit/escrow-register", cid);
 
   // 4. Deposit wSOL into encrypted balance.
+  const conn = newConnection();
+  const depositStart = Date.now();
   const deposit = getPublicBalanceToEncryptedBalanceDirectDepositorFunction({
     client,
   });
@@ -188,6 +455,38 @@ export async function umbraPayrollDeposit(
     WSOL_MINT_STR as never,
     BigInt(wrappable) as never,
   );
+  console.log(`[payroll/${cid}][deposit] sdk deposit returned`, {
+    queueSignature: depositResult.queueSignature,
+    callbackSignature: depositResult.callbackSignature,
+    elapsedMs: Date.now() - depositStart,
+  });
+
+  // 5. Confirm callback is on-chain. The deposit op only credits the
+  //    encrypted balance after the callback runs; without this, a
+  //    follow-on issue-link sees an empty balance.
+  await confirmCallbackOnChain(
+    conn,
+    depositResult.callbackSignature,
+    "deposit/callback",
+    cid,
+    60_000,
+  );
+
+  // 6. Verify the encrypted balance reflects the deposit. Belt-and-braces:
+  //    a confirmed callback should mean the balance is credited, but we
+  //    don't trust the SDK to be perfectly aligned here. Poll up to 30s.
+  await verifyEncryptedBalance(
+    client,
+    WSOL_MINT_STR,
+    BigInt(wrappable),
+    "deposit/balance-verify",
+    cid,
+    30_000,
+  );
+
+  console.log(`[payroll/${cid}][deposit] done`, {
+    totalElapsedMs: Date.now() - overallStart,
+  });
 
   return {
     poolPositionId: escrowPk.toBase58(),
@@ -195,6 +494,7 @@ export async function umbraPayrollDeposit(
     wrapTxHash: wrapSig,
     umbraDepositQueueSignature: depositResult.queueSignature,
     umbraDepositCallbackSignature: depositResult.callbackSignature,
+    correlationId: cid,
   };
 }
 
@@ -211,6 +511,8 @@ export interface PayrollIssueLinkInput {
 export interface PayrollIssueLinkResult {
   note: UmbraNote;
   issueTxHash?: string;
+  /** Correlation id surfaced to the caller for cross-log debugging. */
+  correlationId: string;
 }
 
 /**
@@ -227,37 +529,81 @@ export interface PayrollIssueLinkResult {
  *     and lets us reuse src/components/claim/claim-flow.tsx unchanged.
  *
  * Required registrations:
- *   - The escrow needs to be Umbra-registered (done at deposit time).
- *   - The stealth ALSO needs to be Umbra-registered before escrow can
- *     create the UTXO, because the UTXO ciphertext is encrypted to the
- *     destination's master viewing key. Without on-chain registration,
- *     the destination's viewing key can't be looked up.
+ *   - The escrow needs to be Umbra-registered (done at deposit time, but we
+ *     re-ensure here in case the escrow's registration callback hadn't
+ *     landed when deposit returned).
+ *   - The stealth ALSO needs to be Umbra-registered AND its registration
+ *     callback must be on-chain before the escrow creates the UTXO. The
+ *     UTXO ciphertext is encrypted to the destination's master viewing key
+ *     — if that key isn't on-chain yet, the indexer can't resolve it and
+ *     the UTXO appears "missing" to the recipient forever. This is the
+ *     bug behind the "middle escrow" claim failures.
+ *
+ * The flow is also instrumented with a correlation id so server logs can be
+ * cross-referenced when a single issuance fails partway through.
  */
 export async function umbraPayrollIssueLink(
   input: PayrollIssueLinkInput,
 ): Promise<PayrollIssueLinkResult> {
   if (input.amount <= 0) throw new Error("amount must be positive");
 
+  const cid = newCorrelationId();
+  const overallStart = Date.now();
   const escrow = getEscrowKeypair(input.businessWallet);
   const stealthSeed = crypto.getRandomValues(new Uint8Array(32));
   const stealth = stealthKeypairFromSeed(stealthSeed);
+  const conn = newConnection();
 
-  // Fund the stealth with SOL so it has rent + tx-fee budget for its own
-  // Umbra registration (next step) and the eventual claim flow.
-  await transferSol(escrow, stealth.publicKey, STEALTH_FUND_BUDGET);
+  console.log(`[payroll/${cid}][issue-link] start`, {
+    businessWallet: input.businessWallet,
+    escrow: escrow.publicKey.toBase58(),
+    stealth: stealth.publicKey.toBase58(),
+    amount: input.amount,
+    network: networkName(),
+  });
 
-  // Register the stealth on Umbra. This uploads stealth's master viewing
-  // key on-chain so the escrow can encrypt the UTXO ciphertext to it. Without
-  // this step the scanner can't decrypt the UTXO and it appears "missing".
-  const stealthClient = await umbraClientFor(stealth);
-  const registerStealth = getUserRegistrationFunction(
-    { client: stealthClient },
-    { zkProver: registrationProver() },
+  // 1. Fund the stealth with SOL so it has rent + tx-fee budget for its own
+  //    Umbra registration (next step) and the eventual claim flow.
+  const fundStart = Date.now();
+  const fundSig = await transferSol(
+    escrow,
+    stealth.publicKey,
+    STEALTH_FUND_BUDGET,
   );
-  await registerStealth({ confidential: true, anonymous: true });
+  console.log(`[payroll/${cid}][issue-link] stealth funded`, {
+    sig: fundSig,
+    lamports: STEALTH_FUND_BUDGET,
+    elapsedMs: Date.now() - fundStart,
+  });
 
-  // Escrow creates a self-claimable UTXO destined for the stealth address.
+  // 2. Register the stealth on Umbra. This uploads stealth's master viewing
+  //    key on-chain so the escrow can encrypt the UTXO ciphertext to it.
+  //    `ensureRegistered` retries on blockhash expiration and tolerates
+  //    "already registered" errors (paranoia — the seed is fresh, but the
+  //    SDK may sometimes report odd states).
+  const stealthClient = await umbraClientFor(stealth);
+  await ensureRegistered(stealthClient, "issue-link/stealth-register", cid);
+
+  // 3. Re-ensure the escrow is registered. The deposit step already does
+  //    this, but if a previous deposit's registration callback didn't land,
+  //    the escrow's encryption key may not be queryable yet. Idempotent.
   const escrowClient = await umbraClientFor(escrow);
+  await ensureRegistered(escrowClient, "issue-link/escrow-reregister", cid);
+
+  // 4. Verify the escrow has enough encrypted balance to source the UTXO.
+  //    Without this we may silently create a 0-amount or invalid UTXO if
+  //    the deposit callback hadn't actually credited yet.
+  await verifyEncryptedBalance(
+    escrowClient,
+    WSOL_MINT_STR,
+    BigInt(input.amount),
+    "issue-link/escrow-balance-verify",
+    cid,
+    20_000,
+  );
+
+  // 5. Escrow creates a self-claimable UTXO destined for the stealth address.
+  const createStart = Date.now();
   const createUtxo = getEncryptedBalanceToSelfClaimableUtxoCreatorFunction(
     { client: escrowClient },
     { zkProver: createUtxoProver() },
@@ -269,13 +615,97 @@ export async function umbraPayrollIssueLink(
     mint: WSOL_MINT_STR as never,
   });
 
-  console.log("[umbra/payroll/issue-link] createUtxo result", {
-    stealthAddress: stealth.publicKey.toBase58(),
-    amount: input.amount,
-    queueSignature: (result as { queueSignature?: string }).queueSignature,
-    callbackSignature: (result as { callbackSignature?: string }).callbackSignature,
-    callbackElapsedMs: (result as { callbackElapsedMs?: number }).callbackElapsedMs,
-    network: networkName(),
+  const queueSignature = (result as { queueSignature?: string }).queueSignature;
+  const callbackSignature = (result as { callbackSignature?: string })
+    .callbackSignature;
+  const sdkCallbackElapsedMs = (result as { callbackElapsedMs?: number })
+    .callbackElapsedMs;
+
+  console.log(`[payroll/${cid}][issue-link] createUtxo returned`, {
+    queueSignature,
+    callbackSignature,
+    sdkCallbackElapsedMs,
+    elapsedMs: Date.now() - createStart,
+  });
+
+  // 6. Confirm the UTXO callback is on-chain before returning the link.
+  //    This is the critical step: without it, the link can be shared while
+  //    the UTXO is still mid-flight, and the recipient hits "no UTXOs
+  //    found" — sometimes transiently, sometimes forever if the callback
+  //    later errors.
+  await confirmCallbackOnChain(
+    conn,
+    callbackSignature,
+    "issue-link/utxo-callback",
+    cid,
+    90_000,
+  );
+
+  // 7. Verify the UTXO is actually visible to the indexer from the
+  //    stealth's perspective. The Umbra indexer can lag the on-chain
+  //    state by several seconds; if we return the link too early, the
+  //    recipient's first scan comes up empty and they hit the
+  //    "Couldn't find claimable funds" error even though the UTXO is on
+  //    chain. Poll the scan every 3s until a UTXO shows up or we hit a
+  //    90s deadline.
+  const indexerVerifyStart = Date.now();
+  const stealthScanner = getClaimableUtxoScannerFunction({
+    client: stealthClient,
+  });
+  const indexerDeadline = Date.now() + 90_000;
+  let indexerVisible = false;
+  let indexerAttempts = 0;
+  while (Date.now() < indexerDeadline) {
+    indexerAttempts += 1;
+    try {
+      const scanResult = (await stealthScanner(
+        BigInt(0) as never,
+        BigInt(0) as never,
+        BigInt(10000) as never,
+      )) as {
+        selfBurnable?: unknown[];
+        publicSelfBurnable?: unknown[];
+        self?: unknown[];
+      };
+      const visibleCount =
+        (scanResult.selfBurnable?.length ?? 0) +
+        (scanResult.publicSelfBurnable?.length ?? 0) +
+        (scanResult.self?.length ?? 0);
+      if (visibleCount > 0) {
+        indexerVisible = true;
+        console.log(
+          `[payroll/${cid}][issue-link/indexer-verify] visible to stealth`,
+          {
+            attempts: indexerAttempts,
+            elapsedMs: Date.now() - indexerVerifyStart,
+            selfBurnable: scanResult.selfBurnable?.length ?? 0,
+            publicSelfBurnable: scanResult.publicSelfBurnable?.length ?? 0,
+          },
+        );
+        break;
+      }
+    } catch (err) {
+      console.warn(
+        `[payroll/${cid}][issue-link/indexer-verify] scan error attempt ${indexerAttempts}`,
+        err,
+      );
+    }
+    await new Promise((r) => setTimeout(r, 3000));
+  }
+
+  if (!indexerVisible) {
+    // Don't fail the issuance — the UTXO IS on-chain (we confirmed the
+    // callback). The indexer will catch up eventually. But surface a
+    // warning so server logs make it obvious why the recipient might
+    // hit a transient "no UTXOs" error on their first scan.
+    console.warn(
+      `[payroll/${cid}][issue-link/indexer-verify] NOT visible after ${Math.round((Date.now() - indexerVerifyStart) / 1000)}s — UTXO is on-chain but indexer hasn't caught up. Recipient may need to retry.`,
+    );
+  }
+
+  console.log(`[payroll/${cid}][issue-link] done`, {
+    totalElapsedMs: Date.now() - overallStart,
+    indexerVisible,
   });
 
   const note: UmbraNote = {
@@ -291,7 +721,8 @@ export async function umbraPayrollIssueLink(
 
   return {
     note,
-    issueTxHash: result.queueSignature,
+    issueTxHash: queueSignature,
+    correlationId: cid,
   };
 }
 

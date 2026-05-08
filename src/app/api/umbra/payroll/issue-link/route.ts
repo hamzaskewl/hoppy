@@ -37,7 +37,7 @@ export async function POST(req: Request) {
   const linkOrigin = origin ?? new URL(req.url).origin;
 
   try {
-    const { note, issueTxHash } = await umbraPayrollIssueLink({
+    const { note, issueTxHash, correlationId } = await umbraPayrollIssueLink({
       businessWallet,
       amount,
       from,
@@ -68,10 +68,14 @@ export async function POST(req: Request) {
       note,
       issueTxHash,
       claimUrl,
+      correlationId,
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : "issue-link failed";
-    console.error("[umbra/payroll/issue-link]", inspect(err, { depth: null, colors: false }));
+    console.error(
+      "[umbra/payroll/issue-link] failure",
+      inspect(err, { depth: null, colors: false }),
+    );
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }

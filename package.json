@@ -38,7 +38,7 @@
     "imapflow": "^1.2.8",
     "lucide-react": "^0.563.0",
     "mailparser": "^3.9.3",
-    "next": "^15.5.9",
+    "next": "^15.5.18",
     "pg": "^8.18.0",
     "qrcode.react": "^4.2.0",
     "react": "^19.2.3",
