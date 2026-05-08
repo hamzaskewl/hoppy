@@ -667,6 +667,27 @@ export function getUmbraConfig(): UmbraConfig {
 }
 
 /**
+ * Build a config for a SPECIFIC network, overriding the env-based default.
+ * Used when claiming a note whose network differs from the deploy's network
+ * (e.g. devnet payroll link being claimed on a mainnet-deployed Railway).
+ */
+export function getUmbraConfigForNetwork(network: "mainnet" | "devnet"): UmbraConfig {
+  const rpcUrl = network === "mainnet"
+    ? (process.env.NEXT_PUBLIC_SOLANA_RPC_URL && process.env.NEXT_PUBLIC_SOLANA_NETWORK !== "devnet"
+        ? process.env.NEXT_PUBLIC_SOLANA_RPC_URL
+        : "https://api.mainnet-beta.solana.com")
+    : "https://api.devnet.solana.com";
+  const wsUrl = rpcUrl.replace("https://", "wss://").replace("http://", "ws://");
+  const indexerUrl = network === "mainnet"
+    ? "https://utxo-indexer.api.umbraprivacy.com"
+    : "https://utxo-indexer.api-devnet.umbraprivacy.com";
+  const relayerUrl = network === "mainnet"
+    ? "https://relayer.api.umbraprivacy.com"
+    : "https://relayer.api-devnet.umbraprivacy.com";
+  return { network, rpcUrl, wsUrl, indexerUrl, relayerUrl };
+}
+
+/**
  * Create an Umbra client from a @solana/web3.js Keypair (server-side / bot).
  * Uses createSignerFromKeyPair from the SDK.
  */

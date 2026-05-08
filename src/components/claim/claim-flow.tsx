@@ -19,6 +19,7 @@ import {
   createUmbraClientFromKeypair,
   ensureRegistered,
   estimatePrivateClaimReceives,
+  getUmbraConfigForNetwork,
   type UmbraNote,
   type ClaimMode,
 } from "@/lib/privacy";
@@ -334,7 +335,10 @@ export function ClaimFlow() {
       }
       const ephemeralKeypair = compositeSecret.ephemeralKeypair;
 
-      const rpcUrl = process.env.NEXT_PUBLIC_SOLANA_RPC_URL || "https://api.devnet.solana.com";
+      // Pick RPC based on the NOTE's network, not the deploy env. Allows a
+      // mainnet deploy to claim devnet links (e.g. payroll testing).
+      const noteConfig = getUmbraConfigForNetwork(state.note.network);
+      const rpcUrl = noteConfig.rpcUrl;
       const connection = new Connection(rpcUrl, "confirmed");
 
       const recipientPubkey = new PublicKey(recipientAddress);
@@ -352,8 +356,15 @@ export function ClaimFlow() {
         const { getCdnZkAssetProvider } = await import("@umbra-privacy/web-zk-prover");
         const zkProvider = getCdnZkAssetProvider({ baseUrl: `${window.location.origin}/umbra-zk` });
 
-        // Reconstruct Umbra client from ephemeral
-        const umbraClient = await createUmbraClientFromKeypair(ephemeralKeypair);
+        // IMPORTANT: build the client using the note's network, not the
+        // deploy's NEXT_PUBLIC_SOLANA_NETWORK env. A devnet payroll link
+        // claimed on a mainnet-deployed site must still hit the devnet
+        // indexer / RPC / relayer.
+        const config = getUmbraConfigForNetwork(state.note.network);
+        console.log("[Claim] Using network from note:", state.note.network, "indexer:", config.indexerUrl);
+
+        // Reconstruct Umbra client from ephemeral, overriding env config
+        const umbraClient = await createUmbraClientFromKeypair(ephemeralKeypair, config);
 
         // Claim self-claimable UTXO into public wSOL balance
         setClaimProgress("Claiming from privacy pool...");
@@ -361,8 +372,6 @@ export function ClaimFlow() {
           await import("@umbra-privacy/sdk");
         const { getClaimSelfClaimableUtxoIntoPublicBalanceProver } =
           await import("@umbra-privacy/web-zk-prover");
-        const { getUmbraConfig } = await import("@/lib/privacy");
-        const config = getUmbraConfig();
         const relayer = getUmbraRelayer({
           apiEndpoint: config.relayerUrl,
         } as any);
@@ -377,13 +386,21 @@ export function ClaimFlow() {
         const scanUtxos = getClaimableUtxoScannerFunction({ client: umbraClient });
         const fetchResult: any = await scanUtxos(BigInt(0) as any, BigInt(0) as any, BigInt(10000) as any);
         // v4 result fields: selfBurnable | received | publicSelfBurnable | publicReceived
-        // Private send from public wSOL → publicSelfBurnable
-        const utxos = fetchResult.publicSelfBurnable || fetchResult.selfBurnable || fetchResult.self || [];
+        //   - Regular /create private send → publicSelfBurnable (from public balance)
+        //   - Payroll issue-link → selfBurnable (from encrypted balance)
+        // Combine ALL self-claimable UTXOs since the claim function handles both.
+        // (Don't use `||` — empty arrays are truthy and would break the fallback.)
+        const utxos = [
+          ...(fetchResult.publicSelfBurnable ?? []),
+          ...(fetchResult.selfBurnable ?? []),
+          ...((fetchResult as { self?: unknown[] }).self ?? []),
+        ];
         console.log("[Claim] Scan result:", {
           publicSelfBurnable: fetchResult.publicSelfBurnable?.length ?? 0,
           selfBurnable: fetchResult.selfBurnable?.length ?? 0,
           received: fetchResult.received?.length ?? 0,
           publicReceived: fetchResult.publicReceived?.length ?? 0,
+          combinedClaimable: utxos.length,
         });
         if (utxos.length === 0) throw new Error("No claimable UTXOs found — indexer may not have synced yet, try again in 30s");
         await claimFn(utxos);

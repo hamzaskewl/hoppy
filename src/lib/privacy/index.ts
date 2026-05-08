@@ -64,6 +64,7 @@ export {
   getTokenFromMint,
   // Umbra SDK helpers
   getUmbraConfig,
+  getUmbraConfigForNetwork,
   createUmbraClientFromKeypair,
   createUmbraClientFromWallet,
   createUmbraClientFromPrivateKey,
