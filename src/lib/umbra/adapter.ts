@@ -220,11 +220,18 @@ export interface PayrollIssueLinkResult {
  * existing claim flow (same as a regular private send) handles withdrawal.
  *
  * Why self-claimable instead of receiver-claimable:
- *   - Receiver-claimable UTXOs require the recipient to be Umbra-registered
- *     and to claim into their encrypted balance first (extra friction).
- *   - Self-claimable UTXOs can be claimed directly to a public balance by
- *     anyone holding the seed — exactly the regular Hoppy flow.
- *   - Lets us reuse src/components/claim/claim-flow.tsx unchanged.
+ *   - Receiver-claimable UTXOs land in the recipient's *encrypted* balance,
+ *     forcing them through a 2-step claim (claim → withdraw).
+ *   - Self-claimable UTXOs can be withdrawn directly to a public address
+ *     by anyone holding the seed — matches the regular Hoppy claim flow
+ *     and lets us reuse src/components/claim/claim-flow.tsx unchanged.
+ *
+ * Required registrations:
+ *   - The escrow needs to be Umbra-registered (done at deposit time).
+ *   - The stealth ALSO needs to be Umbra-registered before escrow can
+ *     create the UTXO, because the UTXO ciphertext is encrypted to the
+ *     destination's master viewing key. Without on-chain registration,
+ *     the destination's viewing key can't be looked up.
  */
 export async function umbraPayrollIssueLink(
   input: PayrollIssueLinkInput,
@@ -235,13 +242,21 @@ export async function umbraPayrollIssueLink(
   const stealthSeed = crypto.getRandomValues(new Uint8Array(32));
   const stealth = stealthKeypairFromSeed(stealthSeed);
 
-  // Fund the stealth with SOL so it has rent + tx-fee budget for the eventual
-  // claim flow (close ATA, transfer to recipient, etc.).
+  // Fund the stealth with SOL so it has rent + tx-fee budget for its own
+  // Umbra registration (next step) and the eventual claim flow.
   await transferSol(escrow, stealth.publicKey, STEALTH_FUND_BUDGET);
 
+  // Register the stealth on Umbra. This uploads stealth's master viewing
+  // key on-chain so the escrow can encrypt the UTXO ciphertext to it. Without
+  // this step the scanner can't decrypt the UTXO and it appears "missing".
+  const stealthClient = await umbraClientFor(stealth);
+  const registerStealth = getUserRegistrationFunction(
+    { client: stealthClient },
+    { zkProver: registrationProver() },
+  );
+  await registerStealth({ confidential: true, anonymous: true });
+
   // Escrow creates a self-claimable UTXO destined for the stealth address.
-  // No stealth registration required — anyone with the stealth seed claims it
-  // by reconstructing the keypair and proving knowledge of the secret.
   const escrowClient = await umbraClientFor(escrow);
   const createUtxo = getEncryptedBalanceToSelfClaimableUtxoCreatorFunction(
     { client: escrowClient },
