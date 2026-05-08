@@ -56,7 +56,11 @@ function indexerUrl(): string {
 }
 
 function relayerUrl(): string {
-  return env("UMBRA_RELAYER_URL", "https://relayer.api.umbraprivacy.com");
+  const defaultUrl =
+    networkName() === "mainnet-beta"
+      ? "https://relayer.api.umbraprivacy.com"
+      : "https://relayer.api-devnet.umbraprivacy.com";
+  return env("UMBRA_RELAYER_URL", defaultUrl);
 }
 
 function networkName(): UmbraNetwork {
