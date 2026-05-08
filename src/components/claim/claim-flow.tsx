@@ -411,14 +411,51 @@ export function ClaimFlow() {
           );
           await claimFn(utxos);
 
-          // 2. Withdraw stealth's encrypted balance to stealth's public wSOL ATA
+          // 2. Withdraw stealth's encrypted balance to stealth's public wSOL ATA.
+          //
+          // The encrypted balance ends up slightly less than note.amount because
+          // each Umbra hop (deposit → create-UTXO → claim) deducts a 35-BPS
+          // protocol fee. ~3 hops × 35 BPS = ~0.64% total. Try the full amount
+          // first; on insufficient-balance errors retry with progressively
+          // smaller amounts until withdrawal succeeds.
           setClaimProgress("Withdrawing to public balance...");
           const withdrawFn = getEncryptedBalanceToPublicBalanceDirectWithdrawerFunction({ client: umbraClient });
-          await withdrawFn(
-            ephemeralPubkey.toBase58() as any,
-            WSOL_MINT as any,
-            BigInt(state.note.amount) as any,
-          );
+          const amountSteps = [
+            state.note.amount,                                  // exact
+            Math.floor(state.note.amount * 0.998),              // -0.2% (1 hop)
+            Math.floor(state.note.amount * 0.995),              // -0.5%
+            Math.floor(state.note.amount * 0.990),              // -1%
+            Math.floor(state.note.amount * 0.985),              // -1.5%
+            Math.floor(state.note.amount * 0.980),              // -2%
+          ];
+          let withdrawn = false;
+          let lastErr: unknown = null;
+          for (const tryAmount of amountSteps) {
+            try {
+              await withdrawFn(
+                ephemeralPubkey.toBase58() as any,
+                WSOL_MINT as any,
+                BigInt(tryAmount) as any,
+              );
+              console.log("[Claim] Withdrew", tryAmount / 1e9, "SOL");
+              withdrawn = true;
+              break;
+            } catch (e) {
+              lastErr = e;
+              const msg = (e instanceof Error ? e.message : String(e)).toLowerCase();
+              // Only retry if error suggests insufficient balance
+              if (!msg.includes("insufficient") && !msg.includes("balance") && !msg.includes("0x1")) {
+                throw e;
+              }
+              console.warn("[Claim] withdraw of", tryAmount / 1e9, "failed, trying lower");
+            }
+          }
+          if (!withdrawn) {
+            throw new Error(
+              "Could not withdraw from encrypted balance after fee adjustments: " +
+              (lastErr instanceof Error ? lastErr.message : String(lastErr))
+            );
+          }
         } else {
           // Regular /create private send: self-claimable UTXOs go straight
           // to public balance via the relayer.
