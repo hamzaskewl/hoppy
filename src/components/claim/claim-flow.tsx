@@ -350,7 +350,7 @@ export function ClaimFlow() {
 
       let transferSig: string | null = null;
 
-      // ── Private send: funds are in Umbra pool, need to claim UTXO first ──
+      // ── Private/Payroll send: funds are in Umbra pool, need to claim UTXO first ──
       if (state.note.fundsLocation === "pool" && isSOL) {
         setClaimProgress("Loading ZK circuits...");
         const { getCdnZkAssetProvider } = await import("@umbra-privacy/web-zk-prover");
@@ -366,44 +366,80 @@ export function ClaimFlow() {
         // Reconstruct Umbra client from ephemeral, overriding env config
         const umbraClient = await createUmbraClientFromKeypair(ephemeralKeypair, config);
 
-        // Claim self-claimable UTXO into public wSOL balance
-        setClaimProgress("Claiming from privacy pool...");
-        const { getSelfClaimableUtxoToPublicBalanceClaimerFunction, getClaimableUtxoScannerFunction, getUmbraRelayer } =
+        const isPayroll = state.note.senderPrivacy === ("payroll" as never);
+        setClaimProgress(isPayroll
+          ? "Claiming from payroll escrow..."
+          : "Claiming from privacy pool..."
+        );
+
+        const { getClaimableUtxoScannerFunction, getUmbraRelayer } =
           await import("@umbra-privacy/sdk");
-        const { getClaimSelfClaimableUtxoIntoPublicBalanceProver } =
-          await import("@umbra-privacy/web-zk-prover");
         const relayer = getUmbraRelayer({
           apiEndpoint: config.relayerUrl,
         } as any);
-        // v4: client exposes fetchBatchMerkleProof directly
         const fetchBatchMerkleProof = (umbraClient as any).fetchBatchMerkleProof;
-        const claimProver = getClaimSelfClaimableUtxoIntoPublicBalanceProver({ assetProvider: zkProvider });
-        const claimFn = getSelfClaimableUtxoToPublicBalanceClaimerFunction(
-          { client: umbraClient },
-          { zkProver: claimProver, relayer, fetchBatchMerkleProof }
-        );
 
         const scanUtxos = getClaimableUtxoScannerFunction({ client: umbraClient });
         const fetchResult: any = await scanUtxos(BigInt(0) as any, BigInt(0) as any, BigInt(10000) as any);
-        // v4 result fields: selfBurnable | received | publicSelfBurnable | publicReceived
-        //   - Regular /create private send → publicSelfBurnable (from public balance)
-        //   - Payroll issue-link → selfBurnable (from encrypted balance)
-        // Combine ALL self-claimable UTXOs since the claim function handles both.
-        // (Don't use `||` — empty arrays are truthy and would break the fallback.)
-        const utxos = [
-          ...(fetchResult.publicSelfBurnable ?? []),
-          ...(fetchResult.selfBurnable ?? []),
-          ...((fetchResult as { self?: unknown[] }).self ?? []),
-        ];
         console.log("[Claim] Scan result:", {
           publicSelfBurnable: fetchResult.publicSelfBurnable?.length ?? 0,
           selfBurnable: fetchResult.selfBurnable?.length ?? 0,
           received: fetchResult.received?.length ?? 0,
           publicReceived: fetchResult.publicReceived?.length ?? 0,
-          combinedClaimable: utxos.length,
         });
-        if (utxos.length === 0) throw new Error("No claimable UTXOs found — indexer may not have synced yet, try again in 30s");
-        await claimFn(utxos);
+
+        if (isPayroll) {
+          // Payroll path: receiver-claimable UTXOs land in `received`. Claim
+          // them into stealth's encrypted balance, then withdraw to its
+          // public wSOL ATA.
+          const utxos = [
+            ...(fetchResult.received ?? []),
+            ...(fetchResult.publicReceived ?? []),
+          ];
+          if (utxos.length === 0) throw new Error("No claimable UTXOs found — issuance may still be finalizing on Umbra (try again in ~30s)");
+
+          const { getReceiverClaimableUtxoToEncryptedBalanceClaimerFunction, getEncryptedBalanceToPublicBalanceDirectWithdrawerFunction } =
+            await import("@umbra-privacy/sdk");
+          const { getClaimReceiverClaimableUtxoIntoEncryptedBalanceProver } =
+            await import("@umbra-privacy/web-zk-prover");
+
+          // 1. Claim into stealth's own encrypted balance (relayer-paid)
+          const claimProver = getClaimReceiverClaimableUtxoIntoEncryptedBalanceProver();
+          const claimFn = getReceiverClaimableUtxoToEncryptedBalanceClaimerFunction(
+            { client: umbraClient },
+            { zkProver: claimProver, relayer, fetchBatchMerkleProof }
+          );
+          await claimFn(utxos);
+
+          // 2. Withdraw stealth's encrypted balance to stealth's public wSOL ATA
+          setClaimProgress("Withdrawing to public balance...");
+          const withdrawFn = getEncryptedBalanceToPublicBalanceDirectWithdrawerFunction({ client: umbraClient });
+          await withdrawFn(
+            ephemeralPubkey.toBase58() as any,
+            WSOL_MINT as any,
+            BigInt(state.note.amount) as any,
+          );
+        } else {
+          // Regular /create private send: self-claimable UTXOs go straight
+          // to public balance via the relayer.
+          const utxos = [
+            ...(fetchResult.publicSelfBurnable ?? []),
+            ...(fetchResult.selfBurnable ?? []),
+            ...((fetchResult as { self?: unknown[] }).self ?? []),
+          ];
+          if (utxos.length === 0) throw new Error("No claimable UTXOs found — indexer may not have synced yet, try again in 30s");
+
+          const { getSelfClaimableUtxoToPublicBalanceClaimerFunction } =
+            await import("@umbra-privacy/sdk");
+          const { getClaimSelfClaimableUtxoIntoPublicBalanceProver } =
+            await import("@umbra-privacy/web-zk-prover");
+          const claimProver = getClaimSelfClaimableUtxoIntoPublicBalanceProver({ assetProvider: zkProvider });
+          const claimFn = getSelfClaimableUtxoToPublicBalanceClaimerFunction(
+            { client: umbraClient },
+            { zkProver: claimProver, relayer, fetchBatchMerkleProof }
+          );
+          await claimFn(utxos);
+        }
 
         // Bundle wSOL ATA close + SOL transfer into a single tx so the ATA's
         // ~0.00204 SOL rent gets recovered into the drain. A separate close

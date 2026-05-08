@@ -1440,7 +1440,7 @@ export function CreateLinkForm() {
                     <span className="text-sm font-medium text-hop-700 dark:text-hop-300">Send Mode</span>
                   </div>
                   <div className="grid grid-cols-2 gap-2">
-                    {(Object.keys(SENDER_PRIVACY) as SenderPrivacy[]).map((mode) => {
+                    {(Object.keys(SENDER_PRIVACY) as Array<"basic" | "private">).map((mode) => {
                       const info = SENDER_PRIVACY[mode];
                       const isSelected = senderPrivacy === mode;
                       const isDisabled = false;

@@ -18,8 +18,8 @@ import type { IUmbraClient } from "@umbra-privacy/sdk/interfaces";
 // derive its type from the factory.
 type IUmbraRelayer = ReturnType<typeof getUmbraRelayer>;
 import {
-  getCreateSelfClaimableUtxoFromEncryptedBalanceProver,
-  getClaimSelfClaimableUtxoIntoPublicBalanceProver,
+  getCreateReceiverClaimableUtxoFromEncryptedBalanceProver,
+  getClaimReceiverClaimableUtxoIntoEncryptedBalanceProver,
   getUserRegistrationProver,
 } from "@umbra-privacy/web-zk-prover";
 import type { Keypair } from "@solana/web3.js";
@@ -106,10 +106,10 @@ export function umbraRelayer(): IUmbraRelayer {
 
 // ZK provers are stateless function-bundle objects; one per process is fine.
 let createUtxoProverInstance: ReturnType<
-  typeof getCreateSelfClaimableUtxoFromEncryptedBalanceProver
+  typeof getCreateReceiverClaimableUtxoFromEncryptedBalanceProver
 > | null = null;
 let claimUtxoProverInstance: ReturnType<
-  typeof getClaimSelfClaimableUtxoIntoPublicBalanceProver
+  typeof getClaimReceiverClaimableUtxoIntoEncryptedBalanceProver
 > | null = null;
 let registrationProverInstance: ReturnType<
   typeof getUserRegistrationProver
@@ -118,7 +118,7 @@ let registrationProverInstance: ReturnType<
 export function createUtxoProver() {
   if (!createUtxoProverInstance) {
     createUtxoProverInstance =
-      getCreateSelfClaimableUtxoFromEncryptedBalanceProver();
+      getCreateReceiverClaimableUtxoFromEncryptedBalanceProver();
   }
   return createUtxoProverInstance;
 }
@@ -126,7 +126,7 @@ export function createUtxoProver() {
 export function claimUtxoProver() {
   if (!claimUtxoProverInstance) {
     claimUtxoProverInstance =
-      getClaimSelfClaimableUtxoIntoPublicBalanceProver();
+      getClaimReceiverClaimableUtxoIntoEncryptedBalanceProver();
   }
   return claimUtxoProverInstance;
 }

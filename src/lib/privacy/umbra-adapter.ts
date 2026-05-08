@@ -121,8 +121,13 @@ export function getTokenFromMint(mint: string): SupportedToken | null {
 // Privacy Types — Sender & Receiver choose independently
 // ============================================================================
 
-/** Sender privacy: basic = direct transfer, private = ZK mixer */
-export type SenderPrivacy = "basic" | "private";
+/**
+ * Sender privacy:
+ *   basic   = direct transfer (sender visible on-chain)
+ *   private = ZK mixer self-claimable (sender's regular /create flow)
+ *   payroll = receiver-claimable from escrow's encrypted balance (server-issued)
+ */
+export type SenderPrivacy = "basic" | "private" | "payroll";
 
 /** Claim mode: quick = direct transfer, private = ZK mixer */
 export type ClaimMode = "quick" | "private";
@@ -139,7 +144,9 @@ export interface SenderPrivacyInfo {
   feeDescription: string;
 }
 
-export const SENDER_PRIVACY: Record<SenderPrivacy, SenderPrivacyInfo> = {
+// Only the user-facing send modes need an info entry — payroll links are
+// generated server-side and never appear in the /create UI.
+export const SENDER_PRIVACY: Record<"basic" | "private", SenderPrivacyInfo> = {
   basic: {
     id: "basic",
     label: "Basic",
@@ -544,6 +551,10 @@ interface SerializedNote {
  * Serialize an UmbraNote to a base58-encoded string for URL hash.
  */
 export function serializeUmbraNote(note: UmbraNote): string {
+  // sp encoding: "b" basic | "p" private | "y" payroll
+  const sp = note.senderPrivacy === "basic" ? "b"
+    : note.senderPrivacy === "payroll" ? "y"
+    : "p";
   const data: SerializedNote = {
     s: note.ephemeralSeed,
     a: note.amount,
@@ -552,7 +563,7 @@ export function serializeUmbraNote(note: UmbraNote): string {
     tm: note.tokenMint,
     c: note.createdAt,
     e: note.ephemeralAddress,
-    sp: note.senderPrivacy === "basic" ? "b" : "p",
+    sp,
     v: 2, // Version 2 = Umbra format
   };
   const json = JSON.stringify(data);
@@ -569,6 +580,12 @@ export function deserializeUmbraNote(encoded: string): UmbraNote | null {
 
     // Version 2 = Umbra format
     if (data.v === 2) {
+      const senderPrivacy: SenderPrivacy =
+        data.sp === "b" ? "basic" :
+        data.sp === "y" ? "payroll" :
+        "private";
+      // Both private and payroll deposit into the Umbra pool; basic stays on ephemeral
+      const fundsLocation = senderPrivacy === "basic" ? "ephemeral" : "pool";
       return {
         ephemeralSeed: data.s,
         amount: data.a,
@@ -577,12 +594,11 @@ export function deserializeUmbraNote(encoded: string): UmbraNote | null {
         tokenMint: data.tm,
         createdAt: data.c,
         ephemeralAddress: data.e,
-        senderPrivacy: data.sp === "b" ? "basic" as const : "private" as const,
+        senderPrivacy,
         // Legacy compat fields
         secret: data.s,
         status: "funded",
-        // Private sends deposit into Umbra pool; basic sends stay on the ephemeral
-        fundsLocation: data.sp === "p" ? "pool" : "ephemeral",
+        fundsLocation,
         senderAddress: "",
       };
     }

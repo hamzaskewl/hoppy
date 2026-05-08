@@ -46,6 +46,8 @@ export async function POST(req: Request) {
     // Re-encode the payroll note into the regular UmbraNote URL format so
     // recipients land on /claim and use the standard claim flow (same UI,
     // wallet-connect, paste-address, quick vs private claim modes, etc).
+    // Mark with senderPrivacy="payroll" so /claim takes the receiver-claimable
+    // 2-step path instead of the self-claimable path used for /create.
     const regularNote: RegularUmbraNote = {
       ephemeralSeed: note.secret,
       amount: note.amount,
@@ -54,7 +56,9 @@ export async function POST(req: Request) {
       tokenMint: WSOL_MINT,
       createdAt: Date.now(),
       ephemeralAddress: note.stealthAddress,
-      senderPrivacy: "private",
+      // payroll links use receiver-claimable UTXOs — the unified /claim page
+      // detects this branch via senderPrivacy below
+      senderPrivacy: "payroll" as never,
       // Legacy compat
       status: "funded",
       fundsLocation: "pool",

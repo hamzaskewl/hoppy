@@ -21,7 +21,7 @@
 import {
   getUserRegistrationFunction,
   getPublicBalanceToEncryptedBalanceDirectDepositorFunction,
-  getEncryptedBalanceToSelfClaimableUtxoCreatorFunction,
+  getEncryptedBalanceToReceiverClaimableUtxoCreatorFunction,
   getEncryptedBalanceToPublicBalanceDirectWithdrawerFunction,
 } from "@umbra-privacy/sdk";
 import bs58 from "bs58";
@@ -219,19 +219,25 @@ export interface PayrollIssueLinkResult {
  * seed goes into the URL hash; the recipient just opens /claim and the
  * existing claim flow (same as a regular private send) handles withdrawal.
  *
- * Why self-claimable instead of receiver-claimable:
- *   - Receiver-claimable UTXOs land in the recipient's *encrypted* balance,
- *     forcing them through a 2-step claim (claim → withdraw).
- *   - Self-claimable UTXOs can be withdrawn directly to a public address
- *     by anyone holding the seed — matches the regular Hoppy claim flow
- *     and lets us reuse src/components/claim/claim-flow.tsx unchanged.
+ * Why receiver-claimable (sender ≠ recipient):
+ *   "Self-claimable" UTXOs are claimable only by the original signer; they
+ *   work for the regular /create flow because the ephemeral is BOTH the
+ *   creator and the destination. For payroll the escrow creates and the
+ *   stealth claims — different keypairs — so we need receiver-claimable.
  *
  * Required registrations:
  *   - The escrow needs to be Umbra-registered (done at deposit time).
  *   - The stealth ALSO needs to be Umbra-registered before escrow can
  *     create the UTXO, because the UTXO ciphertext is encrypted to the
- *     destination's master viewing key. Without on-chain registration,
- *     the destination's viewing key can't be looked up.
+ *     receiver's master viewing key. Without on-chain registration the
+ *     scanner can't decrypt the UTXO and it appears "missing".
+ *
+ * Recipient claim path (handled by /claim with payroll branch):
+ *   1. Reconstruct stealth keypair from URL hash.
+ *   2. Scan stealth's `received` UTXO bucket.
+ *   3. Claim into stealth's own encrypted balance.
+ *   4. Withdraw stealth encrypted → public wSOL ATA.
+ *   5. Close ATA + drain native SOL to the recipient's chosen address.
  */
 export async function umbraPayrollIssueLink(
   input: PayrollIssueLinkInput,
@@ -256,9 +262,9 @@ export async function umbraPayrollIssueLink(
   );
   await registerStealth({ confidential: true, anonymous: true });
 
-  // Escrow creates a self-claimable UTXO destined for the stealth address.
+  // Escrow creates a receiver-claimable UTXO destined for the stealth.
   const escrowClient = await umbraClientFor(escrow);
-  const createUtxo = getEncryptedBalanceToSelfClaimableUtxoCreatorFunction(
+  const createUtxo = getEncryptedBalanceToReceiverClaimableUtxoCreatorFunction(
     { client: escrowClient },
     { zkProver: createUtxoProver() },
   );
