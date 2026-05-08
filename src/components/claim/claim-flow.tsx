@@ -428,18 +428,14 @@ export function ClaimFlow() {
           const withdrawFn = getEncryptedBalanceToPublicBalanceDirectWithdrawerFunction({ client: umbraClient });
           const wsolAta = await getAssociatedTokenAddress(new PublicKey(WSOL_MINT), ephemeralPubkey);
 
-          // Try progressively much smaller amounts. If even 50% off fails,
-          // the encrypted balance is fundamentally empty/broken (not a fee
-          // issue) and we surface a clear error.
-          const amountSteps = [
-            state.note.amount,
-            Math.floor(state.note.amount * 0.99),
-            Math.floor(state.note.amount * 0.95),
-            Math.floor(state.note.amount * 0.90),
-            Math.floor(state.note.amount * 0.75),
-            Math.floor(state.note.amount * 0.50),
-            Math.floor(state.note.amount * 0.25),
-          ];
+          // Step down 10% at a time from 100% to 50%. Wide range so we
+          // can quickly tell whether the encrypted balance is short by a
+          // small fee or by a much larger amount (or empty entirely).
+          // 10s polling per step → ~60s worst case.
+          const amountSteps: number[] = [];
+          for (let pct = 100; pct >= 50; pct -= 10) {
+            amountSteps.push(Math.floor(state.note.amount * (pct / 100)));
+          }
 
           // Probe initial wSOL balance so we can detect when funds arrive
           let initialAtaBalance = BigInt(0);
@@ -451,7 +447,7 @@ export function ClaimFlow() {
           }
 
           const POLL_INTERVAL_MS = 2000;
-          const POLL_MAX_ATTEMPTS = 20; // 40s per amount
+          const POLL_MAX_ATTEMPTS = 5; // 10s per amount
 
           let withdrawSucceeded = false;
           let lastErr: unknown = null;
@@ -491,7 +487,7 @@ export function ClaimFlow() {
             }
 
             if (withdrawSucceeded) break;
-            console.warn("[Claim] No wSOL arrived for", tryAmount / 1e9, "SOL after 60s — trying smaller amount");
+            console.warn("[Claim] No wSOL arrived for", tryAmount / 1e9, "SOL after 10s — trying 10% smaller");
           }
 
           if (!withdrawSucceeded) {
