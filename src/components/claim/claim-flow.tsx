@@ -403,13 +403,18 @@ export function ClaimFlow() {
           const { getClaimReceiverClaimableUtxoIntoEncryptedBalanceProver } =
             await import("@umbra-privacy/web-zk-prover");
 
-          // 1. Claim into stealth's own encrypted balance (relayer-paid)
+          // 1. Claim into stealth's own encrypted balance (relayer-paid).
+          // The SDK reports "complete" when the queue tx confirms (~5s) but
+          // the actual MPC callback that funds the encrypted balance happens
+          // 10-30s later. We add an explicit wait afterward.
           const claimProver = getClaimReceiverClaimableUtxoIntoEncryptedBalanceProver();
           const claimFn = getReceiverClaimableUtxoToEncryptedBalanceClaimerFunction(
             { client: umbraClient },
             { zkProver: claimProver, relayer, fetchBatchMerkleProof }
           );
           await claimFn(utxos);
+          setClaimProgress("Waiting for MPC callback to finalize claim (~30s)...");
+          await new Promise((r) => setTimeout(r, 30_000));
 
           // 2. Withdraw stealth's encrypted balance to stealth's public wSOL ATA.
           //
@@ -423,15 +428,17 @@ export function ClaimFlow() {
           const withdrawFn = getEncryptedBalanceToPublicBalanceDirectWithdrawerFunction({ client: umbraClient });
           const wsolAta = await getAssociatedTokenAddress(new PublicKey(WSOL_MINT), ephemeralPubkey);
 
-          // Each Umbra hop deducts 35 BPS. We had 3+ hops (deposit → create
-          // → claim) so try progressively smaller amounts.
+          // Try progressively much smaller amounts. If even 50% off fails,
+          // the encrypted balance is fundamentally empty/broken (not a fee
+          // issue) and we surface a clear error.
           const amountSteps = [
             state.note.amount,
-            Math.floor(state.note.amount * 0.997),
-            Math.floor(state.note.amount * 0.994),
-            Math.floor(state.note.amount * 0.990),
-            Math.floor(state.note.amount * 0.985),
-            Math.floor(state.note.amount * 0.975),
+            Math.floor(state.note.amount * 0.99),
+            Math.floor(state.note.amount * 0.95),
+            Math.floor(state.note.amount * 0.90),
+            Math.floor(state.note.amount * 0.75),
+            Math.floor(state.note.amount * 0.50),
+            Math.floor(state.note.amount * 0.25),
           ];
 
           // Probe initial wSOL balance so we can detect when funds arrive
@@ -444,7 +451,7 @@ export function ClaimFlow() {
           }
 
           const POLL_INTERVAL_MS = 2000;
-          const POLL_MAX_ATTEMPTS = 30; // 60s per amount
+          const POLL_MAX_ATTEMPTS = 20; // 40s per amount
 
           let withdrawSucceeded = false;
           let lastErr: unknown = null;
