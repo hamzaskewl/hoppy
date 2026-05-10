@@ -210,7 +210,7 @@ export function ProductDetailFlow({
   initialAmount?: number;
   onBack: () => void;
 }) {
-  const { publicKey, connected, sendTransaction } = useWallet();
+  const { publicKey, connected, sendTransaction, signMessage } = useWallet();
   const { connection } = useConnection();
   const { setVisible } = useWalletModal();
 
@@ -454,19 +454,20 @@ export function ProductDetailFlow({
       setRefundState({ kind: "fail", msg: "Connect the same wallet that placed the order" });
       return;
     }
+    if (!signMessage) {
+      setRefundState({
+        kind: "fail",
+        msg: "Your wallet doesn't support signMessage. Try Phantom or Solflare.",
+      });
+      return;
+    }
     setRefundState({ kind: "running" });
     try {
       const challenge = `hoppy-card-refund:${order.orderId}:${publicKey.toBase58()}`;
-      // signMessage isn't always available on every wallet adapter — fall
-      // back to a memo-style transaction sign if needed.
-      const wallet = (window as unknown as { phantom?: { solana?: { signMessage?: (m: Uint8Array) => Promise<{ signature: Uint8Array }> } } }).phantom?.solana;
-      if (!wallet?.signMessage) {
-        throw new Error("This wallet doesn't support signMessage. Use Phantom or a similar wallet to refund.");
-      }
       const encoded = new TextEncoder().encode(challenge);
-      const sigResult = await wallet.signMessage(encoded);
+      const signatureBytes = await signMessage(encoded);
       const { default: bs58 } = await import("bs58");
-      const sigB58 = bs58.encode(sigResult.signature);
+      const sigB58 = bs58.encode(signatureBytes);
 
       const res = await fetch("/api/card/refund", {
         method: "POST",

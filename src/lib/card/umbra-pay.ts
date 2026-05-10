@@ -44,15 +44,22 @@ const WSOL_MINT_STR = WSOL_MINT.toBase58();
 const REFUND_FEE_RESERVE = 5_000;
 
 /**
- * Lamport buffer kept on the escrow at the start of orchestration to pay for
- * Solana tx fees (escrow → wSOL ATA, syncNative, ATA creation, unwrap, final
- * transfer to Bitrefill, final refund-leftover transfer to user).
+ * Lamport buffer kept on the escrow at the start of orchestration to pay for:
  *
- * 5 txs × 5_000 lamports + ATA rent (~2_039_280 closed-on-unwrap = recovered)
- * + rounding = ~30k lamports gross. We keep a generous 0.001 SOL = 1M lamports
- * to cover priority fees and surprises; whatever's leftover refunds to user.
+ *   - wSOL ATA rent (~2_039_280) — recovered when ATA closes during unwrap,
+ *     but it's "in flight" mid-tx so balance must cover it
+ *   - ~6 tx fees (wrap, umbra-deposit, umbra-withdraw, unwrap, pay-bitrefill,
+ *     refund-leftover) at 5_000 each = 30_000 lamports
+ *   - Umbra ZK ops occasionally use additional rent for proof accounts
+ *   - Priority fee surges and slop
+ *
+ * 0.01 SOL is enough to cover all of the above with comfortable headroom.
+ * Whatever's actually unused refunds back to the user at the end.
  */
-const ESCROW_TX_FEE_BUFFER = 1_000_000; // 0.001 SOL
+const ESCROW_TX_FEE_BUFFER = 10_000_000; // 0.01 SOL
+
+/** Hard floor we never let the escrow drop below mid-orchestration. */
+const ESCROW_HARD_MIN_RESERVE = 5_000_000; // 0.005 SOL
 
 /**
  * Minimum overshoot above the Bitrefill amount, in lamports. Adds randomness
@@ -172,16 +179,24 @@ export async function umbraCardExecute(
   const client = await umbraClientFor(escrow);
   await ensureUmbraRegistered(client, input.orderId);
 
-  // 3. Wrap most of the SOL to wSOL. Keep ESCROW_TX_FEE_BUFFER as native SOL
-  //    so the escrow can pay tx fees for the next several ops.
-  const wrappable = delivered - ESCROW_TX_FEE_BUFFER;
+  // 3. Read the LIVE escrow balance (not the deposited amount — it may have
+  //    been touched by registration tx fees) and wrap most of it. Keep at
+  //    least ESCROW_TX_FEE_BUFFER as native SOL on the escrow to cover
+  //    ATA rent + tx fees for the rest of the flow.
+  const liveBalance = await getSolBalance(escrowPk);
+  const wrappable = liveBalance - ESCROW_TX_FEE_BUFFER;
   if (wrappable < input.bitrefillLamports) {
     throw new Error(
-      `escrow has ${wrappable} wrappable lamports, need ≥ ${input.bitrefillLamports}`
+      `escrow has ${wrappable} wrappable lamports (live balance ${liveBalance}, buffer ${ESCROW_TX_FEE_BUFFER}), ` +
+        `need ≥ ${input.bitrefillLamports}`
     );
   }
   const { signature: wrapTxHash } = await wrapSol(escrow, wrappable);
-  console.log(`[umbra-pay/${input.orderId}] wrap ok`, { wrapTxHash, wrappable });
+  console.log(`[umbra-pay/${input.orderId}] wrap ok`, {
+    wrapTxHash,
+    wrappable,
+    liveBalanceBeforeWrap: liveBalance,
+  });
 
   // 4. Deposit the wSOL into encrypted balance.
   await updateOrder(input.orderId, { status: "mixing" });
