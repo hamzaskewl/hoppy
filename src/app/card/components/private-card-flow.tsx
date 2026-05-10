@@ -13,30 +13,33 @@ import {
   ArrowRight,
   Gift,
   Link as LinkIcon,
-  Eye,
-  EyeOff,
 } from "lucide-react";
 import Image from "next/image";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { cn, solToLamports, lamportsToSol } from "@/lib/utils";
-import { Transaction, Keypair, PublicKey } from "@solana/web3.js";
+import { cn } from "@/lib/utils";
+import {
+  Transaction,
+  SystemProgram,
+  PublicKey,
+  LAMPORTS_PER_SOL,
+} from "@solana/web3.js";
 
 type CardType = "visa" | "mastercard";
-type FlowStep = "configure" | "depositing" | "withdrawing" | "waiting" | "complete" | "error";
+type FlowStep = "configure" | "paying" | "waiting" | "complete" | "error";
 
 interface OrderData {
   orderId: string;
+  productSlug: string;
+  productName: string;
   payment: {
     address: string;
-    amountSol: number;
-    solPrice: number;
+    amount: number;
+    currency: string;
   };
   pricing: {
     cardValue: number;
-    starpayFeePercent: number;
-    starpayFee: number;
     total: number;
   };
   expiresAt: string;
@@ -48,51 +51,45 @@ export function PrivateCardFlow({ disabled = false }: { disabled?: boolean }) {
   const { connection } = useConnection();
   const { setVisible } = useWalletModal();
 
-  // Form state
   const [amount, setAmount] = useState<number>(50);
   const [amountInput, setAmountInput] = useState<string>("50");
   const [cardType, setCardType] = useState<CardType>("visa");
 
-  // Flow state
   const [step, setStep] = useState<FlowStep>("configure");
   const [order, setOrder] = useState<OrderData | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [copied, setCopied] = useState(false);
   const [progress, setProgress] = useState("");
-  
-  // Recovery state - for when transaction fails but funds are returned
-  const [recoveryInfo, setRecoveryInfo] = useState<{
-    success: boolean;
-    txHash?: string;
-    message: string;
-  } | null>(null);
 
-  // Get user's Solana wallet address
-  const getSolanaWallet = useCallback((): string | null => {
-    return publicKey?.toBase58() ?? null;
-  }, [publicKey]);
-
-  // Poll for order status
+  // Poll for fulfillment once payment is sent
   useEffect(() => {
     if (!order || step !== "waiting") return;
 
-    const pollInterval = setInterval(async () => {
+    const interval = setInterval(async () => {
       try {
         const res = await fetch(`/api/card/status?orderId=${order.orderId}`);
         const data = await res.json();
 
         if (data.status === "ready" && data.claimLink) {
-          setOrder((prev) => prev ? { ...prev, claimLink: data.claimLink } : prev);
+          setOrder((prev) => (prev ? { ...prev, claimLink: data.claimLink } : prev));
           setStep("complete");
-          clearInterval(pollInterval);
+          clearInterval(interval);
+        } else if (data.status === "failed" || data.status === "expired") {
+          setError(
+            data.status === "expired"
+              ? "Order expired before fulfillment. Contact support if you sent payment."
+              : "Card provider rejected the order. Contact support."
+          );
+          setStep("error");
+          clearInterval(interval);
         }
       } catch (err) {
         console.error("Status poll error:", err);
       }
-    }, 5000); // Poll every 5 seconds
+    }, 5000);
 
-    return () => clearInterval(pollInterval);
+    return () => clearInterval(interval);
   }, [order, step]);
 
   const handleCreateOrder = async () => {
@@ -100,9 +97,7 @@ export function PrivateCardFlow({ disabled = false }: { disabled?: boolean }) {
       setVisible(true);
       return;
     }
-
-    const walletAddress = getSolanaWallet();
-    if (!walletAddress) {
+    if (!publicKey) {
       setError("Please connect a Solana wallet");
       return;
     }
@@ -111,7 +106,6 @@ export function PrivateCardFlow({ disabled = false }: { disabled?: boolean }) {
     setError(null);
 
     try {
-      // 1. Create gift card order (server creates Starpay order with proxy email)
       setProgress("Creating order...");
       const res = await fetch("/api/card/gift-order", {
         method: "POST",
@@ -121,116 +115,35 @@ export function PrivateCardFlow({ disabled = false }: { disabled?: boolean }) {
 
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Failed to create order");
-      
+
       setOrder(data);
-      setStep("depositing");
+      setStep("paying");
+      setProgress("Sending payment...");
 
-      // 2. Deposit to privacy pool
-      setProgress("Depositing to privacy pool...");
-
-      // Create ephemeral keypair for the deposit
-      const ephemeralKeypair = Keypair.generate();
-
-      // Calculate deposit amount (Starpay amount + Umbra fees + gas overhead)
-      const starpayAmountLamports = solToLamports(data.payment.amountSol);
-      const UMBRA_FEE_BPS = 35;
-      const UMBRA_BPS_DIVISOR = 16384;
-      const GAS_BUFFER = 10_000_000; // 0.01 SOL — registration + proof account + tx fees
-      const TX_FEES = 15_000;
-
-      const grossWithdrawal = Math.ceil(starpayAmountLamports * UMBRA_BPS_DIVISOR / (UMBRA_BPS_DIVISOR - UMBRA_FEE_BPS));
-      const depositAmount = grossWithdrawal + GAS_BUFFER + TX_FEES;
-
-      // Fund ephemeral wallet
-      const fundingTx = new Transaction();
-      const { SystemProgram } = await import("@solana/web3.js");
-
-      fundingTx.add(
+      // Send SOL directly from the user's wallet to Bitrefill's address.
+      // (Privacy via Umbra is a follow-up — direct send is the working MVP.)
+      const lamports = Math.round(data.payment.amount * LAMPORTS_PER_SOL);
+      const tx = new Transaction().add(
         SystemProgram.transfer({
-          fromPubkey: new PublicKey(walletAddress),
-          toPubkey: ephemeralKeypair.publicKey,
-          lamports: depositAmount,
+          fromPubkey: publicKey,
+          toPubkey: new PublicKey(data.payment.address),
+          lamports,
         })
       );
 
-      const fundingTxHash = await sendTransaction(fundingTx, connection);
-      await connection.confirmTransaction(fundingTxHash, "confirmed");
+      const sig = await sendTransaction(tx, connection);
+      await connection.confirmTransaction(sig, "confirmed");
 
-      // Wait for balance
-      await new Promise(r => setTimeout(r, 2000));
-      
-      // Call server-side API to handle privacy pool deposit/withdraw
-      setStep("withdrawing");
-      setProgress("Processing private payment...");
-      
-      const privateDepositRes = await fetch("/api/card/private-deposit", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          ephemeralSecretKey: btoa(String.fromCharCode(...ephemeralKeypair.secretKey)),
-          starpayAddress: data.payment.address,
-          amountLamports: starpayAmountLamports,
-          returnAddress: walletAddress, // Return leftover SOL here
-        }),
-      });
-      
-      const depositData = await privateDepositRes.json();
-      if (!privateDepositRes.ok) {
-        // Check if recovery was successful
-        if (depositData.recoverySuccess && depositData.recoverySweepTx) {
-          setRecoveryInfo({
-            success: true,
-            txHash: depositData.recoverySweepTx,
-            message: "Your funds have been automatically returned to your wallet.",
-          });
-          // Don't throw - show recovery success UI instead
-          setError("Transaction failed, but your funds have been safely returned.");
-          setStep("error");
-          return;
-        } else if (depositData.ephemeralPrivateKey) {
-          // Recovery info available but not logged for security
-          setRecoveryInfo({
-            success: false,
-            message: "Funds may be stuck. Please contact support with your transaction hash.",
-          });
-        }
-        throw new Error(depositData.error || "Failed to process private payment");
-      }
-      
-      // Transaction completed successfully
-      
-      const depositResult = { tx: depositData.depositTx };
-      const withdrawResult = { tx: depositData.withdrawTx };
-
-      // 4. Confirm payment with server
-      await fetch("/api/card/confirm-payment", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          orderId: data.orderId,
-          depositTxHash: depositResult.tx,
-          withdrawTxHash: withdrawResult.tx,
-        }),
-      });
-
-      // 5. Wait for card to be ready
       setStep("waiting");
-      setProgress("Waiting for card delivery...");
-      
-    } catch (err: any) {
-      console.error("Private card error:", err);
-      
-      // Handle user rejection gracefully
-      const errorMessage = err?.message || String(err);
-      if (
-        errorMessage.includes("User rejected") ||
-        errorMessage.includes("not been authorized") ||
-        errorMessage.includes("cancelled")
-      ) {
-        setError("Transaction cancelled. Please approve the transaction in your wallet to continue.");
-        setStep("configure"); // Go back to configure, not error
+      setProgress("Waiting for card provider...");
+    } catch (err) {
+      console.error("Card order error:", err);
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.includes("User rejected") || msg.includes("not been authorized") || msg.includes("cancelled")) {
+        setError("Transaction cancelled. Approve in your wallet to continue.");
+        setStep("configure");
       } else {
-        setError(errorMessage || "Failed to purchase card");
+        setError(msg || "Failed to purchase card");
         setStep("error");
       }
     } finally {
@@ -238,20 +151,19 @@ export function PrivateCardFlow({ disabled = false }: { disabled?: boolean }) {
     }
   };
 
-  const handleCopy = () => {
+  const handleCopy = useCallback(() => {
     if (order?.claimLink) {
       navigator.clipboard.writeText(order.claimLink);
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     }
-  };
+  }, [order]);
 
   const resetFlow = () => {
     setStep("configure");
     setOrder(null);
     setError(null);
     setProgress("");
-    setRecoveryInfo(null);
   };
 
   return (
@@ -274,20 +186,19 @@ export function PrivateCardFlow({ disabled = false }: { disabled?: boolean }) {
                   Private Gift Card
                 </CardTitle>
                 <CardDescription>
-                  Create a virtual card using Umbra privacy. No email required - you&apos;ll receive a private claim link.
+                  Buy a virtual card with SOL. You&apos;ll get a claim link to share or keep.
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-6">
-                {/* Privacy Badge */}
                 <div className="p-3 rounded-xl bg-hop-100 dark:bg-hop-500/10 border-2 border-hop-400 flex items-center gap-3">
                   <Image src="/bunnypriv.png" alt="Privacy" width={28} height={28} className="w-7 h-7" />
                   <div>
-                    <p className="text-sm font-medium text-hop-700 dark:text-hop-300">Maximum Privacy</p>
-                    <p className="text-xs text-muted-foreground">Card provider cannot trace your wallet</p>
+                    <p className="text-sm font-medium text-hop-700 dark:text-hop-300">Powered by Bitrefill</p>
+                    <p className="text-xs text-muted-foreground">Pay in SOL — card delivered as a private claim link</p>
                   </div>
                 </div>
 
-                {/* Amount selection */}
+                {/* Amount */}
                 <div className="space-y-3">
                   <label className="text-sm font-medium">Card Value (USD)</label>
                   <div className="grid grid-cols-5 gap-2">
@@ -380,7 +291,7 @@ export function PrivateCardFlow({ disabled = false }: { disabled?: boolean }) {
 
                 <Button
                   onClick={disabled ? undefined : handleCreateOrder}
-                  disabled={isLoading || amount < 5 || (disabled && connected)}
+                  disabled={isLoading || amount < 5 || disabled}
                   className="w-full py-6 text-lg"
                 >
                   {isLoading ? (
@@ -394,22 +305,22 @@ export function PrivateCardFlow({ disabled = false }: { disabled?: boolean }) {
                     "Temporarily Unavailable"
                   ) : (
                     <>
-                      Get Private Card
+                      Get Card
                       <ArrowRight className="w-5 h-5 ml-2" />
                     </>
                   )}
                 </Button>
 
                 <p className="text-xs text-muted-foreground text-center">
-                  You&apos;ll receive a claim link. Share it with anyone - only link holders can see the card.
+                  After payment, you get a claim link. Share it with anyone — only link holders see the card.
                 </p>
               </CardContent>
             </Card>
           </motion.div>
         )}
 
-        {/* Processing States */}
-        {(step === "depositing" || step === "withdrawing" || step === "waiting") && (
+        {/* Processing */}
+        {(step === "paying" || step === "waiting") && (
           <motion.div
             key="processing"
             initial={{ opacity: 0, y: 20 }}
@@ -419,24 +330,20 @@ export function PrivateCardFlow({ disabled = false }: { disabled?: boolean }) {
             <Card>
               <CardContent className="py-16 text-center space-y-6">
                 <div className="w-16 h-16 rounded-full bg-hop-500 border-2 border-hop-600 mx-auto flex items-center justify-center animate-pulse">
-                  {step === "depositing" && <Image src="/bunnypriv.png" alt="Privacy" width={36} height={36} className="w-9 h-9" />}
-                  {step === "withdrawing" && <CreditCard className="w-8 h-8 text-white" />}
+                  {step === "paying" && <CreditCard className="w-8 h-8 text-white" />}
                   {step === "waiting" && <Gift className="w-8 h-8 text-white" />}
                 </div>
                 <div>
-                  <h3 className="text-xl  mb-2">
-                    {step === "depositing" && "Depositing to Privacy Pool"}
-                    {step === "withdrawing" && "Sending Private Payment"}
+                  <h3 className="text-xl mb-2">
+                    {step === "paying" && "Sending Payment"}
                     {step === "waiting" && "Waiting for Card"}
                   </h3>
                   <p className="text-muted-foreground">
-                    {step === "depositing" && "Your funds are being shielded..."}
-                    {step === "withdrawing" && "Paying card provider privately..."}
+                    {step === "paying" && "Confirm in your wallet..."}
                     {step === "waiting" && "Card provider is processing your order..."}
                   </p>
                 </div>
                 <Loader2 className="w-8 h-8 mx-auto text-hop-600 dark:text-hop-400 animate-spin" />
-                
                 {step === "waiting" && (
                   <p className="text-xs text-muted-foreground">
                     This usually takes 1-5 minutes. Don&apos;t close this page.
@@ -447,7 +354,7 @@ export function PrivateCardFlow({ disabled = false }: { disabled?: boolean }) {
           </motion.div>
         )}
 
-        {/* Complete - Show Claim Link */}
+        {/* Complete */}
         {step === "complete" && order?.claimLink && (
           <motion.div
             key="complete"
@@ -462,7 +369,7 @@ export function PrivateCardFlow({ disabled = false }: { disabled?: boolean }) {
                 </div>
                 <CardTitle>Gift Card Ready!</CardTitle>
                 <CardDescription>
-                  Your ${amount} {cardType.toUpperCase()} card is ready
+                  Your ${amount} {order.productName} is ready
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-6">
@@ -474,12 +381,7 @@ export function PrivateCardFlow({ disabled = false }: { disabled?: boolean }) {
                       readOnly
                       className="bg-card border-2 border-border font-mono text-xs"
                     />
-                    <Button
-                      variant="outline"
-                      size="icon"
-                      onClick={handleCopy}
-                      className="shrink-0"
-                    >
+                    <Button variant="outline" size="icon" onClick={handleCopy} className="shrink-0">
                       {copied ? (
                         <Check className="w-4 h-4 text-hop-600" />
                       ) : (
@@ -496,8 +398,7 @@ export function PrivateCardFlow({ disabled = false }: { disabled?: boolean }) {
 
                 <div className="p-3 rounded-xl bg-hop-100 dark:bg-hop-500/10 border-2 border-hop-400">
                   <p className="text-xs text-hop-700 dark:text-hop-300">
-                    Privacy Protected: This card was purchased anonymously. 
-                    Share this link with anyone - only link holders can see the card details.
+                    Share this link with anyone — the card details are encrypted, only link holders can see them.
                   </p>
                 </div>
 
@@ -509,7 +410,7 @@ export function PrivateCardFlow({ disabled = false }: { disabled?: boolean }) {
           </motion.div>
         )}
 
-        {/* Error State */}
+        {/* Error */}
         {step === "error" && (
           <motion.div
             key="error"
@@ -517,61 +418,15 @@ export function PrivateCardFlow({ disabled = false }: { disabled?: boolean }) {
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -20 }}
           >
-            <Card className={cn(
-              "border-2",
-              recoveryInfo?.success ? "border-green-400" : "border-red-400"
-            )}>
+            <Card className="border-2 border-red-400">
               <CardContent className="py-12 text-center space-y-6">
-                <div className={cn(
-                  "w-16 h-16 rounded-full mx-auto flex items-center justify-center border-2",
-                  recoveryInfo?.success 
-                    ? "bg-green-100 dark:bg-green-500/20 border-green-400" 
-                    : "bg-red-100 dark:bg-red-500/20 border-red-400"
-                )}>
-                  {recoveryInfo?.success ? (
-                    <Check className="w-8 h-8 text-green-600 dark:text-green-400" />
-                  ) : (
-                    <AlertTriangle className="w-8 h-8 text-red-600 dark:text-red-400" />
-                  )}
+                <div className="w-16 h-16 rounded-full bg-red-100 dark:bg-red-500/20 border-2 border-red-400 mx-auto flex items-center justify-center">
+                  <AlertTriangle className="w-8 h-8 text-red-600 dark:text-red-400" />
                 </div>
                 <div>
-                  <h3 className="text-xl  mb-2">
-                    {recoveryInfo?.success ? "Funds Recovered" : "Something went wrong"}
-                  </h3>
+                  <h3 className="text-xl mb-2">Something went wrong</h3>
                   <p className="text-muted-foreground">{error}</p>
                 </div>
-                
-                {/* Recovery success - show tx link */}
-                {recoveryInfo?.success && recoveryInfo.txHash && (
-                  <div className="p-4 rounded-xl bg-green-100 dark:bg-green-500/10 border border-green-400 space-y-2">
-                    <p className="text-sm text-green-700 dark:text-green-400 font-medium">
-                      {recoveryInfo.message}
-                    </p>
-                    <a
-                      href={`https://solscan.io/tx/${recoveryInfo.txHash}`}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="text-xs text-green-600 hover:underline inline-flex items-center gap-1"
-                    >
-                      View recovery transaction
-                      <ArrowRight className="w-3 h-3" />
-                    </a>
-                  </div>
-                )}
-                
-                {/* Recovery failed - show private key warning */}
-                {recoveryInfo && !recoveryInfo.success && (
-                  <div className="p-4 rounded-xl bg-amber-100 dark:bg-amber-500/10 border border-amber-400 text-left space-y-2">
-                    <p className="text-sm text-amber-700 dark:text-amber-400 font-medium">
-                      Manual Recovery May Be Needed
-                    </p>
-                    <p className="text-xs text-muted-foreground">
-                      Check the browser console (F12) for the ephemeral wallet private key. 
-                      Import it into Phantom to recover any stuck funds.
-                    </p>
-                  </div>
-                )}
-                
                 <Button onClick={resetFlow}>Try Again</Button>
               </CardContent>
             </Card>

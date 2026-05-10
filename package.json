@@ -35,9 +35,7 @@
     "clsx": "^2.1.1",
     "framer-motion": "^11.18.2",
     "grammy": "^1.40.0",
-    "imapflow": "^1.2.8",
     "lucide-react": "^0.563.0",
-    "mailparser": "^3.9.3",
     "next": "^15.5.18",
     "pg": "^8.18.0",
     "qrcode.react": "^4.2.0",
@@ -49,7 +47,6 @@
     "zod": "^4.3.6"
   },
   "devDependencies": {
-    "@types/mailparser": "^3.4.6",
     "@types/node": "^22.9.0",
     "@types/pg": "^8.16.0",
     "@types/react": "^19.0.0",

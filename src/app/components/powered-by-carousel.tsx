@@ -21,7 +21,8 @@ const partners: Partner[] = [
     srcLight: "/Privy_Symbol_Black.png",
     srcDark: "/Privy_Symbol_White.png",
   },
-  { name: "Starpay", src: "/starpay-logo.png", rounded: true },
+  // TODO: drop /public/bitrefill-logo.svg in and re-enable
+  // { name: "Bitrefill", src: "/bitrefill-logo.svg" },
 ];
 
 function PartnerLogo({ partner }: { partner: Partner }) {

@@ -1,12 +1,11 @@
 /**
  * PostgreSQL Database Connection
- * 
+ *
  * Uses Railway's DATABASE_URL environment variable.
  */
 
 import { Pool } from "pg";
 
-// Create a connection pool
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: process.env.NODE_ENV === "production" ? { rejectUnauthorized: false } : false,
@@ -14,10 +13,6 @@ const pool = new Pool({
 
 export default pool;
 
-/**
- * Initialize the database schema
- * Call this once on app startup
- */
 /** Increment link created counter (no PII stored) */
 export async function incrementLinksCreated(): Promise<void> {
   try {
@@ -56,6 +51,11 @@ export async function getLinkStats(): Promise<{ totalCreated: number; totalClaim
   return { totalCreated: 0, totalClaimed: 0 };
 }
 
+/**
+ * Initialize the database schema.
+ * Idempotent — safe to run repeatedly. Adds Bitrefill columns to legacy
+ * tables that may have Starpay-era schema.
+ */
 export async function initDatabase(): Promise<void> {
   const client = await pool.connect();
   try {
@@ -64,11 +64,17 @@ export async function initDatabase(): Promise<void> {
         order_id VARCHAR(64) PRIMARY KEY,
         status VARCHAR(20) NOT NULL DEFAULT 'pending',
         amount INTEGER NOT NULL,
-        card_type VARCHAR(20) NOT NULL,
+        product_slug VARCHAR(128),
+        product_name VARCHAR(256),
+        card_type VARCHAR(20),
         created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
         expires_at TIMESTAMP WITH TIME ZONE,
+        bitrefill_invoice_id VARCHAR(64),
+        bitrefill_order_id VARCHAR(64),
         starpay_order_id VARCHAR(64),
         payment_address VARCHAR(64),
+        payment_amount DECIMAL(18, 9),
+        payment_currency VARCHAR(20),
         payment_amount_sol DECIMAL(18, 9),
         deposit_tx_hash VARCHAR(128),
         withdraw_tx_hash VARCHAR(128),
@@ -77,8 +83,15 @@ export async function initDatabase(): Promise<void> {
         updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
       );
 
+      ALTER TABLE gift_card_orders ADD COLUMN IF NOT EXISTS product_slug VARCHAR(128);
+      ALTER TABLE gift_card_orders ADD COLUMN IF NOT EXISTS product_name VARCHAR(256);
+      ALTER TABLE gift_card_orders ADD COLUMN IF NOT EXISTS bitrefill_invoice_id VARCHAR(64);
+      ALTER TABLE gift_card_orders ADD COLUMN IF NOT EXISTS bitrefill_order_id VARCHAR(64);
+      ALTER TABLE gift_card_orders ADD COLUMN IF NOT EXISTS payment_amount DECIMAL(18, 9);
+      ALTER TABLE gift_card_orders ADD COLUMN IF NOT EXISTS payment_currency VARCHAR(20);
+
       CREATE INDEX IF NOT EXISTS idx_orders_status ON gift_card_orders(status);
-      CREATE INDEX IF NOT EXISTS idx_orders_starpay_id ON gift_card_orders(starpay_order_id);
+      CREATE INDEX IF NOT EXISTS idx_orders_bitrefill_invoice ON gift_card_orders(bitrefill_invoice_id);
 
       CREATE TABLE IF NOT EXISTS link_stats (
         id INTEGER PRIMARY KEY DEFAULT 1,

@@ -4,14 +4,23 @@ import { useState, useEffect } from "react";
 import Link from "next/link";
 import Image from "next/image";
 import { motion, AnimatePresence } from "framer-motion";
-import { Copy, Check, Home, AlertTriangle, Gift, Eye, EyeOff } from "lucide-react";
+import {
+  Copy,
+  Check,
+  Home,
+  AlertTriangle,
+  Gift,
+  Eye,
+  EyeOff,
+  ExternalLink,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   parseClaimHash,
   decryptCardDetailsClient,
   CardDetails,
-  EncryptedCard
+  EncryptedCard,
 } from "@/lib/card/client-decryption";
 
 type ClaimStatus = "loading" | "decrypting" | "ready" | "error";
@@ -19,18 +28,15 @@ type ClaimStatus = "loading" | "decrypting" | "ready" | "error";
 export function CardClaimPage() {
   const [status, setStatus] = useState<ClaimStatus>("loading");
   const [error, setError] = useState<string | null>(null);
-  const [cardDetails, setCardDetails] = useState<CardDetails | null>(null);
+  const [card, setCard] = useState<CardDetails | null>(null);
   const [orderId, setOrderId] = useState<string | null>(null);
   const [copied, setCopied] = useState<string | null>(null);
   const [showDetails, setShowDetails] = useState(false);
 
   useEffect(() => {
-    const claimCard = async () => {
+    const claim = async () => {
       try {
-        // Parse order ID and key from URL hash
-        const hash = window.location.hash;
-        const parsed = parseClaimHash(hash);
-
+        const parsed = parseClaimHash(window.location.hash);
         if (!parsed) {
           setError("Invalid claim link. The link may be corrupted or incomplete.");
           setStatus("error");
@@ -39,7 +45,6 @@ export function CardClaimPage() {
 
         setOrderId(parsed.orderId);
 
-        // Fetch encrypted card from server
         const response = await fetch(`/api/card/claim?id=${parsed.orderId}`);
         const data = await response.json();
 
@@ -55,13 +60,12 @@ export function CardClaimPage() {
 
         setStatus("decrypting");
 
-        // Decrypt card details client-side
         const decrypted = await decryptCardDetailsClient(
           data.encryptedCard as EncryptedCard,
           parsed.key
         );
 
-        setCardDetails(decrypted);
+        setCard(decrypted);
         setStatus("ready");
       } catch (err) {
         console.error("Claim error:", err);
@@ -70,7 +74,7 @@ export function CardClaimPage() {
       }
     };
 
-    claimCard();
+    claim();
   }, []);
 
   const handleCopy = (text: string, label: string) => {
@@ -79,13 +83,11 @@ export function CardClaimPage() {
     setTimeout(() => setCopied(null), 2000);
   };
 
-  const formatCardNumber = (num: string) => {
-    return num.replace(/(.{4})/g, "$1 ").trim();
-  };
+  const isLegacyPan = !!card?.number; // Pre-Bitrefill claim links carried raw PAN
+  const hasRedemption = !!card?.redemptionCode || !!card?.redemptionUrl;
 
   return (
     <div className="min-h-screen py-12 px-4 bg-background">
-      {/* Header */}
       <header className="max-w-md mx-auto mb-8">
         <div className="flex items-center justify-between mb-6">
           <Link
@@ -99,50 +101,34 @@ export function CardClaimPage() {
 
         <div className="flex items-center gap-3">
           <div className="w-10 h-10 rounded-full overflow-hidden bg-hop-200 dark:bg-hop-800 border-2 border-hop-400">
-            <Image
-              src="/hoppy-logo.png"
-              alt="hoppy"
-              width={40}
-              height={40}
-              className="object-cover"
-            />
+            <Image src="/hoppy-logo.png" alt="hoppy" width={40} height={40} className="object-cover" />
           </div>
           <div>
-            <h1 className="text-xl ">hoppy</h1>
+            <h1 className="text-xl">hoppy</h1>
             <p className="text-sm text-muted-foreground">Gift Card Claim</p>
           </div>
         </div>
       </header>
 
-      {/* Main Content */}
       <Card className="max-w-md mx-auto">
         <AnimatePresence mode="wait">
-          {/* Loading State */}
           {(status === "loading" || status === "decrypting") && (
-            <motion.div
-              key="loading"
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-            >
+            <motion.div key="loading" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
               <CardContent className="py-12 text-center">
                 <div className="w-16 h-16 rounded-full bg-hop-100 dark:bg-hop-500/20 border-2 border-hop-400 mx-auto flex items-center justify-center mb-6">
                   <Gift className="w-8 h-8 text-hop-600 dark:text-hop-400 animate-pulse" />
                 </div>
-                <h3 className="text-lg  mb-2">
+                <h3 className="text-lg mb-2">
                   {status === "loading" ? "Loading..." : "Decrypting Card..."}
                 </h3>
                 <p className="text-sm text-muted-foreground">
-                  {status === "loading"
-                    ? "Fetching your gift card"
-                    : "Securely decrypting card details"}
+                  {status === "loading" ? "Fetching your gift card" : "Securely decrypting card details"}
                 </p>
               </CardContent>
             </motion.div>
           )}
 
-          {/* Ready State - Card Details */}
-          {status === "ready" && cardDetails && (
+          {status === "ready" && card && (
             <motion.div
               key="ready"
               initial={{ opacity: 0, scale: 0.95 }}
@@ -155,66 +141,133 @@ export function CardClaimPage() {
                 </div>
                 <CardTitle>Your Gift Card</CardTitle>
                 <CardDescription>
-                  ${cardDetails.value} {cardDetails.cardType.toUpperCase()} Virtual Card
+                  ${card.value} {card.productName}
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-6">
-                {/* Card Visual */}
-                <div className="p-6 rounded-2xl bg-gradient-to-br from-slate-800 to-slate-900 border-2 border-slate-600 text-white space-y-4">
-                  <div className="flex justify-between items-start">
-                    <span className="text-xs text-slate-400 uppercase">{cardDetails.cardType}</span>
-                    <span className="text-lg ">${cardDetails.value}</span>
-                  </div>
-
-                  <div className="space-y-1">
-                    <p className="text-xs text-slate-400">Card Number</p>
-                    <div className="flex items-center gap-2">
-                      <p className="font-mono text-lg tracking-wider">
-                        {showDetails ? formatCardNumber(cardDetails.number) : "•••• •••• •••• " + cardDetails.number.slice(-4)}
-                      </p>
-                      <button
-                        onClick={() => handleCopy(cardDetails.number, "number")}
-                        className="p-1 hover:bg-slate-700 rounded"
-                      >
-                        {copied === "number" ? (
-                          <Check className="w-4 h-4 text-hop-400" />
-                        ) : (
-                          <Copy className="w-4 h-4 text-slate-400" />
-                        )}
-                      </button>
+                {/* Redemption code (Bitrefill flow) */}
+                {hasRedemption && card.redemptionCode && (
+                  <div className="p-6 rounded-2xl bg-gradient-to-br from-slate-800 to-slate-900 border-2 border-slate-600 text-white space-y-4">
+                    <div className="flex justify-between items-start">
+                      <span className="text-xs text-slate-400 uppercase">{card.productName}</span>
+                      <span className="text-lg">${card.value}</span>
                     </div>
-                  </div>
 
-                  <div className="flex gap-8">
-                    <div>
-                      <p className="text-xs text-slate-400">Expiry</p>
-                      <p className="font-mono">{showDetails ? cardDetails.expiry : "••/••"}</p>
-                    </div>
-                    <div>
-                      <p className="text-xs text-slate-400">CVV</p>
+                    <div className="space-y-1">
+                      <p className="text-xs text-slate-400">Redemption Code</p>
                       <div className="flex items-center gap-2">
-                        <p className="font-mono">{showDetails ? cardDetails.cvv : "•••"}</p>
+                        <p className="font-mono text-lg tracking-wider break-all">
+                          {showDetails
+                            ? card.redemptionCode
+                            : "•".repeat(Math.min(card.redemptionCode.length, 20))}
+                        </p>
                         <button
-                          onClick={() => handleCopy(cardDetails.cvv, "cvv")}
-                          className="p-1 hover:bg-slate-700 rounded"
+                          onClick={() => handleCopy(card.redemptionCode!, "code")}
+                          className="p-1 hover:bg-slate-700 rounded shrink-0"
                         >
-                          {copied === "cvv" ? (
-                            <Check className="w-3 h-3 text-hop-400" />
+                          {copied === "code" ? (
+                            <Check className="w-4 h-4 text-hop-400" />
                           ) : (
-                            <Copy className="w-3 h-3 text-slate-400" />
+                            <Copy className="w-4 h-4 text-slate-400" />
                           )}
                         </button>
                       </div>
                     </div>
-                  </div>
-                </div>
 
-                {/* Show/Hide Toggle */}
-                <Button
-                  variant="outline"
-                  onClick={() => setShowDetails(!showDetails)}
-                  className="w-full"
-                >
+                    {card.pin && (
+                      <div className="space-y-1">
+                        <p className="text-xs text-slate-400">PIN</p>
+                        <div className="flex items-center gap-2">
+                          <p className="font-mono">{showDetails ? card.pin : "••••"}</p>
+                          <button
+                            onClick={() => handleCopy(card.pin!, "pin")}
+                            className="p-1 hover:bg-slate-700 rounded"
+                          >
+                            {copied === "pin" ? (
+                              <Check className="w-3 h-3 text-hop-400" />
+                            ) : (
+                              <Copy className="w-3 h-3 text-slate-400" />
+                            )}
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Redemption URL */}
+                {card.redemptionUrl && (
+                  <a
+                    href={card.redemptionUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="block p-4 rounded-xl bg-hop-100 dark:bg-hop-500/10 border-2 border-hop-400 hover:border-hop-500 transition-colors"
+                  >
+                    <p className="text-xs text-muted-foreground mb-1">Redeem at</p>
+                    <p className="text-sm text-hop-700 dark:text-hop-300 break-all flex items-center gap-2">
+                      {card.redemptionUrl}
+                      <ExternalLink className="w-3 h-3 shrink-0" />
+                    </p>
+                  </a>
+                )}
+
+                {/* Legacy raw-PAN cards */}
+                {isLegacyPan && card.number && (
+                  <div className="p-6 rounded-2xl bg-gradient-to-br from-slate-800 to-slate-900 border-2 border-slate-600 text-white space-y-4">
+                    <div className="flex justify-between items-start">
+                      <span className="text-xs text-slate-400 uppercase">
+                        {card.cardType || card.productName}
+                      </span>
+                      <span className="text-lg">${card.value}</span>
+                    </div>
+
+                    <div className="space-y-1">
+                      <p className="text-xs text-slate-400">Card Number</p>
+                      <div className="flex items-center gap-2">
+                        <p className="font-mono text-lg tracking-wider">
+                          {showDetails
+                            ? card.number.replace(/(.{4})/g, "$1 ").trim()
+                            : "•••• •••• •••• " + card.number.slice(-4)}
+                        </p>
+                        <button
+                          onClick={() => handleCopy(card.number!, "number")}
+                          className="p-1 hover:bg-slate-700 rounded"
+                        >
+                          {copied === "number" ? (
+                            <Check className="w-4 h-4 text-hop-400" />
+                          ) : (
+                            <Copy className="w-4 h-4 text-slate-400" />
+                          )}
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="flex gap-8">
+                      <div>
+                        <p className="text-xs text-slate-400">Expiry</p>
+                        <p className="font-mono">{showDetails ? card.expiry : "••/••"}</p>
+                      </div>
+                      <div>
+                        <p className="text-xs text-slate-400">CVV</p>
+                        <div className="flex items-center gap-2">
+                          <p className="font-mono">{showDetails ? card.cvv : "•••"}</p>
+                          <button
+                            onClick={() => handleCopy(card.cvv!, "cvv")}
+                            className="p-1 hover:bg-slate-700 rounded"
+                          >
+                            {copied === "cvv" ? (
+                              <Check className="w-3 h-3 text-hop-400" />
+                            ) : (
+                              <Copy className="w-3 h-3 text-slate-400" />
+                            )}
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                <Button variant="outline" onClick={() => setShowDetails(!showDetails)} className="w-full">
                   {showDetails ? (
                     <>
                       <EyeOff className="w-4 h-4 mr-2" />
@@ -228,55 +281,24 @@ export function CardClaimPage() {
                   )}
                 </Button>
 
-                {/* Copy All Button */}
-                <Button
-                  onClick={() => {
-                    const text = `Card Number: ${cardDetails.number}\nExpiry: ${cardDetails.expiry}\nCVV: ${cardDetails.cvv}`;
-                    handleCopy(text, "all");
-                  }}
-                  className="w-full"
-                >
-                  {copied === "all" ? (
-                    <>
-                      <Check className="w-4 h-4 mr-2" />
-                      Copied!
-                    </>
-                  ) : (
-                    <>
-                      <Copy className="w-4 h-4 mr-2" />
-                      Copy All Details
-                    </>
-                  )}
-                </Button>
-
                 <p className="text-xs text-muted-foreground text-center">
-                  Save these details - this link can only be used once.
+                  Save these details — this link can only be used once.
                 </p>
               </CardContent>
             </motion.div>
           )}
 
-          {/* Error State */}
           {status === "error" && (
-            <motion.div
-              key="error"
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-            >
+            <motion.div key="error" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
               <CardContent className="py-12 text-center space-y-6">
                 <div className="w-16 h-16 rounded-full bg-red-100 dark:bg-red-500/20 border-2 border-red-400 mx-auto flex items-center justify-center">
                   <AlertTriangle className="w-8 h-8 text-red-600 dark:text-red-400" />
                 </div>
                 <div>
-                  <h3 className="text-lg  mb-2">Claim Failed</h3>
+                  <h3 className="text-lg mb-2">Claim Failed</h3>
                   <p className="text-sm text-muted-foreground">{error}</p>
                 </div>
-                {orderId && (
-                  <p className="text-xs text-muted-foreground">
-                    Order ID: {orderId}
-                  </p>
-                )}
+                {orderId && <p className="text-xs text-muted-foreground">Order ID: {orderId}</p>}
                 <Button variant="outline" onClick={() => window.location.reload()}>
                   Try Again
                 </Button>
@@ -286,12 +308,10 @@ export function CardClaimPage() {
         </AnimatePresence>
       </Card>
 
-      {/* Privacy Notice */}
       <div className="max-w-md mx-auto mt-8 p-4 rounded-xl bg-card border-2 border-border">
-        <h3 className=" mb-2 text-sm">Privacy Protected</h3>
+        <h3 className="mb-2 text-sm">Privacy Protected</h3>
         <p className="text-xs text-muted-foreground">
-          This card was purchased privately via Umbra.
-          Your card details were encrypted and only you (with this link) can decrypt them.
+          The card details were encrypted with a key only you have (in this URL).
           The server never sees your decryption key.
         </p>
       </div>
