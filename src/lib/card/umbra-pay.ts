@@ -372,7 +372,41 @@ export async function umbraCardExecute(
     90_000
   );
 
-  // 5. Escrow creates a RECEIVER-CLAIMABLE UTXO destined for the stealth.
+  // 5. Fund stealth from relayer FIRST so it can pay for its own
+  //    Umbra registration. The receiver MUST be registered before the
+  //    escrow creates a UTXO destined for it — Umbra needs the
+  //    receiver's on-chain viewing key to encrypt the UTXO. Otherwise
+  //    create-UTXO fails with "Receiver is not registered".
+  //
+  //    The relayer-funded stealth is also what gives the on-chain
+  //    privacy — observers see relayer → stealth (generic relayer
+  //    activity, blends with all other relayer ops) instead of
+  //    escrow → stealth (which would link the two ends).
+  const conn = new Connection(rpcUrl(), "confirmed");
+  {
+    const fundTx = new Transaction().add(
+      SystemProgram.transfer({
+        fromPubkey: relayer.publicKey,
+        toPubkey: stealthPk,
+        lamports: STEALTH_FUND_BUDGET,
+      })
+    );
+    const sig = await sendAndConfirmTransaction(conn, fundTx, [relayer], {
+      commitment: "confirmed",
+    });
+    console.log(`[umbra-pay/${input.orderId}] relayer funded stealth`, {
+      lamports: STEALTH_FUND_BUDGET,
+      sig,
+    });
+  }
+
+  // 6. Register stealth with Umbra. Must complete BEFORE step 7
+  //    (create-UTXO) because Umbra encrypts the UTXO destination to
+  //    the receiver's on-chain viewing key.
+  const stealthClient = await umbraClientFor(stealth);
+  await ensureUmbraRegistered(stealthClient, `${input.orderId}/stealth`);
+
+  // 7. Escrow creates a RECEIVER-CLAIMABLE UTXO destined for the stealth.
   //    Size it slightly above bitrefillLamports so the downstream withdraw
   //    fee doesn't put us short. Anything left over stays in the stealth's
   //    encrypted balance after withdraw — small dust loss.
@@ -403,34 +437,8 @@ export async function umbraCardExecute(
     120_000
   );
 
-  // 6. Relayer funds the stealth with gas. CRUCIAL: this funding is what
-  //    breaks the on-chain link between escrow and stealth. The stealth
-  //    must NEVER receive native SOL from the escrow directly — that
-  //    would let observers correlate by amount + timing.
-  await updateOrder(input.orderId, { status: "withdrawing" });
-  const conn = new Connection(rpcUrl(), "confirmed");
-  {
-    const fundTx = new Transaction().add(
-      SystemProgram.transfer({
-        fromPubkey: relayer.publicKey,
-        toPubkey: stealthPk,
-        lamports: STEALTH_FUND_BUDGET,
-      })
-    );
-    const sig = await sendAndConfirmTransaction(conn, fundTx, [relayer], {
-      commitment: "confirmed",
-    });
-    console.log(`[umbra-pay/${input.orderId}] relayer funded stealth`, {
-      lamports: STEALTH_FUND_BUDGET,
-      sig,
-    });
-  }
-
-  // 7. Register the stealth with Umbra.
-  const stealthClient = await umbraClientFor(stealth);
-  await ensureUmbraRegistered(stealthClient, `${input.orderId}/stealth`);
-
   // 8. Stealth claims the UTXO into its encrypted balance.
+  await updateOrder(input.orderId, { status: "withdrawing" });
   const utxos = await waitForUtxoVisible(stealthClient, input.orderId, 90_000);
   const fetchBatchMerkleProof = (
     stealthClient as unknown as { fetchBatchMerkleProof?: unknown }
