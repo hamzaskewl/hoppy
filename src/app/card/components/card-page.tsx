@@ -1,18 +1,29 @@
 "use client";
 
+import { useState } from "react";
 import dynamic from "next/dynamic";
 import Image from "next/image";
 import { NavHeader } from "@/components/nav-header";
+import { ProductCatalog } from "@/app/card/components/product-catalog";
 
-const PrivateCardFlow = dynamic(
-  () => import("@/app/card/components/private-card-flow").then((mod) => ({ default: mod.PrivateCardFlow })),
+const ProductDetailFlow = dynamic(
+  () =>
+    import("@/app/card/components/product-detail-flow").then((mod) => ({
+      default: mod.ProductDetailFlow,
+    })),
   { ssr: false }
 );
 
+interface Selection {
+  slug: string;
+  amount?: number;
+}
+
 export function CardPage() {
+  const [selection, setSelection] = useState<Selection | null>(null);
+
   return (
     <div className="min-h-screen flex flex-col relative">
-      {/* Carrot background - light mode */}
       <div
         className="absolute inset-0 -z-10 dark:hidden"
         style={{
@@ -35,7 +46,6 @@ export function CardPage() {
 
       <main className="flex-1 py-12 px-4">
         <div className="max-w-7xl mx-auto">
-          {/* Header */}
           <div className="rounded-2xl bg-card border-2 border-border p-6 md:p-8 shadow-lg mb-8 max-w-2xl mx-auto">
             <div className="flex items-center gap-6 md:gap-8">
               <div className="flex-shrink-0">
@@ -51,19 +61,29 @@ export function CardPage() {
               </div>
 
               <div className="flex-1 space-y-2">
-                <h1 className="text-xl md:text-2xl tracking-tight">Private Virtual Cards</h1>
+                <h1 className="text-xl md:text-2xl tracking-tight">Private Gift Cards</h1>
                 <p className="text-sm text-muted-foreground">
-                  Buy a virtual Visa or Mastercard with SOL via Bitrefill. Get a private claim link to share or keep.
+                  Hundreds of brands. Pay with SOL. Get a private claim link to share or keep.
                 </p>
               </div>
             </div>
           </div>
 
-          <div className="flex justify-center">
-            <div className="w-full max-w-xl">
-              <PrivateCardFlow />
+          {selection ? (
+            <div className="flex justify-center">
+              <div className="w-full max-w-xl">
+                <ProductDetailFlow
+                  productSlug={selection.slug}
+                  initialAmount={selection.amount}
+                  onBack={() => setSelection(null)}
+                />
+              </div>
             </div>
-          </div>
+          ) : (
+            <ProductCatalog
+              onSelect={(slug, amount) => setSelection({ slug, amount })}
+            />
+          )}
         </div>
       </main>
     </div>

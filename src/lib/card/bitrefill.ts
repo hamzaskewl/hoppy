@@ -122,30 +122,35 @@ async function call<T>(path: string, init?: RequestInit): Promise<T> {
 
 export interface CreateInvoiceArgs {
   productId: string;
-  packageId: string;
+  /** Denomination, e.g. "20" for a $20 card. Sent as `value` per Bitrefill spec. */
+  value: string | number;
   paymentMethod: BitrefillPaymentMethod;
   billPaymentId?: string;
   webhookUrl?: string;
+  autoPay?: boolean;
 }
 
 /**
  * Create a Bitrefill invoice (cart with one product). Returns crypto payment
- * details — pay this address to complete the order.
+ * details — pay this address to complete the order. Endpoint: POST /v2/invoices
  */
 export async function createInvoice(args: CreateInvoiceArgs): Promise<BitrefillInvoice> {
   const item: Record<string, unknown> = {
     product_id: args.productId,
-    package_id: args.packageId,
+    value: String(args.value),
   };
   if (args.billPaymentId) item.bill_payment_id = args.billPaymentId;
 
-  return call<BitrefillInvoice>("/orders", {
+  const body: Record<string, unknown> = {
+    products: [item],
+    payment_method: args.paymentMethod,
+    auto_pay: args.autoPay ?? false,
+  };
+  if (args.webhookUrl) body.webhook_url = args.webhookUrl;
+
+  return call<BitrefillInvoice>("/invoices", {
     method: "POST",
-    body: JSON.stringify({
-      products: [item],
-      payment_method: args.paymentMethod,
-      webhook_url: args.webhookUrl,
-    }),
+    body: JSON.stringify(body),
   });
 }
 
@@ -155,6 +160,106 @@ export async function getInvoice(invoiceId: string): Promise<BitrefillInvoice> {
 
 export async function getOrder(orderId: string): Promise<BitrefillOrder> {
   return call<BitrefillOrder>(`/orders/${orderId}?include_redemption_info=true`);
+}
+
+export interface BitrefillProductSummary {
+  id?: string;
+  _id?: string;
+  slug: string;
+  name: string;
+  type?: string;
+  categories?: string[];
+  countries?: string[];
+  currency?: string;
+  in_stock?: boolean;
+  keywords?: string[];
+  product_url?: string;
+  image?: string;
+}
+
+export interface BitrefillProductSearchResponse {
+  products: BitrefillProductSummary[];
+  found?: number;
+  page?: number;
+  per_page?: number;
+  categories?: { count: number; value: string; highlighted?: boolean }[];
+}
+
+export interface BitrefillProductPackage {
+  package_id: string;
+  package_value: string;
+  package_currency: string;
+  payment_price: string;
+  payment_currency: string;
+}
+
+export interface BitrefillProductRange {
+  min: number;
+  max: number;
+  step: number;
+  currency: string;
+  note?: string;
+}
+
+export interface BitrefillPrepaymentField {
+  id: string;
+  label: string;
+  type: string;
+  required: boolean;
+  max_length?: number | null;
+}
+
+export interface BitrefillProductDetails {
+  id: string;
+  name: string;
+  country_code?: string;
+  currency?: string;
+  categories?: string[];
+  recipient_type?: string;
+  in_stock?: boolean;
+  packages?: BitrefillProductPackage[];
+  range?: BitrefillProductRange;
+  url?: string;
+  subtitles?: string;
+  descriptions?: string;
+  instructions?: string;
+  payment_methods?: string[];
+  prepayment?: {
+    first_form: BitrefillPrepaymentField[];
+    instructions?: string;
+  };
+}
+
+export interface SearchProductsArgs {
+  query?: string;
+  country?: string;
+  category?: string;
+  productType?: "giftcard" | "esim";
+  inStock?: boolean;
+  page?: number;
+  perPage?: number;
+}
+
+/** Search Bitrefill's product catalog. */
+export async function searchProducts(args: SearchProductsArgs = {}): Promise<BitrefillProductSearchResponse> {
+  const params = new URLSearchParams();
+  params.set("q", args.query ?? "*");
+  params.set("country", args.country ?? "US");
+  if (args.category) params.set("category", args.category);
+  if (args.productType) params.set("type", args.productType);
+  if (args.inStock !== undefined) params.set("in_stock", String(args.inStock));
+  if (args.page) params.set("page", String(args.page));
+  if (args.perPage) params.set("per_page", String(args.perPage));
+  return call<BitrefillProductSearchResponse>(`/products?${params.toString()}`);
+}
+
+/** Fetch the full details (packages, range, prepayment) for a single product slug. */
+export async function getProductDetails(
+  slug: string,
+  currency: string = "SOL"
+): Promise<BitrefillProductDetails> {
+  const params = new URLSearchParams({ currency });
+  return call<BitrefillProductDetails>(`/products/${encodeURIComponent(slug)}?${params.toString()}`);
 }
 
 /**

@@ -1,24 +1,28 @@
 /**
  * Create a gift card order via Bitrefill.
  *
- * 1. (If product needs prepayment, e.g. prepaid Visa) submit prepayment forms
- * 2. Create a Bitrefill invoice with payment_method=solana
- * 3. Persist the order locally
- * 4. Return SOL payment details so the client can drive the Umbra deposit/withdraw
+ * 1. Look up the product details (range, prepayment requirements)
+ * 2. (If product needs prepayment, e.g. prepaid Visa) submit prepayment forms
+ * 3. Create a Bitrefill invoice with payment_method=solana
+ * 4. Persist the order locally
+ * 5. Return SOL payment details
  */
 
 import { NextRequest, NextResponse } from "next/server";
 import { createOrder, GiftCardOrder } from "@/lib/card/storage";
 import {
   createInvoice,
+  getProductDetails,
   submitPrepaymentStep,
   BitrefillError,
   BitrefillPaymentMethod,
+  BitrefillProductDetails,
 } from "@/lib/card/bitrefill";
 
 const DEFAULT_PAYMENT_METHOD: BitrefillPaymentMethod = "solana";
 
-// Curated mapping for the simple visa/mastercard tiles used by the existing UI.
+// Curated mapping for legacy visa/mastercard tile clicks (kept for backwards
+// compatibility with anything still hitting this route with cardType).
 const LEGACY_TYPE_MAP: Record<string, { slug: string; name: string }> = {
   visa: { slug: "virtual-prepaid-visa-usa", name: "Digital Prepaid Visa USA" },
   mastercard: { slug: "virtual-prepaid-mastercard-usa", name: "Virtual Prepaid Mastercard USA" },
@@ -34,30 +38,26 @@ function webhookUrl(): string | undefined {
   return `${base.replace(/\/$/, "")}/api/card/bitrefill-webhook`;
 }
 
+interface RequestBody {
+  amount?: number;
+  productSlug?: string;
+  productName?: string;
+  /** Legacy: visa | mastercard tile. */
+  cardType?: string;
+  /** Form data for products with a prepayment chain (e.g. Visa cardholder name). */
+  prepaymentFormData?: Record<string, string>;
+}
+
 export async function POST(request: NextRequest) {
   try {
-    const body = await request.json();
-    const {
-      amount,
-      cardType,
-      productSlug,
-      productName,
-      cardholderFirstName,
-      cardholderLastName,
-    } = body as {
-      amount?: number;
-      cardType?: string;
-      productSlug?: string;
-      productName?: string;
-      cardholderFirstName?: string;
-      cardholderLastName?: string;
-    };
+    const body = (await request.json()) as RequestBody;
+    const { amount, cardType, productSlug, productName, prepaymentFormData } = body;
 
-    if (!amount || amount < 5 || amount > 10000) {
-      return NextResponse.json({ error: "Amount must be between $5 and $10,000" }, { status: 400 });
+    if (!amount || amount < 1 || amount > 10000) {
+      return NextResponse.json({ error: "Amount must be between $1 and $10,000" }, { status: 400 });
     }
 
-    // Resolve product: explicit slug wins; else fall back to legacy visa/mastercard buttons.
+    // Resolve product slug: explicit wins; legacy cardType is a fallback.
     let slug = productSlug;
     let name = productName;
     if (!slug && cardType && LEGACY_TYPE_MAP[cardType]) {
@@ -65,7 +65,7 @@ export async function POST(request: NextRequest) {
       name = LEGACY_TYPE_MAP[cardType].name;
     }
     if (!slug) {
-      return NextResponse.json({ error: "Product slug or cardType required" }, { status: 400 });
+      return NextResponse.json({ error: "productSlug required" }, { status: 400 });
     }
 
     if (!process.env.BITREFILL_API_KEY) {
@@ -73,49 +73,90 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Card service not configured" }, { status: 500 });
     }
 
-    const orderId = generateOrderId();
-
-    // Some products (notably prepaid Visa/MC) require a prepayment form chain
-    // before the invoice can be created. We attempt step 1 with the data we
-    // have; if the server responds with another form, we advance until final.
-    let billPaymentId: string | undefined;
-    let stepNumber = 1;
-    const maxSteps = 5;
-    const formData: Record<string, string> = {
-      bill_amount: String(amount),
-      amount: String(amount),
-    };
-    if (cardholderFirstName) formData.first_name = cardholderFirstName;
-    if (cardholderLastName) formData.last_name = cardholderLastName;
-
+    // Pull product details so we know:
+    //  - whether prepayment is required
+    //  - the valid value range (helps return a clear error if amount is bad)
+    let product: BitrefillProductDetails;
     try {
-      while (stepNumber <= maxSteps) {
-        const step = await submitPrepaymentStep({
-          productId: slug,
-          stepNumber,
-          formData,
-          billPaymentId,
-        });
-        billPaymentId = step.bill_payment_id;
-        if (step.step === "final") break;
-        stepNumber += 1;
-      }
+      product = await getProductDetails(slug, "SOL");
     } catch (e) {
-      // Products without a prepayment block return 404/400; that's fine — skip.
-      if (!(e instanceof BitrefillError) || e.status >= 500) {
-        console.warn("[GiftOrder] prepayment step skipped:", e);
-      }
-      billPaymentId = undefined;
+      console.error("[GiftOrder] getProductDetails failed:", e);
+      return NextResponse.json({ error: "Product not found" }, { status: 404 });
     }
 
-    // Bitrefill expects package_id as the value (e.g. "50"), not the full slug<&>50 form.
-    const packageId = String(amount);
+    if (product.range) {
+      const { min, max } = product.range;
+      if (amount < min || amount > max) {
+        return NextResponse.json(
+          { error: `Amount must be between ${product.range.currency} ${min} and ${max}` },
+          { status: 400 }
+        );
+      }
+    }
+
+    if (!name) name = product.name || slug;
+
+    const orderId = generateOrderId();
+
+    // Drive the prepayment chain when the product requires one. Each step
+    // either advances to the next form or returns step="final" with the
+    // bill_payment_id we need for createInvoice.
+    let billPaymentId: string | undefined;
+    if (product.prepayment) {
+      const formData: Record<string, string> = {
+        bill_amount: String(amount),
+        amount: String(amount),
+        ...(prepaymentFormData ?? {}),
+      };
+
+      try {
+        let stepNumber = 1;
+        const maxSteps = 6;
+        while (stepNumber <= maxSteps) {
+          const step = await submitPrepaymentStep({
+            productId: slug,
+            stepNumber,
+            formData,
+            billPaymentId,
+          });
+          billPaymentId = step.bill_payment_id;
+          if (step.step === "final") break;
+
+          // Server is asking for more fields — bail out and tell the client
+          // exactly what to collect, so the user can fill them in.
+          if (step.next_form?.length) {
+            const missing = step.next_form
+              .filter((f) => f.required && !(f.id in formData))
+              .map((f) => ({ id: f.id, label: f.label, type: f.type }));
+            if (missing.length) {
+              return NextResponse.json(
+                {
+                  error: "Additional info needed",
+                  needsForm: { step: stepNumber + 1, fields: missing },
+                },
+                { status: 422 }
+              );
+            }
+          }
+          stepNumber += 1;
+        }
+      } catch (e) {
+        if (e instanceof BitrefillError) {
+          console.error("[GiftOrder] prepayment failed:", e.status, e.body);
+          return NextResponse.json(
+            { error: "Card provider rejected prepayment", details: e.body },
+            { status: e.status >= 500 ? 502 : 400 }
+          );
+        }
+        throw e;
+      }
+    }
 
     let invoice;
     try {
       invoice = await createInvoice({
         productId: slug,
-        packageId,
+        value: String(amount),
         paymentMethod: DEFAULT_PAYMENT_METHOD,
         billPaymentId,
         webhookUrl: webhookUrl(),
@@ -125,7 +166,7 @@ export async function POST(request: NextRequest) {
         console.error("[GiftOrder] Bitrefill error:", e.status, e.body);
         return NextResponse.json(
           { error: "Failed to create order with card provider", details: e.body },
-          { status: e.status }
+          { status: e.status >= 500 ? 502 : 400 }
         );
       }
       throw e;
@@ -148,7 +189,7 @@ export async function POST(request: NextRequest) {
       status: "pending",
       amount,
       productSlug: slug,
-      productName: name || slug,
+      productName: name,
       createdAt: new Date().toISOString(),
       expiresAt,
       bitrefillInvoiceId: invoice.id,
@@ -164,12 +205,11 @@ export async function POST(request: NextRequest) {
       success: true,
       orderId,
       productSlug: slug,
-      productName: order.productName,
+      productName: name,
       payment: {
         address: paymentAddress,
         amount: paymentAmount,
         currency: paymentCurrency,
-        // Backwards-compat field names the existing UI uses
         amountSol: paymentCurrency === "SOL" ? paymentAmount : undefined,
       },
       pricing: {

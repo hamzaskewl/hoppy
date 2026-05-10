@@ -1,22 +1,28 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { useWallet, useConnection } from "@solana/wallet-adapter-react";
 import { useWalletModal } from "@solana/wallet-adapter-react-ui";
 import { motion, AnimatePresence } from "framer-motion";
 import {
-  CreditCard,
+  ArrowLeft,
+  ArrowRight,
   Check,
   Copy,
-  Loader2,
-  AlertTriangle,
-  ArrowRight,
+  CreditCard,
   Gift,
   Link as LinkIcon,
+  Loader2,
+  AlertTriangle,
 } from "lucide-react";
-import Image from "next/image";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import {
@@ -25,52 +31,112 @@ import {
   PublicKey,
   LAMPORTS_PER_SOL,
 } from "@solana/web3.js";
+import { colorForSlug, shortLabelFor } from "@/lib/card/featured-products";
 
-type CardType = "visa" | "mastercard";
 type FlowStep = "configure" | "paying" | "waiting" | "complete" | "error";
 
-interface OrderData {
+interface PrepaymentField {
+  id: string;
+  label: string;
+  type: string;
+  required: boolean;
+  max_length?: number | null;
+}
+
+interface ProductDetail {
+  slug: string;
+  name: string;
+  country?: string;
+  currency?: string;
+  categories?: string[];
+  range: { min: number; max: number; step: number; currency: string } | null;
+  packages: { package_value: string }[];
+  subtitle?: string | null;
+  description?: string | null;
+  prepayment: { first_form: PrepaymentField[]; instructions?: string } | null;
+}
+
+interface OrderResponse {
   orderId: string;
-  productSlug: string;
   productName: string;
-  payment: {
-    address: string;
-    amount: number;
-    currency: string;
-  };
-  pricing: {
-    cardValue: number;
-    total: number;
-  };
+  payment: { address: string; amount: number; currency: string };
+  pricing: { cardValue: number; total: number };
   expiresAt: string;
+}
+
+interface OrderState extends OrderResponse {
   claimLink?: string;
 }
 
-export function PrivateCardFlow({ disabled = false }: { disabled?: boolean }) {
+function stripHtml(html: string | null | undefined): string {
+  if (!html) return "";
+  return html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+}
+
+export function ProductDetailFlow({
+  productSlug,
+  initialAmount,
+  onBack,
+}: {
+  productSlug: string;
+  initialAmount?: number;
+  onBack: () => void;
+}) {
   const { publicKey, connected, sendTransaction } = useWallet();
   const { connection } = useConnection();
   const { setVisible } = useWalletModal();
 
-  const [amount, setAmount] = useState<number>(50);
-  const [amountInput, setAmountInput] = useState<string>("50");
-  const [cardType, setCardType] = useState<CardType>("visa");
+  const [product, setProduct] = useState<ProductDetail | null>(null);
+  const [productError, setProductError] = useState<string | null>(null);
+  const [productLoading, setProductLoading] = useState(true);
+
+  const [amount, setAmount] = useState<number>(initialAmount ?? 25);
+  const [amountInput, setAmountInput] = useState<string>(String(initialAmount ?? 25));
+  const [prepaymentForm, setPrepaymentForm] = useState<Record<string, string>>({});
+  const [extraFields, setExtraFields] = useState<PrepaymentField[]>([]);
 
   const [step, setStep] = useState<FlowStep>("configure");
-  const [order, setOrder] = useState<OrderData | null>(null);
+  const [order, setOrder] = useState<OrderState | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
-  const [copied, setCopied] = useState(false);
   const [progress, setProgress] = useState("");
+  const [copied, setCopied] = useState(false);
 
-  // Poll for fulfillment once payment is sent
+  // Load product details on mount.
+  useEffect(() => {
+    let cancelled = false;
+    setProductLoading(true);
+    fetch(`/api/card/product-details?slug=${encodeURIComponent(productSlug)}`)
+      .then(async (r) => {
+        const data = await r.json();
+        if (!r.ok) throw new Error(data.error || "Failed to load product");
+        return data as ProductDetail;
+      })
+      .then((p) => {
+        if (cancelled) return;
+        setProduct(p);
+        // Snap initialAmount into the valid range if necessary.
+        if (p.range) {
+          const target = Math.max(p.range.min, Math.min(p.range.max, amount));
+          setAmount(target);
+          setAmountInput(String(target));
+        }
+      })
+      .catch((e) => !cancelled && setProductError(e.message))
+      .finally(() => !cancelled && setProductLoading(false));
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [productSlug]);
+
+  // Poll for fulfillment once payment sent.
   useEffect(() => {
     if (!order || step !== "waiting") return;
-
     const interval = setInterval(async () => {
       try {
         const res = await fetch(`/api/card/status?orderId=${order.orderId}`);
         const data = await res.json();
-
         if (data.status === "ready" && data.claimLink) {
           setOrder((prev) => (prev ? { ...prev, claimLink: data.claimLink } : prev));
           setStep("complete");
@@ -88,17 +154,46 @@ export function PrivateCardFlow({ disabled = false }: { disabled?: boolean }) {
         console.error("Status poll error:", err);
       }
     }, 5000);
-
     return () => clearInterval(interval);
   }, [order, step]);
+
+  const requiredPrepaymentFields = useMemo<PrepaymentField[]>(() => {
+    if (!product?.prepayment) return [];
+    return [
+      ...product.prepayment.first_form.filter(
+        (f) => f.required && f.id !== "bill_amount" && f.id !== "amount"
+      ),
+      ...extraFields,
+    ];
+  }, [product, extraFields]);
+
+  const quickAmounts = useMemo(() => {
+    if (!product?.range) return [25, 50, 100, 250];
+    const { min, max } = product.range;
+    const candidates = [5, 10, 25, 50, 100, 250].filter((v) => v >= min && v <= max);
+    if (candidates.length === 0) return [min, Math.round((min + max) / 2), max];
+    return candidates.slice(0, 4);
+  }, [product]);
+
+  const handlePrepaymentChange = (id: string, value: string) => {
+    setPrepaymentForm((prev) => ({ ...prev, [id]: value }));
+  };
 
   const handleCreateOrder = async () => {
     if (!connected) {
       setVisible(true);
       return;
     }
-    if (!publicKey) {
+    if (!publicKey || !product) {
       setError("Please connect a Solana wallet");
+      return;
+    }
+
+    const missing = requiredPrepaymentFields.filter(
+      (f) => !prepaymentForm[f.id] || prepaymentForm[f.id].trim() === ""
+    );
+    if (missing.length) {
+      setError(`Missing required field: ${missing.map((m) => m.label).join(", ")}`);
       return;
     }
 
@@ -110,18 +205,27 @@ export function PrivateCardFlow({ disabled = false }: { disabled?: boolean }) {
       const res = await fetch("/api/card/gift-order", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ amount, cardType }),
+        body: JSON.stringify({
+          amount,
+          productSlug: product.slug,
+          productName: product.name,
+          prepaymentFormData: prepaymentForm,
+        }),
       });
-
       const data = await res.json();
+
+      if (res.status === 422 && data.needsForm?.fields) {
+        setExtraFields(data.needsForm.fields as PrepaymentField[]);
+        setError("Please fill in the additional fields above.");
+        setIsLoading(false);
+        return;
+      }
       if (!res.ok) throw new Error(data.error || "Failed to create order");
 
       setOrder(data);
       setStep("paying");
       setProgress("Sending payment...");
 
-      // Send SOL directly from the user's wallet to Bitrefill's address.
-      // (Privacy via Umbra is a follow-up — direct send is the working MVP.)
       const lamports = Math.round(data.payment.amount * LAMPORTS_PER_SOL);
       const tx = new Transaction().add(
         SystemProgram.transfer({
@@ -164,12 +268,53 @@ export function PrivateCardFlow({ disabled = false }: { disabled?: boolean }) {
     setOrder(null);
     setError(null);
     setProgress("");
+    setExtraFields([]);
   };
+
+  // ---------- render ----------
+
+  if (productLoading) {
+    return (
+      <Card>
+        <CardContent className="py-16 text-center space-y-4">
+          <Loader2 className="w-8 h-8 mx-auto text-hop-600 dark:text-hop-400 animate-spin" />
+          <p className="text-sm text-muted-foreground">Loading product...</p>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  if (productError || !product) {
+    return (
+      <Card className="border-2 border-red-400">
+        <CardContent className="py-12 text-center space-y-4">
+          <AlertTriangle className="w-8 h-8 mx-auto text-red-600 dark:text-red-400" />
+          <p className="text-sm">{productError || "Product not found"}</p>
+          <Button variant="outline" onClick={onBack}>
+            Back to catalog
+          </Button>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  const color = colorForSlug(product.slug);
+  const label = shortLabelFor(product.name);
+  const minAmt = product.range?.min ?? 1;
+  const maxAmt = product.range?.max ?? 10000;
+  const amountInRange = amount >= minAmt && amount <= maxAmt;
 
   return (
     <div className="max-w-2xl mx-auto">
+      <button
+        onClick={onBack}
+        className="mb-4 inline-flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground transition-colors"
+      >
+        <ArrowLeft className="w-4 h-4" />
+        Back to catalog
+      </button>
+
       <AnimatePresence mode="wait">
-        {/* Step 1: Configure */}
         {step === "configure" && (
           <motion.div
             key="configure"
@@ -179,40 +324,44 @@ export function PrivateCardFlow({ disabled = false }: { disabled?: boolean }) {
           >
             <Card>
               <CardHeader>
-                <CardTitle className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-xl bg-hop-500 border-2 border-hop-600 flex items-center justify-center">
-                    <Gift className="w-5 h-5 text-white" />
+                <div className="flex items-center gap-4">
+                  <div
+                    className="w-14 h-14 rounded-xl flex items-center justify-center text-white font-bold border-2 border-border shrink-0"
+                    style={{ backgroundColor: color }}
+                  >
+                    {label}
                   </div>
-                  Private Gift Card
-                </CardTitle>
-                <CardDescription>
-                  Buy a virtual card with SOL. You&apos;ll get a claim link to share or keep.
-                </CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-6">
-                <div className="p-3 rounded-xl bg-hop-100 dark:bg-hop-500/10 border-2 border-hop-400 flex items-center gap-3">
-                  <Image src="/bunnypriv.png" alt="Privacy" width={28} height={28} className="w-7 h-7" />
-                  <div>
-                    <p className="text-sm font-medium text-hop-700 dark:text-hop-300">Powered by Bitrefill</p>
-                    <p className="text-xs text-muted-foreground">Pay in SOL — card delivered as a private claim link</p>
+                  <div className="flex-1 min-w-0">
+                    <CardTitle className="truncate">{product.name}</CardTitle>
+                    {product.subtitle && (
+                      <CardDescription className="truncate">{product.subtitle}</CardDescription>
+                    )}
                   </div>
                 </div>
+              </CardHeader>
+              <CardContent className="space-y-6">
+                {product.description && (
+                  <p className="text-sm text-muted-foreground line-clamp-3">
+                    {stripHtml(product.description)}
+                  </p>
+                )}
 
-                {/* Amount */}
                 <div className="space-y-3">
-                  <label className="text-sm font-medium">Card Value (USD)</label>
+                  <label className="text-sm font-medium">
+                    Amount ({product.currency || "USD"})
+                  </label>
                   <div className="grid grid-cols-5 gap-2">
-                    {[25, 50, 100, 250].map((value) => (
+                    {quickAmounts.map((value) => (
                       <button
                         key={value}
                         type="button"
                         onClick={() => {
                           setAmount(value);
-                          setAmountInput(value.toString());
+                          setAmountInput(String(value));
                         }}
                         className={cn(
                           "py-3 rounded-xl font-medium transition-all border-2",
-                          amount === value && amountInput === value.toString()
+                          amount === value && amountInput === String(value)
                             ? "bg-hop-500 text-white border-hop-600"
                             : "bg-card border-border hover:border-hop-400"
                         )}
@@ -228,7 +377,7 @@ export function PrivateCardFlow({ disabled = false }: { disabled?: boolean }) {
                       }}
                       className={cn(
                         "py-3 rounded-xl font-medium transition-all border-2",
-                        ![25, 50, 100, 250].includes(amount)
+                        !quickAmounts.includes(amount)
                           ? "bg-hop-500 text-white border-hop-600"
                           : "bg-card border-border hover:border-hop-400"
                       )}
@@ -239,59 +388,61 @@ export function PrivateCardFlow({ disabled = false }: { disabled?: boolean }) {
                   <Input
                     id="custom-amount"
                     type="text"
-                    inputMode="numeric"
+                    inputMode="decimal"
                     value={amountInput}
                     onChange={(e) => {
                       const v = e.target.value;
-                      if (v === "" || /^\d+$/.test(v)) {
+                      if (v === "" || /^\d+(\.\d{0,2})?$/.test(v)) {
                         setAmountInput(v);
                         const num = v === "" ? 0 : Number(v);
-                        if (num >= 5 && num <= 10000) setAmount(num);
+                        if (num >= minAmt && num <= maxAmt) setAmount(num);
                       }
                     }}
                     onBlur={() => {
-                      if (amountInput === "" || amount < 5) {
-                        setAmount(50);
-                        setAmountInput("50");
+                      if (amountInput === "" || amount < minAmt) {
+                        const fallback = Math.max(minAmt, 25);
+                        setAmount(fallback);
+                        setAmountInput(String(fallback));
                       }
                     }}
                     className="bg-card border-2 border-border"
-                    placeholder="5 - 10,000"
+                    placeholder={`${minAmt} - ${maxAmt}`}
                   />
+                  {product.range && (
+                    <p className="text-xs text-muted-foreground">
+                      Range: ${minAmt} – ${maxAmt}
+                    </p>
+                  )}
                 </div>
 
-                {/* Card type */}
-                <div className="space-y-3">
-                  <label className="text-sm font-medium">Card Type</label>
-                  <div className="grid grid-cols-2 gap-3">
-                    {(["visa", "mastercard"] as CardType[]).map((type) => (
-                      <button
-                        key={type}
-                        type="button"
-                        onClick={() => setCardType(type)}
-                        className={cn(
-                          "py-4 rounded-xl font-medium transition-all capitalize border-2",
-                          cardType === type
-                            ? "bg-hop-500 text-white border-hop-600"
-                            : "bg-card border-border hover:border-hop-400"
-                        )}
-                      >
-                        {type}
-                      </button>
+                {requiredPrepaymentFields.length > 0 && (
+                  <div className="space-y-3 p-4 rounded-xl bg-secondary border-2 border-border">
+                    <p className="text-sm font-medium">Card details</p>
+                    {requiredPrepaymentFields.map((field) => (
+                      <div key={field.id} className="space-y-1">
+                        <label className="text-xs text-muted-foreground">{field.label}</label>
+                        <Input
+                          type={field.type === "email" ? "email" : "text"}
+                          maxLength={field.max_length || undefined}
+                          value={prepaymentForm[field.id] || ""}
+                          onChange={(e) => handlePrepaymentChange(field.id, e.target.value)}
+                          className="bg-card border-2 border-border"
+                        />
+                      </div>
                     ))}
                   </div>
-                </div>
+                )}
 
                 {error && (
-                  <div className="p-3 rounded-xl bg-red-100 dark:bg-red-500/10 border-2 border-red-400 text-red-700 dark:text-red-200 text-sm flex items-center gap-2">
-                    <AlertTriangle className="w-4 h-4" />
+                  <div className="p-3 rounded-xl bg-red-100 dark:bg-red-500/10 border-2 border-red-400 text-red-700 dark:text-red-200 text-sm flex items-start gap-2">
+                    <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />
                     {error}
                   </div>
                 )}
 
                 <Button
-                  onClick={disabled ? undefined : handleCreateOrder}
-                  disabled={isLoading || amount < 5 || disabled}
+                  onClick={handleCreateOrder}
+                  disabled={isLoading || !amountInRange}
                   className="w-full py-6 text-lg"
                 >
                   {isLoading ? (
@@ -301,25 +452,22 @@ export function PrivateCardFlow({ disabled = false }: { disabled?: boolean }) {
                     </>
                   ) : !connected ? (
                     "Connect Wallet"
-                  ) : disabled ? (
-                    "Temporarily Unavailable"
                   ) : (
                     <>
-                      Get Card
+                      Buy ${amount} {product.name}
                       <ArrowRight className="w-5 h-5 ml-2" />
                     </>
                   )}
                 </Button>
 
                 <p className="text-xs text-muted-foreground text-center">
-                  After payment, you get a claim link. Share it with anyone — only link holders see the card.
+                  Pay with SOL — you&apos;ll get a private claim link to share or keep.
                 </p>
               </CardContent>
             </Card>
           </motion.div>
         )}
 
-        {/* Processing */}
         {(step === "paying" || step === "waiting") && (
           <motion.div
             key="processing"
@@ -354,7 +502,6 @@ export function PrivateCardFlow({ disabled = false }: { disabled?: boolean }) {
           </motion.div>
         )}
 
-        {/* Complete */}
         {step === "complete" && order?.claimLink && (
           <motion.div
             key="complete"
@@ -382,35 +529,27 @@ export function PrivateCardFlow({ disabled = false }: { disabled?: boolean }) {
                       className="bg-card border-2 border-border font-mono text-xs"
                     />
                     <Button variant="outline" size="icon" onClick={handleCopy} className="shrink-0">
-                      {copied ? (
-                        <Check className="w-4 h-4 text-hop-600" />
-                      ) : (
-                        <Copy className="w-4 h-4" />
-                      )}
+                      {copied ? <Check className="w-4 h-4 text-hop-600" /> : <Copy className="w-4 h-4" />}
                     </Button>
                   </div>
                 </div>
-
                 <Button onClick={handleCopy} className="w-full">
                   <LinkIcon className="w-4 h-4 mr-2" />
                   {copied ? "Copied!" : "Copy Claim Link"}
                 </Button>
-
                 <div className="p-3 rounded-xl bg-hop-100 dark:bg-hop-500/10 border-2 border-hop-400">
                   <p className="text-xs text-hop-700 dark:text-hop-300">
                     Share this link with anyone — the card details are encrypted, only link holders can see them.
                   </p>
                 </div>
-
-                <Button variant="outline" onClick={resetFlow} className="w-full">
-                  Get Another Card
+                <Button variant="outline" onClick={onBack} className="w-full">
+                  Back to catalog
                 </Button>
               </CardContent>
             </Card>
           </motion.div>
         )}
 
-        {/* Error */}
         {step === "error" && (
           <motion.div
             key="error"
@@ -427,7 +566,12 @@ export function PrivateCardFlow({ disabled = false }: { disabled?: boolean }) {
                   <h3 className="text-xl mb-2">Something went wrong</h3>
                   <p className="text-muted-foreground">{error}</p>
                 </div>
-                <Button onClick={resetFlow}>Try Again</Button>
+                <div className="flex gap-3 justify-center">
+                  <Button variant="outline" onClick={onBack}>
+                    Catalog
+                  </Button>
+                  <Button onClick={resetFlow}>Try Again</Button>
+                </div>
               </CardContent>
             </Card>
           </motion.div>

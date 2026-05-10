@@ -44,9 +44,15 @@ export async function POST(request: NextRequest) {
   const rawBody = await request.text();
   const signature = request.headers.get("x-bitrefill-signature") || request.headers.get("x-signature");
 
-  if (process.env.BITREFILL_WEBHOOK_SECRET && !verifyWebhookSignature(rawBody, signature)) {
-    console.warn("[BitrefillWebhook] Invalid signature");
-    return NextResponse.json({ error: "Invalid signature" }, { status: 401 });
+  // Bitrefill's docs don't currently document HMAC signing, so we only verify
+  // when both a secret is configured AND a signature header is actually sent.
+  // If they start signing later, set BITREFILL_WEBHOOK_SECRET and verification
+  // kicks in automatically.
+  if (process.env.BITREFILL_WEBHOOK_SECRET && signature) {
+    if (!verifyWebhookSignature(rawBody, signature)) {
+      console.warn("[BitrefillWebhook] Invalid signature");
+      return NextResponse.json({ error: "Invalid signature" }, { status: 401 });
+    }
   }
 
   let payload: WebhookPayload;
