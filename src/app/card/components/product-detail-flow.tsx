@@ -64,7 +64,13 @@ interface ProductDetail {
 interface OrderResponse {
   orderId: string;
   productName: string;
-  payment: { address: string; amount: number; currency: string };
+  payment: {
+    address: string;
+    amount: number;
+    /** Exact integer lamports — preferred for the wallet transfer. */
+    amountAtomic?: number;
+    currency: string;
+  };
   pricing: { cardValue: number; total: number };
   expiresAt: string;
 }
@@ -281,7 +287,12 @@ export function ProductDetailFlow({
       setStep("paying");
       setProgress("Sending payment...");
 
-      const lamports = Math.round(data.payment.amount * LAMPORTS_PER_SOL);
+      // Prefer the exact integer lamports the API gives us. Only fall back to
+      // the float roundtrip if a legacy response somehow lacks it.
+      const lamports =
+        typeof data.payment.amountAtomic === "number"
+          ? data.payment.amountAtomic
+          : Math.round(data.payment.amount * LAMPORTS_PER_SOL);
       const tx = new Transaction().add(
         SystemProgram.transfer({
           fromPubkey: publicKey,

@@ -176,17 +176,28 @@ export async function POST(request: NextRequest) {
     const paymentCurrency = invoice.payment?.currency || "SOL";
 
     // Bitrefill returns `payment.price` as an integer in the currency's
-    // smallest unit (lamports for SOL, satoshis for BTC, etc.). Some legacy
-    // responses use a string `amount` field with the human value — handle both.
+    // smallest unit (lamports for SOL). Keep the integer pristine — the wallet
+    // transfer needs to send EXACTLY this many lamports, no float roundtrip.
+    // The human-readable SOL value is just for display.
+    let paymentAmountAtomic: number | undefined;
     let paymentAmount: number | undefined;
     if (typeof invoice.payment?.price === "number") {
-      const divisor = paymentCurrency === "SOL" ? 1e9 : paymentCurrency.startsWith("USDC") || paymentCurrency.startsWith("USDT") ? 1e6 : 1e8;
+      paymentAmountAtomic = invoice.payment.price;
+      const divisor =
+        paymentCurrency === "SOL"
+          ? 1e9
+          : paymentCurrency.startsWith("USDC") || paymentCurrency.startsWith("USDT")
+          ? 1e6
+          : 1e8;
       paymentAmount = invoice.payment.price / divisor;
     } else if (invoice.payment?.amount) {
       paymentAmount = parseFloat(invoice.payment.amount);
+      if (paymentCurrency === "SOL" && Number.isFinite(paymentAmount)) {
+        paymentAmountAtomic = Math.round(paymentAmount * 1e9);
+      }
     }
 
-    if (!paymentAddress || paymentAmount == null) {
+    if (!paymentAddress || paymentAmount == null || paymentAmountAtomic == null) {
       console.error("[GiftOrder] Invoice missing payment details:", invoice);
       return NextResponse.json({ error: "Card provider returned no payment details" }, { status: 502 });
     }
@@ -218,6 +229,9 @@ export async function POST(request: NextRequest) {
       payment: {
         address: paymentAddress,
         amount: paymentAmount,
+        // Exact integer in the currency's smallest unit. Use this for the
+        // wallet transfer — never re-derive from `amount` (float round-trip).
+        amountAtomic: paymentAmountAtomic,
         currency: paymentCurrency,
         amountSol: paymentCurrency === "SOL" ? paymentAmount : undefined,
       },
