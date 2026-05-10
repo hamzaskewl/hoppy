@@ -116,6 +116,52 @@ async function ensureUmbraRegistered(
   }
 }
 
+/**
+ * Wait for an Umbra callback signature to be mined on-chain. Many Umbra
+ * SDK functions return as soon as the QUEUE tx is confirmed, but the
+ * actual effect of the op (e.g. crediting encrypted balance) doesn't
+ * land until the follow-up CALLBACK tx runs. Without explicitly waiting
+ * for the callback, the next op in our pipeline races ahead and sees
+ * stale state — encrypted balance still 0, withdraws fail, etc.
+ */
+async function waitForUmbraCallback(
+  signature: string | undefined,
+  label: string,
+  orderId: string,
+  timeoutMs = 90_000
+): Promise<void> {
+  if (!signature) {
+    console.warn(`[umbra-pay/${orderId}][${label}] no callback signature returned`);
+    return;
+  }
+  const conn = new Connection(rpcUrl(), "confirmed");
+  const { blockhash, lastValidBlockHeight } = await conn.getLatestBlockhash("confirmed");
+  const start = Date.now();
+
+  const result = (await Promise.race([
+    conn.confirmTransaction(
+      { signature, blockhash, lastValidBlockHeight },
+      "confirmed"
+    ),
+    new Promise<never>((_, reject) =>
+      setTimeout(
+        () => reject(new Error(`${label} callback timed out after ${timeoutMs}ms (sig=${signature})`)),
+        timeoutMs
+      )
+    ),
+  ])) as { value: { err: unknown } };
+
+  if (result.value.err) {
+    throw new Error(
+      `${label} callback failed: ${JSON.stringify(result.value.err)} (sig=${signature})`
+    );
+  }
+  console.log(`[umbra-pay/${orderId}][${label}] callback confirmed`, {
+    signature,
+    elapsedMs: Date.now() - start,
+  });
+}
+
 export interface UmbraCardExecuteInput {
   orderId: string;
   /** Lamports the escrow received from the user (returned by deposit confirm). */
@@ -204,29 +250,53 @@ export async function umbraCardExecute(
     liveBalanceBeforeWrap: liveBalance,
   });
 
-  // 4. Deposit the wSOL into encrypted balance.
+  // 4. Deposit the wSOL into encrypted balance. CRITICAL: the SDK returns
+  //    when the queue tx mines, but the actual encrypted-balance credit
+  //    happens via a follow-up callback tx. We MUST wait for that callback
+  //    before withdrawing, otherwise the withdraw sees a 0 balance and
+  //    fails with Umbra error 7050031.
   await updateOrder(input.orderId, { status: "mixing" });
   const depositToEncrypted = getPublicBalanceToEncryptedBalanceDirectDepositorFunction({
     client,
   });
-  await depositToEncrypted(
+  const depositResult = (await depositToEncrypted(
     client.signer.address,
     WSOL_MINT_STR as never,
     BigInt(wrappable) as never
+  )) as { queueSignature?: string; callbackSignature?: string };
+  console.log(`[umbra-pay/${input.orderId}] umbra deposit queued`, {
+    queue: depositResult.queueSignature,
+    callback: depositResult.callbackSignature,
+  });
+  await waitForUmbraCallback(
+    depositResult.callbackSignature,
+    "deposit-callback",
+    input.orderId,
+    90_000
   );
-  console.log(`[umbra-pay/${input.orderId}] umbra deposit ok`);
 
   // 5. Withdraw bitrefillLamports from encrypted balance to escrow's wSOL ATA.
+  //    Same callback-wait pattern: the queue tx returns fast but the wSOL
+  //    only lands in the ATA after the callback runs.
   await updateOrder(input.orderId, { status: "withdrawing" });
   const withdraw = getEncryptedBalanceToPublicBalanceDirectWithdrawerFunction({
     client,
   });
-  await withdraw(
+  const withdrawResult = (await withdraw(
     escrowPk.toBase58() as never,
     WSOL_MINT_STR as never,
     BigInt(input.bitrefillLamports) as never
+  )) as { queueSignature?: string; callbackSignature?: string };
+  console.log(`[umbra-pay/${input.orderId}] umbra withdraw queued`, {
+    queue: withdrawResult.queueSignature,
+    callback: withdrawResult.callbackSignature,
+  });
+  await waitForUmbraCallback(
+    withdrawResult.callbackSignature,
+    "withdraw-callback",
+    input.orderId,
+    90_000
   );
-  console.log(`[umbra-pay/${input.orderId}] umbra withdraw ok`);
 
   // 6. Unwrap wSOL → native SOL on the escrow. The unwrap closes the ATA and
   //    moves the entire wSOL balance back to the escrow's main wallet.

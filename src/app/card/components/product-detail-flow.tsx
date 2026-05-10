@@ -712,6 +712,56 @@ export function ProductDetailFlow({
                 {step === "waiting" && (
                   <>
                     <ProgressDots status={orderStatus} />
+
+                    {/* Show the Bitrefill destination + exact amount so you
+                        can watch the final transfer land on-chain. */}
+                    {order?.payment?.bitrefillAddress && order.payment.bitrefillAmountAtomic != null && (
+                      <div className="text-left p-4 rounded-xl bg-secondary border-2 border-border space-y-2">
+                        <p className="text-xs font-medium text-foreground">
+                          Final destination
+                        </p>
+                        <div className="space-y-1">
+                          <p className="text-[11px] uppercase tracking-wide text-muted-foreground">
+                            Bitrefill address
+                          </p>
+                          <a
+                            href={`https://solscan.io/account/${order.payment.bitrefillAddress}?cluster=devnet`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-xs font-mono text-hop-700 dark:text-hop-300 break-all underline"
+                          >
+                            {order.payment.bitrefillAddress}
+                          </a>
+                        </div>
+                        <div className="space-y-1">
+                          <p className="text-[11px] uppercase tracking-wide text-muted-foreground">
+                            Exact amount expected
+                          </p>
+                          <p className="text-xs font-mono">
+                            {(order.payment.bitrefillAmountAtomic / 1e9).toFixed(9)} SOL
+                            <span className="text-muted-foreground">
+                              {" "}({order.payment.bitrefillAmountAtomic.toLocaleString()} lamports)
+                            </span>
+                          </p>
+                        </div>
+                        {order.payment.escrowAddress && (
+                          <div className="space-y-1">
+                            <p className="text-[11px] uppercase tracking-wide text-muted-foreground">
+                              Mixing through escrow
+                            </p>
+                            <a
+                              href={`https://solscan.io/account/${order.payment.escrowAddress}?cluster=devnet`}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-xs font-mono text-muted-foreground break-all underline"
+                            >
+                              {order.payment.escrowAddress}
+                            </a>
+                          </div>
+                        )}
+                      </div>
+                    )}
+
                     <p className="text-xs text-muted-foreground">
                       Privacy mixing takes ~3-5 min. Safe to leave the page;
                       we&apos;ll keep working in the background.
