@@ -65,11 +65,19 @@ interface OrderResponse {
   orderId: string;
   productName: string;
   payment: {
+    /** Where the user signs to send. For private flow this is the escrow. */
     address: string;
     amount: number;
     /** Exact integer lamports — preferred for the wallet transfer. */
     amountAtomic?: number;
     currency: string;
+    /** True when the address is a Hoppy escrow that mixes through Umbra. */
+    privateFlow?: boolean;
+    /** Bitrefill payout address — only shown for transparency. */
+    bitrefillAddress?: string;
+    bitrefillAmount?: number;
+    bitrefillAmountAtomic?: number;
+    escrowAddress?: string;
   };
   pricing: { cardValue: number; total: number };
   expiresAt: string;
@@ -82,6 +90,80 @@ interface OrderState extends OrderResponse {
 function stripHtml(html: string | null | undefined): string {
   if (!html) return "";
   return html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+}
+
+const PROGRESS_STAGES: { id: string; label: string }[] = [
+  { id: "depositing", label: "Deposit" },
+  { id: "mixing", label: "Mix" },
+  { id: "withdrawing", label: "Withdraw" },
+  { id: "paying", label: "Pay" },
+  { id: "paid", label: "Confirm" },
+  { id: "ready", label: "Ready" },
+];
+
+function stageIndex(status: string | null): number {
+  if (!status) return 0;
+  const i = PROGRESS_STAGES.findIndex((s) => s.id === status);
+  return i < 0 ? 0 : i;
+}
+
+function progressTitleFor(status: string | null): string {
+  switch (status) {
+    case "depositing":
+      return "Depositing into Pool";
+    case "mixing":
+      return "Mixing Funds";
+    case "withdrawing":
+      return "Withdrawing from Pool";
+    case "paying":
+      return "Paying Card Provider";
+    case "paid":
+      return "Waiting for Card";
+    default:
+      return "Preparing";
+  }
+}
+
+function progressDescFor(status: string | null): string {
+  switch (status) {
+    case "depositing":
+      return "Your SOL is hitting the privacy pool…";
+    case "mixing":
+      return "Generating zero-knowledge proofs (this is the slow step)…";
+    case "withdrawing":
+      return "Pulling funds out for the merchant…";
+    case "paying":
+      return "Sending exact amount to the card provider…";
+    case "paid":
+      return "Card provider is processing your order…";
+    default:
+      return "Setting up the private payment…";
+  }
+}
+
+function ProgressDots({ status }: { status: string | null }) {
+  const idx = stageIndex(status);
+  return (
+    <div className="flex items-center justify-center gap-2 text-xs">
+      {PROGRESS_STAGES.map((s, i) => (
+        <div key={s.id} className="flex items-center gap-2">
+          <div
+            className={cn(
+              "w-2 h-2 rounded-full transition-colors",
+              i < idx
+                ? "bg-hop-500"
+                : i === idx
+                ? "bg-hop-500 animate-pulse"
+                : "bg-border"
+            )}
+          />
+          <span className={cn("hidden sm:inline", i === idx ? "text-foreground" : "text-muted-foreground")}>
+            {s.label}
+          </span>
+        </div>
+      ))}
+    </div>
+  );
 }
 
 function DetailAvatar({
@@ -179,13 +261,18 @@ export function ProductDetailFlow({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [productSlug]);
 
-  // Poll for fulfillment once payment sent.
+  const [orderStatus, setOrderStatus] = useState<string | null>(null);
+
+  // Poll for fulfillment once payment sent. Surfaces orchestration progress
+  // (depositing → mixing → withdrawing → paying → paid → ready) so the UI
+  // can show the user where in the flow we are.
   useEffect(() => {
     if (!order || step !== "waiting") return;
     const interval = setInterval(async () => {
       try {
         const res = await fetch(`/api/card/status?orderId=${order.orderId}`);
         const data = await res.json();
+        if (data.status) setOrderStatus(data.status);
         if (data.status === "ready" && data.claimLink) {
           setOrder((prev) => (prev ? { ...prev, claimLink: data.claimLink } : prev));
           setStep("complete");
@@ -193,8 +280,8 @@ export function ProductDetailFlow({
         } else if (data.status === "failed" || data.status === "expired") {
           setError(
             data.status === "expired"
-              ? "Order expired before fulfillment. Contact support if you sent payment."
-              : "Card provider rejected the order. Contact support."
+              ? "Order expired before fulfillment. Try a refund if you sent payment."
+              : "Something went wrong while processing. Try a refund — your funds are still in the escrow."
           );
           setStep("error");
           clearInterval(interval);
@@ -258,6 +345,7 @@ export function ProductDetailFlow({
           amount,
           productSlug: product.slug,
           productName: product.name,
+          userAddress: publicKey.toBase58(),
           prepaymentFormData: prepaymentForm,
         }),
       });
@@ -304,6 +392,22 @@ export function ProductDetailFlow({
       const sig = await sendTransaction(tx, connection);
       await connection.confirmTransaction(sig, "confirmed");
 
+      // For the private flow, kick off the Umbra orchestration. The server
+      // takes 3-5 minutes to mix and pay Bitrefill — we fire-and-forget here
+      // and the polling effect picks up status updates.
+      if (data.payment.privateFlow) {
+        setProgress("Starting private mix...");
+        const exec = await fetch("/api/card/private-execute", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ orderId: data.orderId, depositTxHash: sig }),
+        });
+        if (!exec.ok && exec.status !== 202) {
+          const execData = await exec.json().catch(() => ({}));
+          throw new Error(execData.error || "Failed to start private mix");
+        }
+      }
+
       setStep("waiting");
       setProgress("Waiting for card provider...");
     } catch (err) {
@@ -335,6 +439,56 @@ export function ProductDetailFlow({
     setError(null);
     setProgress("");
     setExtraFields([]);
+  };
+
+  const [refundState, setRefundState] = useState<
+    | { kind: "idle" }
+    | { kind: "running" }
+    | { kind: "ok"; refundedSol: number; sig?: string }
+    | { kind: "noop" }
+    | { kind: "fail"; msg: string }
+  >({ kind: "idle" });
+
+  const handleRefund = async () => {
+    if (!order || !publicKey) {
+      setRefundState({ kind: "fail", msg: "Connect the same wallet that placed the order" });
+      return;
+    }
+    setRefundState({ kind: "running" });
+    try {
+      const challenge = `hoppy-card-refund:${order.orderId}:${publicKey.toBase58()}`;
+      // signMessage isn't always available on every wallet adapter — fall
+      // back to a memo-style transaction sign if needed.
+      const wallet = (window as unknown as { phantom?: { solana?: { signMessage?: (m: Uint8Array) => Promise<{ signature: Uint8Array }> } } }).phantom?.solana;
+      if (!wallet?.signMessage) {
+        throw new Error("This wallet doesn't support signMessage. Use Phantom or a similar wallet to refund.");
+      }
+      const encoded = new TextEncoder().encode(challenge);
+      const sigResult = await wallet.signMessage(encoded);
+      const { default: bs58 } = await import("bs58");
+      const sigB58 = bs58.encode(sigResult.signature);
+
+      const res = await fetch("/api/card/refund", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          orderId: order.orderId,
+          userAddress: publicKey.toBase58(),
+          challenge,
+          signature: sigB58,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Refund failed");
+      if (data.noop) {
+        setRefundState({ kind: "noop" });
+      } else {
+        const refundedSol = (data.nativeRefunded ?? 0) / 1e9;
+        setRefundState({ kind: "ok", refundedSol, sig: data.refundTxHash });
+      }
+    } catch (err) {
+      setRefundState({ kind: "fail", msg: err instanceof Error ? err.message : String(err) });
+    }
   };
 
   // ---------- render ----------
@@ -546,18 +700,22 @@ export function ProductDetailFlow({
                 <div>
                   <h3 className="text-xl mb-2">
                     {step === "paying" && "Sending Payment"}
-                    {step === "waiting" && "Waiting for Card"}
+                    {step === "waiting" && progressTitleFor(orderStatus)}
                   </h3>
                   <p className="text-muted-foreground">
                     {step === "paying" && "Confirm in your wallet..."}
-                    {step === "waiting" && "Card provider is processing your order..."}
+                    {step === "waiting" && progressDescFor(orderStatus)}
                   </p>
                 </div>
                 <Loader2 className="w-8 h-8 mx-auto text-hop-600 dark:text-hop-400 animate-spin" />
                 {step === "waiting" && (
-                  <p className="text-xs text-muted-foreground">
-                    This usually takes 1-5 minutes. Don&apos;t close this page.
-                  </p>
+                  <>
+                    <ProgressDots status={orderStatus} />
+                    <p className="text-xs text-muted-foreground">
+                      Privacy mixing takes ~3-5 min. Safe to leave the page;
+                      we&apos;ll keep working in the background.
+                    </p>
+                  </>
                 )}
               </CardContent>
             </Card>
@@ -628,6 +786,54 @@ export function ProductDetailFlow({
                   <h3 className="text-xl mb-2">Something went wrong</h3>
                   <p className="text-muted-foreground">{error}</p>
                 </div>
+
+                {/* Refund flow — only relevant if the user actually sent funds. */}
+                {order?.payment?.privateFlow && (
+                  <div className="space-y-3 text-left p-4 rounded-xl bg-secondary border-2 border-border">
+                    <p className="text-sm font-medium text-foreground">Recover your funds</p>
+                    <p className="text-xs text-muted-foreground">
+                      Your SOL is in the per-order escrow ({order.payment.escrowAddress?.slice(0, 8)}…).
+                      Sign a refund request and we&apos;ll drain it back to your wallet.
+                    </p>
+                    {refundState.kind === "idle" && (
+                      <Button onClick={handleRefund} className="w-full" variant="outline">
+                        Refund my SOL
+                      </Button>
+                    )}
+                    {refundState.kind === "running" && (
+                      <Button disabled className="w-full">
+                        <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                        Processing refund…
+                      </Button>
+                    )}
+                    {refundState.kind === "ok" && (
+                      <p className="text-xs text-hop-700 dark:text-hop-300">
+                        ✓ Refunded {refundState.refundedSol.toFixed(6)} SOL{" "}
+                        {refundState.sig && (
+                          <a
+                            href={`https://solscan.io/tx/${refundState.sig}`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="underline"
+                          >
+                            view tx
+                          </a>
+                        )}
+                      </p>
+                    )}
+                    {refundState.kind === "noop" && (
+                      <p className="text-xs text-muted-foreground">
+                        Escrow is empty — nothing to refund.
+                      </p>
+                    )}
+                    {refundState.kind === "fail" && (
+                      <p className="text-xs text-red-600 dark:text-red-400">
+                        Refund failed: {refundState.msg}
+                      </p>
+                    )}
+                  </div>
+                )}
+
                 <div className="flex gap-3 justify-center">
                   <Button variant="outline" onClick={onBack}>
                     Catalog

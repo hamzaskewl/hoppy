@@ -9,11 +9,16 @@ import { EncryptedCard } from "./encryption";
 
 export type GiftCardOrderStatus =
   | "pending"      // Order created, waiting for payment
-  | "paid"         // Payment received, waiting for Bitrefill to fulfill
+  | "depositing"   // User deposit confirmed; wrapping/depositing into Umbra
+  | "mixing"       // Funds in Umbra encrypted balance; preparing withdraw
+  | "withdrawing"  // Withdrawing from Umbra to escrow's public balance
+  | "paying"       // Transferring SOL from escrow to Bitrefill
+  | "paid"         // Bitrefill received the payment, waiting for fulfillment
   | "ready"        // Redemption details encrypted, claim link ready
   | "claimed"      // Claim link has been opened
   | "expired"      // Order expired
-  | "failed";      // Bitrefill returned a failure
+  | "failed"       // Bitrefill returned a failure (or orchestration crashed)
+  | "refunded";    // User reclaimed funds from the escrow
 
 export interface GiftCardOrder {
   orderId: string;
@@ -23,6 +28,10 @@ export interface GiftCardOrder {
   productName: string;             // Display name
   createdAt: string;
   expiresAt: string;
+
+  // Wallet that placed the order. Used to authorize refunds — only this
+  // address can ask for the escrow to be drained back to it.
+  userAddress?: string;
 
   // Bitrefill identifiers
   bitrefillInvoiceId?: string;     // UUID with dashes
@@ -36,6 +45,7 @@ export interface GiftCardOrder {
   // Umbra flow tx hashes
   depositTxHash?: string;
   withdrawTxHash?: string;
+  refundTxHash?: string;
 
   // Encrypted redemption blob (server can't decrypt without the key in the URL)
   encryptedCard?: EncryptedCard;
@@ -64,6 +74,7 @@ function rowToOrder(row: Record<string, unknown>): GiftCardOrder {
     productName: (row.product_name as string) || "",
     createdAt: row.created_at as string,
     expiresAt: row.expires_at as string,
+    userAddress: (row.user_address as string) || undefined,
     bitrefillInvoiceId: (row.bitrefill_invoice_id as string) || undefined,
     bitrefillOrderId: (row.bitrefill_order_id as string) || undefined,
     paymentAddress: (row.payment_address as string) || undefined,
@@ -71,6 +82,7 @@ function rowToOrder(row: Record<string, unknown>): GiftCardOrder {
     paymentCurrency: (row.payment_currency as string) || undefined,
     depositTxHash: (row.deposit_tx_hash as string) || undefined,
     withdrawTxHash: (row.withdraw_tx_hash as string) || undefined,
+    refundTxHash: (row.refund_tx_hash as string) || undefined,
     encryptedCard: (row.encrypted_card as EncryptedCard) || undefined,
     claimLink: (row.claim_link as string) || undefined,
   };
@@ -81,8 +93,9 @@ async function createOrderPg(order: GiftCardOrder): Promise<void> {
   await pool.query(
     `INSERT INTO gift_card_orders
      (order_id, status, amount, product_slug, product_name, created_at, expires_at,
-      bitrefill_invoice_id, bitrefill_order_id, payment_address, payment_amount, payment_currency)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
+      bitrefill_invoice_id, bitrefill_order_id, payment_address, payment_amount, payment_currency,
+      user_address)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
     [
       order.orderId,
       order.status,
@@ -96,6 +109,7 @@ async function createOrderPg(order: GiftCardOrder): Promise<void> {
       order.paymentAddress || null,
       order.paymentAmount ?? null,
       order.paymentCurrency || null,
+      order.userAddress || null,
     ]
   );
 }
@@ -127,8 +141,10 @@ async function updateOrderPg(orderId: string, updates: Partial<GiftCardOrder>): 
   if (updates.paymentCurrency !== undefined) set("payment_currency", updates.paymentCurrency);
   if (updates.depositTxHash !== undefined) set("deposit_tx_hash", updates.depositTxHash);
   if (updates.withdrawTxHash !== undefined) set("withdraw_tx_hash", updates.withdrawTxHash);
+  if (updates.refundTxHash !== undefined) set("refund_tx_hash", updates.refundTxHash);
   if (updates.encryptedCard !== undefined) set("encrypted_card", JSON.stringify(updates.encryptedCard));
   if (updates.claimLink !== undefined) set("claim_link", updates.claimLink);
+  if (updates.userAddress !== undefined) set("user_address", updates.userAddress);
 
   if (fields.length === 0) return getOrderPg(orderId);
 

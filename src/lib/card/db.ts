@@ -89,6 +89,8 @@ export async function initDatabase(): Promise<void> {
       ALTER TABLE gift_card_orders ADD COLUMN IF NOT EXISTS bitrefill_order_id VARCHAR(64);
       ALTER TABLE gift_card_orders ADD COLUMN IF NOT EXISTS payment_amount DECIMAL(18, 9);
       ALTER TABLE gift_card_orders ADD COLUMN IF NOT EXISTS payment_currency VARCHAR(20);
+      ALTER TABLE gift_card_orders ADD COLUMN IF NOT EXISTS user_address VARCHAR(64);
+      ALTER TABLE gift_card_orders ADD COLUMN IF NOT EXISTS refund_tx_hash VARCHAR(128);
 
       -- Legacy Starpay schema had card_type NOT NULL; the Bitrefill flow
       -- doesn't populate it (we use product_slug instead). Drop the constraint.

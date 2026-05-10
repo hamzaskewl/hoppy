@@ -18,6 +18,8 @@ import {
   BitrefillPaymentMethod,
   BitrefillProductDetails,
 } from "@/lib/card/bitrefill";
+import { getCardEscrowAddress } from "@/lib/umbra/keys";
+import { computeDepositLamports } from "@/lib/card/umbra-pay";
 
 const DEFAULT_PAYMENT_METHOD: BitrefillPaymentMethod = "solana";
 
@@ -44,6 +46,8 @@ interface RequestBody {
   productName?: string;
   /** Legacy: visa | mastercard tile. */
   cardType?: string;
+  /** Wallet placing the order — recorded so /api/card/refund can authorize. */
+  userAddress?: string;
   /** Form data for products with a prepayment chain (e.g. Visa cardholder name). */
   prepaymentFormData?: Record<string, string>;
 }
@@ -51,7 +55,7 @@ interface RequestBody {
 export async function POST(request: NextRequest) {
   try {
     const body = (await request.json()) as RequestBody;
-    const { amount, cardType, productSlug, productName, prepaymentFormData } = body;
+    const { amount, cardType, productSlug, productName, userAddress, prepaymentFormData } = body;
 
     if (!amount || amount < 1 || amount > 10000) {
       return NextResponse.json({ error: "Amount must be between $1 and $10,000" }, { status: 400 });
@@ -212,6 +216,7 @@ export async function POST(request: NextRequest) {
       productName: name,
       createdAt: new Date().toISOString(),
       expiresAt,
+      userAddress,
       bitrefillInvoiceId: invoice.id,
       bitrefillOrderId: invoice.orders?.[0]?.id,
       paymentAddress,
@@ -221,19 +226,39 @@ export async function POST(request: NextRequest) {
 
     await createOrder(order);
 
+    // Private flow: user sends SOL to a per-order Umbra escrow (not directly
+    // to Bitrefill). The escrow then runs the deposit→mix→withdraw chain and
+    // pays Bitrefill. Compute the deposit amount with overshoot+jitter so it
+    // doesn't equal a recognizable card price.
+    const isPrivate = paymentCurrency === "SOL";
+    const escrowAddress = isPrivate ? getCardEscrowAddress(orderId) : undefined;
+    const depositLamports = isPrivate
+      ? computeDepositLamports(paymentAmountAtomic)
+      : undefined;
+
     return NextResponse.json({
       success: true,
       orderId,
       productSlug: slug,
       productName: name,
       payment: {
-        address: paymentAddress,
-        amount: paymentAmount,
-        // Exact integer in the currency's smallest unit. Use this for the
-        // wallet transfer — never re-derive from `amount` (float round-trip).
-        amountAtomic: paymentAmountAtomic,
+        // For the private flow, the user signs a tx to the ESCROW, not
+        // Bitrefill. The escrow address + deposit amount are what the wallet
+        // actually pays. The bitrefill* fields below are purely informational.
+        address: escrowAddress ?? paymentAddress,
+        amount: depositLamports != null ? depositLamports / 1e9 : paymentAmount,
+        amountAtomic: depositLamports ?? paymentAmountAtomic,
         currency: paymentCurrency,
-        amountSol: paymentCurrency === "SOL" ? paymentAmount : undefined,
+        amountSol:
+          paymentCurrency === "SOL"
+            ? (depositLamports ?? paymentAmountAtomic) / 1e9
+            : undefined,
+        // For UIs that want to show "X SOL → Bitrefill" alongside the deposit.
+        bitrefillAddress: paymentAddress,
+        bitrefillAmount: paymentAmount,
+        bitrefillAmountAtomic: paymentAmountAtomic,
+        escrowAddress,
+        privateFlow: isPrivate,
       },
       pricing: {
         cardValue: amount,

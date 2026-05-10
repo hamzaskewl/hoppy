@@ -53,3 +53,32 @@ export function stealthKeypairFromSeed(seed32: Uint8Array): Keypair {
   }
   return Keypair.fromSeed(seed32);
 }
+
+// ============================================================================
+// Card-flow escrow keys
+// ============================================================================
+//
+// The card flow uses a per-order escrow so each order's funds are isolated:
+// if one user's flow gets stuck, only their funds (not anyone else's) sit in
+// the orphan escrow until refunded. The escrow is derived deterministically
+// from the orderId so it can always be re-derived during refund — we never
+// need to persist the secret key anywhere.
+
+/** Deterministic 32-byte seed for a per-order card escrow keypair. */
+export function deriveCardEscrowSeed(orderId: string): Uint8Array {
+  const master = getMasterKey();
+  const h = crypto.createHash("sha256");
+  h.update(master);
+  h.update(Buffer.from("hoppy-card-escrow:v1:", "utf8"));
+  h.update(Buffer.from(orderId, "utf8"));
+  return new Uint8Array(h.digest());
+}
+
+/** Per-order Solana keypair used as the Umbra signer for the card flow. */
+export function getCardEscrowKeypair(orderId: string): Keypair {
+  return Keypair.fromSeed(deriveCardEscrowSeed(orderId));
+}
+
+export function getCardEscrowAddress(orderId: string): string {
+  return getCardEscrowKeypair(orderId).publicKey.toBase58();
+}
