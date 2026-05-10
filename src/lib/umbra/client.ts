@@ -20,6 +20,7 @@ type IUmbraRelayer = ReturnType<typeof getUmbraRelayer>;
 import {
   getCreateReceiverClaimableUtxoFromEncryptedBalanceProver,
   getClaimSelfClaimableUtxoIntoPublicBalanceProver,
+  getClaimReceiverClaimableUtxoIntoEncryptedBalanceProver,
   getUserRegistrationProver,
 } from "@umbra-privacy/web-zk-prover";
 import type { Keypair } from "@solana/web3.js";
@@ -137,6 +138,23 @@ export function claimUtxoProver() {
       getClaimSelfClaimableUtxoIntoPublicBalanceProver();
   }
   return claimUtxoProverInstance;
+}
+
+let claimReceiverIntoEncryptedProverInstance: ReturnType<
+  typeof getClaimReceiverClaimableUtxoIntoEncryptedBalanceProver
+> | null = null;
+
+/**
+ * Claim a RECEIVER-CLAIMABLE UTXO into the receiver's ENCRYPTED balance.
+ * This is the prover the stealth uses in the card flow to pull the UTXO
+ * the escrow created for it.
+ */
+export function claimReceiverIntoEncryptedProver() {
+  if (!claimReceiverIntoEncryptedProverInstance) {
+    claimReceiverIntoEncryptedProverInstance =
+      getClaimReceiverClaimableUtxoIntoEncryptedBalanceProver();
+  }
+  return claimReceiverIntoEncryptedProverInstance;
 }
 
 export function registrationProver() {

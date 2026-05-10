@@ -1,26 +1,53 @@
 /**
  * Card-flow Umbra orchestration (server-side only).
  *
- * Mirrors the payroll adapter's pattern but for the card-buying flow:
+ * The on-chain story this orchestration tells:
  *
- *   user wallet  ──SOL──▶  per-order escrow  ──Umbra mix──▶  Bitrefill
+ *   user wallet ─SOL─▶ per-order ESCROW
+ *       (visible: user → escrow)
+ *                     │
+ *                     │  ESCROW wraps SOL → wSOL → encrypted balance
+ *                     │  ESCROW creates a RECEIVER-CLAIMABLE UTXO destined
+ *                     │  for a fresh STEALTH keypair. The UTXO's destination
+ *                     │  is encrypted inside Umbra — observers can't tell
+ *                     │  who it's for.
+ *                     ▼
+ *   relayer ─0.02 SOL─▶ STEALTH  (visible: relayer-funded gas, indistinguishable
+ *                                 from any other relayer activity)
+ *                     │
+ *                     │  STEALTH registers, claims the UTXO into its own
+ *                     │  encrypted balance, withdraws → wSOL ATA, unwraps
+ *                     │  → native SOL.
+ *                     ▼
+ *   STEALTH ─SOL─▶ Bitrefill payout address (visible: stealth → merchant)
  *
- * The escrow keypair is derived from UMBRA_ESCROW_MASTER_KEY + the orderId
- * (see lib/umbra/keys.ts), so we can always re-derive it during refund and
- * never need to persist a secret. Each order gets its own escrow so a stuck
- * order can't strand other users' funds.
+ * The privacy primitive: ESCROW and STEALTH are signed by DIFFERENT keypairs,
+ * with no on-chain SOL transfer between them. The only "link" is encrypted
+ * inside the UTXO destination field. An observer can see {user → escrow}
+ * and {stealth → bitrefill} but can't tell that the same order produced both.
  *
- * Refund is the safety net: at any point before the SOL leaves the escrow
- * for Bitrefill, the user can recover their funds. After Bitrefill is paid,
- * recovery has to go through Bitrefill support.
+ * Per-order escrow + stealth keypairs are derived deterministically from
+ * UMBRA_ESCROW_MASTER_KEY + orderId (lib/umbra/keys.ts) so refunds can
+ * always re-derive both halves and sweep stranded funds.
  */
 
 import {
   getEncryptedBalanceToPublicBalanceDirectWithdrawerFunction,
+  getEncryptedBalanceToReceiverClaimableUtxoCreatorFunction,
   getPublicBalanceToEncryptedBalanceDirectDepositorFunction,
+  getReceiverClaimableUtxoToEncryptedBalanceClaimerFunction,
+  getClaimableUtxoScannerFunction,
   getUserRegistrationFunction,
 } from "@umbra-privacy/sdk";
-import { Connection, PublicKey } from "@solana/web3.js";
+import {
+  Connection,
+  Keypair,
+  PublicKey,
+  SystemProgram,
+  Transaction,
+  sendAndConfirmTransaction,
+} from "@solana/web3.js";
+import bs58 from "bs58";
 import {
   WSOL_MINT,
   wrapSol,
@@ -31,10 +58,16 @@ import {
 } from "@/lib/umbra/wsol";
 import {
   umbraClientFor,
+  umbraRelayer,
   registrationProver,
+  createReceiverUtxoProver,
+  claimReceiverIntoEncryptedProver,
   rpcUrl,
 } from "@/lib/umbra/client";
-import { getCardEscrowKeypair } from "@/lib/umbra/keys";
+import {
+  getCardEscrowKeypair,
+  getCardStealthKeypair,
+} from "@/lib/umbra/keys";
 import type { IUmbraClient } from "@umbra-privacy/sdk/interfaces";
 import { updateOrder } from "@/lib/card/storage";
 
@@ -44,32 +77,44 @@ const WSOL_MINT_STR = WSOL_MINT.toBase58();
 const REFUND_FEE_RESERVE = 5_000;
 
 /**
- * Lamport buffer kept on the escrow's NATIVE balance after the wrap step.
+ * Lamport buffer kept on the ESCROW's NATIVE balance after the wrap step.
  * Has to cover (cumulatively, mid-tx, before any rent is recovered):
  *
- *   - wSOL ATA rent              ~2_039_280  (recovered on unwrap)
- *   - Umbra deposit computation queue account rent (~3-5M, varies)
- *   - Umbra withdraw computation queue + proof account rent (~5-10M)
- *   - tx fees for ~6 ops at 5_000 each + priority surges
+ *   - wSOL ATA rent              ~2_039_280  (recovered on unwrap... if we unwrap)
+ *   - Umbra deposit computation queue + proof account rent (~3-8M)
+ *   - Umbra create-UTXO computation queue + proof account rent (~5-10M)
+ *   - tx fees for ~5 ops at 5_000 each + priority surges
  *   - Solana's per-byte fee on loadedAccountsDataSize (~7MB loaded per Umbra op)
  *
- * Empirically, the withdraw step has hit `INSUFFICIENT_FUNDS_FOR_RENT`
- * (Solana code 7050031) at a 10M buffer. Bumping to 25M to give Umbra
- * enough headroom for its proof-account rents. Unused remainder refunds.
+ * The escrow's job in the new flow ends at "create receiver-claimable UTXO";
+ * it doesn't unwrap or pay Bitrefill anymore. So slightly less burden than
+ * the old direct-withdraw design, but the proof-account rents still apply.
  */
 const ESCROW_TX_FEE_BUFFER = 25_000_000; // 0.025 SOL
 
 /**
+ * SOL the relayer sends to the per-order STEALTH so it can pay for its own
+ * Umbra registration, claim, withdraw, unwrap, and final transfer to
+ * Bitrefill. Whatever the stealth doesn't actually consume sweeps back to
+ * the relayer at the end.
+ *
+ * Stealth needs: registration (~10M), wSOL ATA rent (~2M, recovered on
+ * unwrap), claim proof rent (~5-8M), withdraw proof rent (~5-8M), tx fees
+ * across ~6 ops, slop. Budget 25M with comfortable headroom.
+ */
+const STEALTH_FUND_BUDGET = 25_000_000; // 0.025 SOL
+
+/**
  * Total overhead added to the user's deposit beyond bitrefillLamports.
  * Covers:
- *   - ESCROW_TX_FEE_BUFFER (kept on native balance after wrap)            ~25M
- *   - Umbra registration cost (rent for the registration account + tx)    ~10M
- *   - Umbra fee headroom (encrypted-balance op fees, ~21bps)               ~2M
- *   - Slop / priority surges                                               ~3M
+ *   - ESCROW_TX_FEE_BUFFER (kept on escrow native after wrap)             ~25M
+ *   - Escrow Umbra registration cost (rent + tx)                          ~10M
+ *   - Encrypted-balance fee headroom (~21bps × 2 ops, deposit + create)    ~3M
+ *   - Slop / priority surges                                               ~2M
  *                                                                  total: ~40M
  *
- * Whatever the orchestration doesn't actually consume gets swept back to
- * the user at the end as part of step 8 (refund leftover).
+ * Whatever the orchestration doesn't consume sweeps back to the user
+ * automatically as part of the leftover-refund step.
  */
 const UMBRA_FLOW_OVERHEAD = 40_000_000; // 0.04 SOL
 
@@ -96,6 +141,20 @@ export function computeDepositLamports(bitrefillLamports: number): number {
   return bitrefillLamports + UMBRA_FLOW_OVERHEAD + jitter;
 }
 
+// ============================================================================
+// Helpers
+// ============================================================================
+
+function relayerKeypair(): Keypair {
+  const key = process.env.HOPPY_RELAYER_PRIVATE_KEY;
+  if (!key) {
+    throw new Error(
+      "HOPPY_RELAYER_PRIVATE_KEY env var required for the private card flow"
+    );
+  }
+  return Keypair.fromSecretKey(bs58.decode(key));
+}
+
 async function ensureUmbraRegistered(
   client: IUmbraClient,
   label: string
@@ -113,7 +172,6 @@ async function ensureUmbraRegistered(
       msg.includes("AlreadyCallbacked") ||
       msg.includes("custom program error: #1")
     ) {
-      // Already registered; fine.
       return;
     }
     console.warn(`[umbra-pay/${label}] registration error (continuing):`, msg);
@@ -121,12 +179,11 @@ async function ensureUmbraRegistered(
 }
 
 /**
- * Wait for an Umbra callback signature to be mined on-chain. Many Umbra
- * SDK functions return as soon as the QUEUE tx is confirmed, but the
- * actual effect of the op (e.g. crediting encrypted balance) doesn't
- * land until the follow-up CALLBACK tx runs. Without explicitly waiting
- * for the callback, the next op in our pipeline races ahead and sees
- * stale state — encrypted balance still 0, withdraws fail, etc.
+ * Wait for an Umbra callback signature to be mined on-chain. Many SDK
+ * functions return when the QUEUE tx confirms, but the actual effect of
+ * the op (encrypted-balance update, UTXO availability) only lands when
+ * the follow-up CALLBACK tx runs. Without explicitly waiting, the next
+ * op races ahead and sees stale state.
  */
 async function waitForUmbraCallback(
   signature: string | undefined,
@@ -166,6 +223,51 @@ async function waitForUmbraCallback(
   });
 }
 
+/**
+ * Wait for the indexer to surface a freshly-created UTXO to the receiver.
+ * The on-chain UTXO is committed once its callback mines, but Umbra's
+ * indexer can lag a few seconds — without this poll, the immediate
+ * stealth-side claim sees an empty list and fails.
+ */
+async function waitForUtxoVisible(
+  stealthClient: IUmbraClient,
+  orderId: string,
+  timeoutMs = 90_000
+): Promise<unknown[]> {
+  const scanner = getClaimableUtxoScannerFunction({ client: stealthClient });
+  const deadline = Date.now() + timeoutMs;
+  let attempts = 0;
+  while (Date.now() < deadline) {
+    attempts += 1;
+    try {
+      const result = (await scanner(
+        BigInt(0) as never,
+        BigInt(0) as never,
+        BigInt(10000) as never
+      )) as {
+        received?: unknown[];
+        publicReceived?: unknown[];
+      };
+      const utxos = result.received ?? [];
+      if (utxos.length > 0) {
+        console.log(`[umbra-pay/${orderId}][indexer] UTXO visible to stealth`, {
+          attempts,
+          count: utxos.length,
+        });
+        return utxos;
+      }
+    } catch (err) {
+      console.warn(`[umbra-pay/${orderId}][indexer] scan error attempt ${attempts}`, err);
+    }
+    await new Promise((r) => setTimeout(r, 3000));
+  }
+  throw new Error(`UTXO not visible to stealth indexer after ${timeoutMs}ms`);
+}
+
+// ============================================================================
+// Main orchestration
+// ============================================================================
+
 export interface UmbraCardExecuteInput {
   orderId: string;
   /** Lamports the escrow received from the user (returned by deposit confirm). */
@@ -182,47 +284,53 @@ export interface UmbraCardExecuteInput {
 
 export interface UmbraCardExecuteResult {
   depositConfirmedLamports: number;
-  wrapTxHash: string;
   bitrefillTxHash: string;
   refundLeftoverTxHash?: string;
   refundLeftoverLamports?: number;
 }
 
 /**
- * Run the full Umbra-mediated card payment flow.
+ * Run the full Umbra-mediated card payment flow with privacy via
+ * receiver-claimable UTXO. Stages:
  *
  *   1. Confirm user → escrow deposit
  *   2. Register escrow with Umbra (idempotent)
- *   3. Wrap (depositLamports - txBuffer) SOL → wSOL on escrow
- *   4. Public balance → encrypted balance (Umbra deposit)
- *   5. Encrypted balance → public balance (Umbra withdraw, exactly bitrefillLamports
- *      worth, but as wSOL on the escrow's ATA)
- *   6. Unwrap that wSOL back to native SOL on escrow
- *   7. Transfer EXACTLY bitrefillLamports to Bitrefill's address
- *   8. Sweep any remaining SOL on the escrow back to the user (auto-refund leftover)
+ *   3. Wrap (delivered - txBuffer) SOL → wSOL on escrow
+ *   4. Public → encrypted balance on escrow (Umbra deposit)
+ *   5. Escrow creates a receiver-claimable UTXO destined for fresh stealth
+ *   6. Relayer funds stealth with gas
+ *   7. Register stealth with Umbra
+ *   8. Stealth claims the UTXO into its own encrypted balance
+ *   9. Stealth withdraws encrypted → wSOL ATA on stealth
+ *  10. Stealth unwraps wSOL → native SOL
+ *  11. Stealth transfers EXACTLY bitrefillLamports → Bitrefill address
+ *  12. Sweep escrow leftover → user (auto-refund)
+ *  13. Sweep stealth leftover → relayer (recover gas)
  *
- * Each step also calls updateOrder() with a status checkpoint so the UI's
- * polling endpoint can show meaningful progress messages. Failures at any
- * step leave funds in the escrow — caller can trigger /api/card/refund to
- * recover them.
+ * Every stage updates the order status so the polling client can show a
+ * meaningful progress timeline.
  */
 export async function umbraCardExecute(
   input: UmbraCardExecuteInput
 ): Promise<UmbraCardExecuteResult> {
   const escrow = getCardEscrowKeypair(input.orderId);
   const escrowPk = escrow.publicKey;
+  const stealth = getCardStealthKeypair(input.orderId);
+  const stealthPk = stealth.publicKey;
   const userPk = new PublicKey(input.userAddress);
   const bitrefillPk = new PublicKey(input.bitrefillAddress);
+  const relayer = relayerKeypair();
+  const overallStart = Date.now();
 
   console.log(`[umbra-pay/${input.orderId}] start`, {
     escrow: escrowPk.toBase58(),
+    stealth: stealthPk.toBase58(),
     user: input.userAddress,
     bitrefill: input.bitrefillAddress,
     bitrefillLamports: input.bitrefillLamports,
-    escrowLamports: input.escrowLamports,
   });
 
-  // 1. Confirm the user's deposit hit the escrow with the expected amount.
+  // 1. Confirm user → escrow deposit hit on-chain.
   await updateOrder(input.orderId, { status: "depositing" });
   const delivered = await confirmSolTransferTo(
     input.depositTxHash,
@@ -231,47 +339,32 @@ export async function umbraCardExecute(
   );
   console.log(`[umbra-pay/${input.orderId}] deposit confirmed`, { delivered });
 
-  // 2. Register escrow with Umbra (one-time, idempotent).
-  const client = await umbraClientFor(escrow);
-  await ensureUmbraRegistered(client, input.orderId);
+  // 2. Register escrow with Umbra (one-time).
+  const escrowClient = await umbraClientFor(escrow);
+  await ensureUmbraRegistered(escrowClient, `${input.orderId}/escrow`);
 
-  // 3. Read the LIVE escrow balance (not the deposited amount — it may have
-  //    been touched by registration tx fees) and wrap most of it. Keep at
-  //    least ESCROW_TX_FEE_BUFFER as native SOL on the escrow to cover
-  //    ATA rent + tx fees for the rest of the flow.
+  // 3. Wrap most of the escrow's SOL to wSOL.
   const liveBalance = await getSolBalance(escrowPk);
   const wrappable = liveBalance - ESCROW_TX_FEE_BUFFER;
   if (wrappable < input.bitrefillLamports) {
     throw new Error(
-      `escrow has ${wrappable} wrappable lamports (live balance ${liveBalance}, buffer ${ESCROW_TX_FEE_BUFFER}), ` +
-        `need ≥ ${input.bitrefillLamports}`
+      `escrow has ${wrappable} wrappable lamports (live ${liveBalance}, buffer ${ESCROW_TX_FEE_BUFFER}), need ≥ ${input.bitrefillLamports}`
     );
   }
   const { signature: wrapTxHash } = await wrapSol(escrow, wrappable);
-  console.log(`[umbra-pay/${input.orderId}] wrap ok`, {
-    wrapTxHash,
-    wrappable,
-    liveBalanceBeforeWrap: liveBalance,
-  });
+  console.log(`[umbra-pay/${input.orderId}] wrap ok`, { wrapTxHash, wrappable });
 
-  // 4. Deposit the wSOL into encrypted balance. CRITICAL: the SDK returns
-  //    when the queue tx mines, but the actual encrypted-balance credit
-  //    happens via a follow-up callback tx. We MUST wait for that callback
-  //    before withdrawing, otherwise the withdraw sees a 0 balance and
-  //    fails with Umbra error 7050031.
+  // 4. Deposit wSOL into escrow's encrypted balance.
   await updateOrder(input.orderId, { status: "mixing" });
   const depositToEncrypted = getPublicBalanceToEncryptedBalanceDirectDepositorFunction({
-    client,
+    client: escrowClient,
   });
   const depositResult = (await depositToEncrypted(
-    client.signer.address,
+    escrowClient.signer.address,
     WSOL_MINT_STR as never,
     BigInt(wrappable) as never
   )) as { queueSignature?: string; callbackSignature?: string };
-  console.log(`[umbra-pay/${input.orderId}] umbra deposit queued`, {
-    queue: depositResult.queueSignature,
-    callback: depositResult.callbackSignature,
-  });
+  console.log(`[umbra-pay/${input.orderId}] umbra deposit queued`, depositResult);
   await waitForUmbraCallback(
     depositResult.callbackSignature,
     "deposit-callback",
@@ -279,22 +372,99 @@ export async function umbraCardExecute(
     90_000
   );
 
-  // 5. Withdraw bitrefillLamports from encrypted balance to escrow's wSOL ATA.
-  //    Same callback-wait pattern: the queue tx returns fast but the wSOL
-  //    only lands in the ATA after the callback runs.
-  await updateOrder(input.orderId, { status: "withdrawing" });
-  const withdraw = getEncryptedBalanceToPublicBalanceDirectWithdrawerFunction({
-    client,
+  // 5. Escrow creates a RECEIVER-CLAIMABLE UTXO destined for the stealth.
+  //    Size it slightly above bitrefillLamports so the downstream withdraw
+  //    fee doesn't put us short. Anything left over stays in the stealth's
+  //    encrypted balance after withdraw — small dust loss.
+  const utxoAmount = Math.floor(input.bitrefillLamports * 1.005);
+  if (utxoAmount > wrappable) {
+    throw new Error(
+      `UTXO amount ${utxoAmount} exceeds wrappable ${wrappable} — bug in deposit-amount math`
+    );
+  }
+  const createUtxo = getEncryptedBalanceToReceiverClaimableUtxoCreatorFunction(
+    { client: escrowClient },
+    { zkProver: createReceiverUtxoProver() }
+  );
+  const utxoResult = (await createUtxo({
+    amount: BigInt(utxoAmount) as never,
+    destinationAddress: stealthPk.toBase58() as never,
+    mint: WSOL_MINT_STR as never,
+  })) as { queueSignature?: string; callbackSignature?: string };
+  console.log(`[umbra-pay/${input.orderId}] utxo created (encrypted destination)`, {
+    utxoAmount,
+    queue: utxoResult.queueSignature,
+    callback: utxoResult.callbackSignature,
   });
-  const withdrawResult = (await withdraw(
-    escrowPk.toBase58() as never,
+  await waitForUmbraCallback(
+    utxoResult.callbackSignature,
+    "utxo-callback",
+    input.orderId,
+    120_000
+  );
+
+  // 6. Relayer funds the stealth with gas. CRUCIAL: this funding is what
+  //    breaks the on-chain link between escrow and stealth. The stealth
+  //    must NEVER receive native SOL from the escrow directly — that
+  //    would let observers correlate by amount + timing.
+  await updateOrder(input.orderId, { status: "withdrawing" });
+  const conn = new Connection(rpcUrl(), "confirmed");
+  {
+    const fundTx = new Transaction().add(
+      SystemProgram.transfer({
+        fromPubkey: relayer.publicKey,
+        toPubkey: stealthPk,
+        lamports: STEALTH_FUND_BUDGET,
+      })
+    );
+    const sig = await sendAndConfirmTransaction(conn, fundTx, [relayer], {
+      commitment: "confirmed",
+    });
+    console.log(`[umbra-pay/${input.orderId}] relayer funded stealth`, {
+      lamports: STEALTH_FUND_BUDGET,
+      sig,
+    });
+  }
+
+  // 7. Register the stealth with Umbra.
+  const stealthClient = await umbraClientFor(stealth);
+  await ensureUmbraRegistered(stealthClient, `${input.orderId}/stealth`);
+
+  // 8. Stealth claims the UTXO into its encrypted balance.
+  const utxos = await waitForUtxoVisible(stealthClient, input.orderId, 90_000);
+  const fetchBatchMerkleProof = (
+    stealthClient as unknown as { fetchBatchMerkleProof?: unknown }
+  ).fetchBatchMerkleProof;
+  const claimFn = getReceiverClaimableUtxoToEncryptedBalanceClaimerFunction(
+    { client: stealthClient },
+    {
+      zkProver: claimReceiverIntoEncryptedProver(),
+      relayer: umbraRelayer(),
+      fetchBatchMerkleProof: fetchBatchMerkleProof as never,
+    }
+  );
+  const claimResult = (await claimFn(utxos as never)) as {
+    queueSignature?: string;
+    callbackSignature?: string;
+  };
+  console.log(`[umbra-pay/${input.orderId}] stealth claimed UTXO`, claimResult);
+  await waitForUmbraCallback(
+    claimResult.callbackSignature,
+    "claim-callback",
+    input.orderId,
+    90_000
+  );
+
+  // 9. Stealth withdraws bitrefillLamports from encrypted → wSOL ATA on stealth.
+  const stealthWithdraw = getEncryptedBalanceToPublicBalanceDirectWithdrawerFunction({
+    client: stealthClient,
+  });
+  const withdrawResult = (await stealthWithdraw(
+    stealthPk.toBase58() as never,
     WSOL_MINT_STR as never,
     BigInt(input.bitrefillLamports) as never
   )) as { queueSignature?: string; callbackSignature?: string };
-  console.log(`[umbra-pay/${input.orderId}] umbra withdraw queued`, {
-    queue: withdrawResult.queueSignature,
-    callback: withdrawResult.callbackSignature,
-  });
+  console.log(`[umbra-pay/${input.orderId}] stealth withdraw queued`, withdrawResult);
   await waitForUmbraCallback(
     withdrawResult.callbackSignature,
     "withdraw-callback",
@@ -302,17 +472,16 @@ export async function umbraCardExecute(
     90_000
   );
 
-  // 6. Unwrap wSOL → native SOL on the escrow. The unwrap closes the ATA and
-  //    moves the entire wSOL balance back to the escrow's main wallet.
-  const unwrap = await unwrapAllWsol(escrow);
-  console.log(`[umbra-pay/${input.orderId}] unwrap ok`, { sig: unwrap.signature });
+  // 10. Unwrap stealth's wSOL → native SOL.
+  const unwrap = await unwrapAllWsol(stealth);
+  console.log(`[umbra-pay/${input.orderId}] stealth unwrapped`, { sig: unwrap.signature });
 
-  // 7. Transfer EXACTLY bitrefillLamports to Bitrefill's address.
+  // 11. Stealth transfers EXACTLY bitrefillLamports → Bitrefill.
   await updateOrder(input.orderId, { status: "paying" });
-  const bitrefillTxHash = await transferSol(escrow, bitrefillPk, input.bitrefillLamports);
-  console.log(`[umbra-pay/${input.orderId}] paid bitrefill`, { bitrefillTxHash });
+  const bitrefillTxHash = await transferSol(stealth, bitrefillPk, input.bitrefillLamports);
+  console.log(`[umbra-pay/${input.orderId}] stealth → bitrefill`, { bitrefillTxHash });
 
-  // 8. Sweep leftover SOL back to the user (auto-refund).
+  // 12. Sweep escrow leftover SOL → user.
   let refundLeftoverTxHash: string | undefined;
   let refundLeftoverLamports: number | undefined;
   try {
@@ -321,16 +490,28 @@ export async function umbraCardExecute(
     if (sweepable > 0) {
       refundLeftoverTxHash = await transferSol(escrow, userPk, sweepable);
       refundLeftoverLamports = sweepable;
-      console.log(`[umbra-pay/${input.orderId}] swept leftover to user`, {
+      console.log(`[umbra-pay/${input.orderId}] swept escrow leftover → user`, {
         sweepable,
-        refundLeftoverTxHash,
+        sig: refundLeftoverTxHash,
       });
     }
   } catch (err) {
-    // Don't fail the whole orchestration if leftover sweep fails — Bitrefill
-    // is paid, the order will fulfill normally. User can manually call
-    // /api/card/refund later.
-    console.warn(`[umbra-pay/${input.orderId}] leftover sweep failed:`, err);
+    console.warn(`[umbra-pay/${input.orderId}] escrow leftover sweep failed:`, err);
+  }
+
+  // 13. Sweep stealth leftover SOL → relayer (recover gas).
+  try {
+    const stealthLeft = await getSolBalance(stealthPk);
+    const stealthSweep = Math.max(0, stealthLeft - REFUND_FEE_RESERVE);
+    if (stealthSweep > 0) {
+      const sig = await transferSol(stealth, relayer.publicKey, stealthSweep);
+      console.log(`[umbra-pay/${input.orderId}] swept stealth leftover → relayer`, {
+        stealthSweep,
+        sig,
+      });
+    }
+  } catch (err) {
+    console.warn(`[umbra-pay/${input.orderId}] stealth leftover sweep failed:`, err);
   }
 
   await updateOrder(input.orderId, {
@@ -340,14 +521,23 @@ export async function umbraCardExecute(
     refundTxHash: refundLeftoverTxHash,
   });
 
+  console.log(`[umbra-pay/${input.orderId}] complete`, {
+    totalElapsedMs: Date.now() - overallStart,
+    bitrefillTxHash,
+    refundLeftoverLamports,
+  });
+
   return {
     depositConfirmedLamports: delivered,
-    wrapTxHash,
     bitrefillTxHash,
     refundLeftoverTxHash,
     refundLeftoverLamports,
   };
 }
+
+// ============================================================================
+// Refund — drain escrow + stealth back to user
+// ============================================================================
 
 export interface CardRefundResult {
   encryptedWithdrawn: number;
@@ -359,37 +549,18 @@ export interface CardRefundResult {
   noop: boolean;
 }
 
-/**
- * Drain the per-order card escrow back to the user's address.
- *
- *   1. If encrypted balance > 0, withdraw it to the escrow's public wSOL ATA.
- *   2. Unwrap any wSOL on the escrow → native SOL.
- *   3. Sweep all native SOL on the escrow → user's address (minus fee reserve).
- *
- * Idempotent: safe to call repeatedly. If the escrow is already empty,
- * returns { noop: true } without erroring.
- *
- * Caller must verify the user is authorized to refund THIS order before
- * calling — typically by checking the order's stored `userAddress` matches
- * the address requesting the refund.
- */
-export async function umbraCardRefund(
+async function drainAccountToUser(
+  account: Keypair,
+  userPk: PublicKey,
   orderId: string,
-  userAddress: string,
-): Promise<CardRefundResult> {
-  const escrow = getCardEscrowKeypair(orderId);
-  const userPk = new PublicKey(userAddress);
+  label: string
+): Promise<{ encryptedWithdrawn: number; unwrapTx?: string; refundTx?: string; refunded: number }> {
+  const out = { encryptedWithdrawn: 0, unwrapTx: undefined as string | undefined, refundTx: undefined as string | undefined, refunded: 0 };
 
-  const result: CardRefundResult = {
-    encryptedWithdrawn: 0,
-    nativeRefunded: 0,
-    noop: false,
-  };
-
-  // 1. Withdraw any encrypted balance back to escrow's public wSOL ATA.
+  // 1. Withdraw any encrypted balance back to public wSOL ATA.
   try {
-    const escrowClient = await umbraClientFor(escrow);
-    const querier = escrowClient as unknown as {
+    const client = await umbraClientFor(account);
+    const querier = client as unknown as {
       getEncryptedBalance?: (mint: string) => Promise<bigint>;
     };
     let encryptedBal = BigInt(0);
@@ -397,77 +568,124 @@ export async function umbraCardRefund(
       try {
         encryptedBal = await querier.getEncryptedBalance(WSOL_MINT_STR);
       } catch {
-        // ignore — we'll fall through to native sweep
+        /* ignore — may not be registered */
       }
     }
-
     if (encryptedBal > BigInt(0)) {
       const withdrawFn = getEncryptedBalanceToPublicBalanceDirectWithdrawerFunction({
-        client: escrowClient,
+        client,
       });
       await withdrawFn(
-        escrow.publicKey.toBase58() as never,
+        account.publicKey.toBase58() as never,
         WSOL_MINT_STR as never,
-        encryptedBal as never,
+        encryptedBal as never
       );
-      result.encryptedWithdrawn = Number(encryptedBal);
+      out.encryptedWithdrawn = Number(encryptedBal);
     }
   } catch (err) {
-    console.warn(`[card-refund/${orderId}] encrypted withdraw failed:`, err);
-    // continue — native sweep below may still recover something
+    console.warn(`[card-refund/${orderId}/${label}] encrypted withdraw failed:`, err);
   }
 
-  // 2. Unwrap wSOL → native SOL.
+  // 2. Unwrap any wSOL → native SOL.
   try {
-    const u = await unwrapAllWsol(escrow);
-    if (u.signature) result.unwrapTxHash = u.signature;
+    const u = await unwrapAllWsol(account);
+    if (u.signature) out.unwrapTx = u.signature;
   } catch (err) {
-    console.warn(`[card-refund/${orderId}] unwrap failed:`, err);
+    console.warn(`[card-refund/${orderId}/${label}] unwrap failed:`, err);
   }
 
-  // 3. Sweep native SOL → user address.
-  const nativeBal = await getSolBalance(escrow.publicKey);
+  // 3. Sweep native SOL → user.
+  const nativeBal = await getSolBalance(account.publicKey);
   const sweepable = Math.max(0, nativeBal - REFUND_FEE_RESERVE);
   if (sweepable > 0) {
-    const sig = await transferSol(escrow, userPk, sweepable);
-    result.refundTxHash = sig;
-    result.nativeRefunded = sweepable;
-  } else if (result.encryptedWithdrawn === 0) {
-    result.noop = true;
+    const sig = await transferSol(account, userPk, sweepable);
+    out.refundTx = sig;
+    out.refunded = sweepable;
   }
 
-  return result;
+  return out;
 }
 
 /**
- * Quick helper to inspect what's recoverable from a stuck escrow.
- * Useful for an admin "show me orphan funds" dashboard view.
+ * Drain BOTH the per-order escrow AND the per-order stealth back to the
+ * user. Either may have stranded funds depending on where in the flow it
+ * failed:
+ *
+ *   - Failed before UTXO created → only escrow has funds
+ *   - Failed before stealth claim → escrow + stealth (relayer-funded portion)
+ *   - Failed after stealth claim, before pay → stealth has bulk, escrow has dust
+ *   - Failed after pay (rare) → both should be near-empty
+ *
+ * Idempotent: returns noop=true if both accounts are already drained.
  */
-export async function umbraCardEscrowBalances(orderId: string): Promise<{
-  address: string;
-  nativeLamports: number;
-  encryptedLamports: number;
-}> {
+export async function umbraCardRefund(
+  orderId: string,
+  userAddress: string
+): Promise<CardRefundResult> {
   const escrow = getCardEscrowKeypair(orderId);
-  const nativeLamports = await getSolBalance(escrow.publicKey);
+  const stealth = getCardStealthKeypair(orderId);
+  const userPk = new PublicKey(userAddress);
 
-  let encryptedLamports = 0;
-  try {
-    const client = await umbraClientFor(escrow);
-    const querier = client as unknown as {
-      getEncryptedBalance?: (mint: string) => Promise<bigint>;
-    };
-    if (typeof querier.getEncryptedBalance === "function") {
-      const bal = await querier.getEncryptedBalance(WSOL_MINT_STR);
-      encryptedLamports = Number(bal);
-    }
-  } catch {
-    // ignore — fresh escrows have no Umbra registration; that's fine
-  }
+  const escrowResult = await drainAccountToUser(escrow, userPk, orderId, "escrow");
+  const stealthResult = await drainAccountToUser(stealth, userPk, orderId, "stealth");
+
+  const totalEncrypted = escrowResult.encryptedWithdrawn + stealthResult.encryptedWithdrawn;
+  const totalRefunded = escrowResult.refunded + stealthResult.refunded;
+  const refundTxHash = escrowResult.refundTx ?? stealthResult.refundTx;
+  const unwrapTxHash = escrowResult.unwrapTx ?? stealthResult.unwrapTx;
 
   return {
-    address: escrow.publicKey.toBase58(),
-    nativeLamports,
-    encryptedLamports,
+    encryptedWithdrawn: totalEncrypted,
+    nativeRefunded: totalRefunded,
+    refundTxHash,
+    unwrapTxHash,
+    noop: totalRefunded === 0 && totalEncrypted === 0,
+  };
+}
+
+/**
+ * Inspect what's recoverable across the per-order escrow and stealth.
+ * Used by the admin / debug UI.
+ */
+export async function umbraCardEscrowBalances(orderId: string): Promise<{
+  escrowAddress: string;
+  stealthAddress: string;
+  escrowNativeLamports: number;
+  stealthNativeLamports: number;
+  escrowEncryptedLamports: number;
+  stealthEncryptedLamports: number;
+}> {
+  const escrow = getCardEscrowKeypair(orderId);
+  const stealth = getCardStealthKeypair(orderId);
+
+  const [escrowNative, stealthNative] = await Promise.all([
+    getSolBalance(escrow.publicKey),
+    getSolBalance(stealth.publicKey),
+  ]);
+
+  let escrowEncrypted = 0;
+  let stealthEncrypted = 0;
+  try {
+    const c = await umbraClientFor(escrow);
+    const q = c as unknown as { getEncryptedBalance?: (m: string) => Promise<bigint> };
+    if (typeof q.getEncryptedBalance === "function") {
+      escrowEncrypted = Number(await q.getEncryptedBalance(WSOL_MINT_STR));
+    }
+  } catch { /* ignore */ }
+  try {
+    const c = await umbraClientFor(stealth);
+    const q = c as unknown as { getEncryptedBalance?: (m: string) => Promise<bigint> };
+    if (typeof q.getEncryptedBalance === "function") {
+      stealthEncrypted = Number(await q.getEncryptedBalance(WSOL_MINT_STR));
+    }
+  } catch { /* ignore */ }
+
+  return {
+    escrowAddress: escrow.publicKey.toBase58(),
+    stealthAddress: stealth.publicKey.toBase58(),
+    escrowNativeLamports: escrowNative,
+    stealthNativeLamports: stealthNative,
+    escrowEncryptedLamports: escrowEncrypted,
+    stealthEncryptedLamports: stealthEncrypted,
   };
 }

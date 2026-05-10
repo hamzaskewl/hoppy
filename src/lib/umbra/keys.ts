@@ -82,3 +82,27 @@ export function getCardEscrowKeypair(orderId: string): Keypair {
 export function getCardEscrowAddress(orderId: string): string {
   return getCardEscrowKeypair(orderId).publicKey.toBase58();
 }
+
+/**
+ * Per-order STEALTH keypair — distinct from the escrow. The escrow creates
+ * a receiver-claimable UTXO destined for this stealth, and the stealth (a
+ * separate signer) is what actually pays Bitrefill. That breaks the
+ * on-chain link between the user and Bitrefill: only the encrypted UTXO
+ * destination ties the escrow to the stealth, and that destination is
+ * hidden inside Umbra.
+ *
+ * Derived deterministically so a refund can re-derive the stealth and
+ * drain leftover funds even after a process restart.
+ */
+export function deriveCardStealthSeed(orderId: string): Uint8Array {
+  const master = getMasterKey();
+  const h = crypto.createHash("sha256");
+  h.update(master);
+  h.update(Buffer.from("hoppy-card-stealth:v1:", "utf8"));
+  h.update(Buffer.from(orderId, "utf8"));
+  return new Uint8Array(h.digest());
+}
+
+export function getCardStealthKeypair(orderId: string): Keypair {
+  return Keypair.fromSeed(deriveCardStealthSeed(orderId));
+}

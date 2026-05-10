@@ -92,13 +92,51 @@ function stripHtml(html: string | null | undefined): string {
   return html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
 }
 
-const PROGRESS_STAGES: { id: string; label: string }[] = [
-  { id: "depositing", label: "Deposit" },
-  { id: "mixing", label: "Mix" },
-  { id: "withdrawing", label: "Withdraw" },
-  { id: "paying", label: "Pay" },
-  { id: "paid", label: "Confirm" },
-  { id: "ready", label: "Ready" },
+interface Stage {
+  id: string;
+  label: string;
+  description: string;
+  /** Approximate elapsed time when this stage typically completes. */
+  expectedDuration: string;
+}
+
+const PROGRESS_STAGES: Stage[] = [
+  {
+    id: "depositing",
+    label: "Deposit",
+    description: "Confirming your SOL hit the per-order escrow",
+    expectedDuration: "~10s",
+  },
+  {
+    id: "mixing",
+    label: "Mix",
+    description: "Encrypting balance + creating receiver-claimable UTXO",
+    expectedDuration: "~60s",
+  },
+  {
+    id: "withdrawing",
+    label: "Withdraw",
+    description: "Stealth address claims the UTXO and unwraps to SOL",
+    expectedDuration: "~90s",
+  },
+  {
+    id: "paying",
+    label: "Pay",
+    description: "Stealth sends the exact amount to the card provider",
+    expectedDuration: "~10s",
+  },
+  {
+    id: "paid",
+    label: "Confirm",
+    description: "Card provider received payment, processing your card",
+    expectedDuration: "~1-5min",
+  },
+  {
+    id: "ready",
+    label: "Ready",
+    description: "Claim link generated and shown below",
+    expectedDuration: "—",
+  },
 ];
 
 function stageIndex(status: string | null): number {
@@ -107,62 +145,152 @@ function stageIndex(status: string | null): number {
   return i < 0 ? 0 : i;
 }
 
-function progressTitleFor(status: string | null): string {
-  switch (status) {
-    case "depositing":
-      return "Depositing into Pool";
-    case "mixing":
-      return "Mixing Funds";
-    case "withdrawing":
-      return "Withdrawing from Pool";
-    case "paying":
-      return "Paying Card Provider";
-    case "paid":
-      return "Waiting for Card";
-    default:
-      return "Preparing";
-  }
-}
-
-function progressDescFor(status: string | null): string {
-  switch (status) {
-    case "depositing":
-      return "Your SOL is hitting the privacy pool…";
-    case "mixing":
-      return "Generating zero-knowledge proofs (this is the slow step)…";
-    case "withdrawing":
-      return "Pulling funds out for the merchant…";
-    case "paying":
-      return "Sending exact amount to the card provider…";
-    case "paid":
-      return "Card provider is processing your order…";
-    default:
-      return "Setting up the private payment…";
-  }
-}
-
-function ProgressDots({ status }: { status: string | null }) {
-  const idx = stageIndex(status);
+function DetailRow({
+  label,
+  value,
+  subtitle,
+  mono,
+  truncate,
+  link,
+  accent,
+}: {
+  label: string;
+  value: string;
+  subtitle?: string;
+  mono?: boolean;
+  truncate?: boolean;
+  link?: string;
+  accent?: boolean;
+}) {
+  const display = (
+    <span
+      className={cn(
+        mono && "font-mono",
+        truncate && "truncate",
+        accent && "text-hop-700 dark:text-hop-300 font-medium"
+      )}
+    >
+      {value}
+    </span>
+  );
   return (
-    <div className="flex items-center justify-center gap-2 text-xs">
-      {PROGRESS_STAGES.map((s, i) => (
-        <div key={s.id} className="flex items-center gap-2">
-          <div
-            className={cn(
-              "w-2 h-2 rounded-full transition-colors",
-              i < idx
-                ? "bg-hop-500"
-                : i === idx
-                ? "bg-hop-500 animate-pulse"
-                : "bg-border"
-            )}
-          />
-          <span className={cn("hidden sm:inline", i === idx ? "text-foreground" : "text-muted-foreground")}>
-            {s.label}
-          </span>
-        </div>
-      ))}
+    <div className="space-y-0.5">
+      <p className="text-[10px] uppercase tracking-wide text-muted-foreground">{label}</p>
+      <div className="flex items-center gap-1 min-w-0">
+        {link ? (
+          <a
+            href={link}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="block truncate underline hover:text-hop-700 dark:hover:text-hop-300 transition-colors"
+          >
+            {display}
+          </a>
+        ) : (
+          display
+        )}
+      </div>
+      {subtitle && (
+        <p className="text-[10px] text-muted-foreground/70">{subtitle}</p>
+      )}
     </div>
+  );
+}
+
+function MixingTimeline({ status }: { status: string | null }) {
+  const activeIdx = stageIndex(status);
+
+  return (
+    <ol className="relative space-y-1">
+      {PROGRESS_STAGES.map((stage, i) => {
+        const isDone = i < activeIdx;
+        const isActive = i === activeIdx;
+        const isLast = i === PROGRESS_STAGES.length - 1;
+
+        return (
+          <li key={stage.id} className="relative flex gap-4 pb-6 last:pb-0">
+            {/* Vertical connector line */}
+            {!isLast && (
+              <div
+                aria-hidden
+                className={cn(
+                  "absolute left-[15px] top-8 bottom-0 w-px transition-colors",
+                  isDone ? "bg-hop-500" : "bg-border"
+                )}
+              />
+            )}
+
+            {/* Status dot/icon */}
+            <div className="relative z-10 flex-shrink-0">
+              <motion.div
+                initial={false}
+                animate={{
+                  scale: isActive ? [1, 1.08, 1] : 1,
+                }}
+                transition={{
+                  duration: 1.4,
+                  repeat: isActive ? Infinity : 0,
+                  ease: "easeInOut",
+                }}
+                className={cn(
+                  "w-8 h-8 rounded-full flex items-center justify-center border-2 transition-colors",
+                  isDone && "bg-hop-500 border-hop-600",
+                  isActive && "bg-hop-500 border-hop-600 shadow-lg shadow-hop-500/40",
+                  !isDone && !isActive && "bg-card border-border"
+                )}
+              >
+                {isDone ? (
+                  <Check className="w-4 h-4 text-white" />
+                ) : isActive ? (
+                  <Loader2 className="w-4 h-4 text-white animate-spin" />
+                ) : (
+                  <div className="w-2 h-2 rounded-full bg-muted-foreground/40" />
+                )}
+              </motion.div>
+            </div>
+
+            {/* Stage label + description */}
+            <div className="flex-1 pt-1 min-w-0">
+              <div className="flex items-baseline justify-between gap-2">
+                <p
+                  className={cn(
+                    "text-sm font-medium transition-colors",
+                    (isDone || isActive) ? "text-foreground" : "text-muted-foreground/60"
+                  )}
+                >
+                  {stage.label}
+                </p>
+                <span
+                  className={cn(
+                    "text-[10px] uppercase tracking-wide font-medium shrink-0",
+                    isActive ? "text-hop-600 dark:text-hop-400" : "text-muted-foreground/50"
+                  )}
+                >
+                  {isDone ? "✓ done" : isActive ? "in progress" : stage.expectedDuration}
+                </span>
+              </div>
+              <AnimatePresence mode="wait">
+                {(isActive || isDone) && (
+                  <motion.p
+                    key={`${stage.id}-desc`}
+                    initial={{ opacity: 0, height: 0 }}
+                    animate={{ opacity: 1, height: "auto" }}
+                    exit={{ opacity: 0, height: 0 }}
+                    transition={{ duration: 0.2 }}
+                    className={cn(
+                      "text-xs leading-relaxed mt-0.5",
+                      isActive ? "text-foreground/80" : "text-muted-foreground/70"
+                    )}
+                  >
+                    {stage.description}
+                  </motion.p>
+                )}
+              </AnimatePresence>
+            </div>
+          </li>
+        );
+      })}
+    </ol>
   );
 }
 
@@ -685,9 +813,9 @@ export function ProductDetailFlow({
           </motion.div>
         )}
 
-        {(step === "paying" || step === "waiting") && (
+        {step === "paying" && (
           <motion.div
-            key="processing"
+            key="paying"
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -20 }}
@@ -695,79 +823,88 @@ export function ProductDetailFlow({
             <Card>
               <CardContent className="py-16 text-center space-y-6">
                 <div className="w-16 h-16 rounded-full bg-hop-500 border-2 border-hop-600 mx-auto flex items-center justify-center animate-pulse">
-                  {step === "paying" && <CreditCard className="w-8 h-8 text-white" />}
-                  {step === "waiting" && <Gift className="w-8 h-8 text-white" />}
+                  <CreditCard className="w-8 h-8 text-white" />
                 </div>
                 <div>
-                  <h3 className="text-xl mb-2">
-                    {step === "paying" && "Sending Payment"}
-                    {step === "waiting" && progressTitleFor(orderStatus)}
-                  </h3>
-                  <p className="text-muted-foreground">
-                    {step === "paying" && "Confirm in your wallet..."}
-                    {step === "waiting" && progressDescFor(orderStatus)}
-                  </p>
+                  <h3 className="text-xl mb-2">Sending Payment</h3>
+                  <p className="text-muted-foreground">Confirm in your wallet...</p>
                 </div>
                 <Loader2 className="w-8 h-8 mx-auto text-hop-600 dark:text-hop-400 animate-spin" />
-                {step === "waiting" && (
-                  <>
-                    <ProgressDots status={orderStatus} />
+              </CardContent>
+            </Card>
+          </motion.div>
+        )}
 
-                    {/* Show the Bitrefill destination + exact amount so you
-                        can watch the final transfer land on-chain. */}
-                    {order?.payment?.bitrefillAddress && order.payment.bitrefillAmountAtomic != null && (
-                      <div className="text-left p-4 rounded-xl bg-secondary border-2 border-border space-y-2">
-                        <p className="text-xs font-medium text-foreground">
-                          Final destination
+        {step === "waiting" && (
+          <motion.div
+            key="waiting"
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -20 }}
+          >
+            <Card>
+              <CardContent className="py-8 space-y-6">
+                {/* Hero header */}
+                <div className="text-center space-y-2 pb-2">
+                  <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-hop-100 dark:bg-hop-500/10 border border-hop-400">
+                    <span className="relative flex h-2 w-2">
+                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-hop-500 opacity-75" />
+                      <span className="relative inline-flex rounded-full h-2 w-2 bg-hop-500" />
+                    </span>
+                    <span className="text-xs font-medium text-hop-700 dark:text-hop-300">
+                      Privacy mixing in progress
+                    </span>
+                  </div>
+                  <h3 className="text-lg">Your card is being prepared privately</h3>
+                  <p className="text-xs text-muted-foreground">
+                    Routing through Umbra so the on-chain trail can&apos;t link
+                    your wallet to the merchant. Safe to leave the page.
+                  </p>
+                </div>
+
+                {/* Stage timeline */}
+                <div className="px-2">
+                  <MixingTimeline status={orderStatus} />
+                </div>
+
+                {/* On-chain destination card so the user can watch on Solscan */}
+                {order?.payment?.bitrefillAddress &&
+                  order.payment.bitrefillAmountAtomic != null && (
+                    <div className="rounded-xl bg-gradient-to-br from-secondary to-secondary/70 border-2 border-border p-4 space-y-3">
+                      <div className="flex items-center justify-between">
+                        <p className="text-xs uppercase tracking-wide text-muted-foreground font-medium">
+                          On-chain endpoints
                         </p>
-                        <div className="space-y-1">
-                          <p className="text-[11px] uppercase tracking-wide text-muted-foreground">
-                            Bitrefill address
-                          </p>
-                          <a
-                            href={`https://solscan.io/account/${order.payment.bitrefillAddress}?cluster=devnet`}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="text-xs font-mono text-hop-700 dark:text-hop-300 break-all underline"
-                          >
-                            {order.payment.bitrefillAddress}
-                          </a>
-                        </div>
-                        <div className="space-y-1">
-                          <p className="text-[11px] uppercase tracking-wide text-muted-foreground">
-                            Exact amount expected
-                          </p>
-                          <p className="text-xs font-mono">
-                            {(order.payment.bitrefillAmountAtomic / 1e9).toFixed(9)} SOL
-                            <span className="text-muted-foreground">
-                              {" "}({order.payment.bitrefillAmountAtomic.toLocaleString()} lamports)
-                            </span>
-                          </p>
-                        </div>
+                        <span className="text-[10px] text-muted-foreground">devnet</span>
+                      </div>
+
+                      <div className="space-y-2.5 text-xs">
+                        <DetailRow
+                          label="Final amount → merchant"
+                          mono
+                          value={`${(order.payment.bitrefillAmountAtomic / 1e9).toFixed(9)} SOL`}
+                          subtitle={`${order.payment.bitrefillAmountAtomic.toLocaleString()} lamports`}
+                          accent
+                        />
+                        <DetailRow
+                          label="Bitrefill address"
+                          mono
+                          truncate
+                          link={`https://solscan.io/account/${order.payment.bitrefillAddress}?cluster=devnet`}
+                          value={order.payment.bitrefillAddress}
+                        />
                         {order.payment.escrowAddress && (
-                          <div className="space-y-1">
-                            <p className="text-[11px] uppercase tracking-wide text-muted-foreground">
-                              Mixing through escrow
-                            </p>
-                            <a
-                              href={`https://solscan.io/account/${order.payment.escrowAddress}?cluster=devnet`}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="text-xs font-mono text-muted-foreground break-all underline"
-                            >
-                              {order.payment.escrowAddress}
-                            </a>
-                          </div>
+                          <DetailRow
+                            label="Escrow (your deposit)"
+                            mono
+                            truncate
+                            link={`https://solscan.io/account/${order.payment.escrowAddress}?cluster=devnet`}
+                            value={order.payment.escrowAddress}
+                          />
                         )}
                       </div>
-                    )}
-
-                    <p className="text-xs text-muted-foreground">
-                      Privacy mixing takes ~3-5 min. Safe to leave the page;
-                      we&apos;ll keep working in the background.
-                    </p>
-                  </>
-                )}
+                    </div>
+                  )}
               </CardContent>
             </Card>
           </motion.div>
