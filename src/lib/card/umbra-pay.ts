@@ -45,29 +45,33 @@ const REFUND_FEE_RESERVE = 5_000;
 
 /**
  * Lamport buffer kept on the escrow's NATIVE balance after the wrap step.
- * Covers:
- *   - wSOL ATA rent (~2_039_280) recovered when ATA closes during unwrap,
- *     but "in flight" mid-tx so balance must cover it
- *   - tx fees for the remaining ops (~6 × 5_000 lamports baseline + priority)
- *   - Umbra ZK proof account rent / occasional surprises
+ * Has to cover (cumulatively, mid-tx, before any rent is recovered):
  *
- * 0.01 SOL with comfortable headroom. Unused remainder refunds to user.
+ *   - wSOL ATA rent              ~2_039_280  (recovered on unwrap)
+ *   - Umbra deposit computation queue account rent (~3-5M, varies)
+ *   - Umbra withdraw computation queue + proof account rent (~5-10M)
+ *   - tx fees for ~6 ops at 5_000 each + priority surges
+ *   - Solana's per-byte fee on loadedAccountsDataSize (~7MB loaded per Umbra op)
+ *
+ * Empirically, the withdraw step has hit `INSUFFICIENT_FUNDS_FOR_RENT`
+ * (Solana code 7050031) at a 10M buffer. Bumping to 25M to give Umbra
+ * enough headroom for its proof-account rents. Unused remainder refunds.
  */
-const ESCROW_TX_FEE_BUFFER = 10_000_000; // 0.01 SOL
+const ESCROW_TX_FEE_BUFFER = 25_000_000; // 0.025 SOL
 
 /**
  * Total overhead added to the user's deposit beyond bitrefillLamports.
  * Covers:
- *   - ESCROW_TX_FEE_BUFFER (kept on native balance after wrap)            ~10M
+ *   - ESCROW_TX_FEE_BUFFER (kept on native balance after wrap)            ~25M
  *   - Umbra registration cost (rent for the registration account + tx)    ~10M
  *   - Umbra fee headroom (encrypted-balance op fees, ~21bps)               ~2M
  *   - Slop / priority surges                                               ~3M
- *                                                                  total: ~25M
+ *                                                                  total: ~40M
  *
  * Whatever the orchestration doesn't actually consume gets swept back to
  * the user at the end as part of step 8 (refund leftover).
  */
-const UMBRA_FLOW_OVERHEAD = 25_000_000; // 0.025 SOL
+const UMBRA_FLOW_OVERHEAD = 40_000_000; // 0.04 SOL
 
 /**
  * Minimum / maximum jitter on top of UMBRA_FLOW_OVERHEAD. Adds randomness so
