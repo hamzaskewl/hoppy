@@ -154,10 +154,13 @@ export function ProductDetailFlow({
       })
       .then((p) => {
         if (cancelled) return;
-        setProduct(p);
+        // Belt-and-suspenders: if the upstream lost the slug, restore it from
+        // the prop so we don't end up sending productSlug:undefined later.
+        const safe: ProductDetail = { ...p, slug: p.slug || productSlug };
+        setProduct(safe);
         // Snap initialAmount into the valid range if necessary.
-        if (p.range) {
-          const target = Math.max(p.range.min, Math.min(p.range.max, amount));
+        if (safe.range) {
+          const target = Math.max(safe.range.min, Math.min(safe.range.max, amount));
           setAmount(target);
           setAmountInput(String(target));
         }

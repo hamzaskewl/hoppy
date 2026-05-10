@@ -23,8 +23,16 @@ export async function GET(request: NextRequest) {
 
   try {
     const details = await getProductDetails(slug, currency);
+    // Bitrefill's product-details response sometimes lacks `id` — fall back
+    // to the slug we already have from the query param so the client always
+    // receives a usable identifier.
+    const resolvedSlug =
+      details.id ||
+      (details as { slug?: string; _id?: string }).slug ||
+      (details as { slug?: string; _id?: string })._id ||
+      slug;
     return NextResponse.json({
-      slug: details.id,
+      slug: resolvedSlug,
       name: details.name,
       country: details.country_code,
       currency: details.currency,
