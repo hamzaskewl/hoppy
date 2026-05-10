@@ -95,8 +95,14 @@ export function domainForSlug(slug: string | undefined | null): string | null {
   return `${parts.join("")}.com`;
 }
 
-/** Public Clearbit logo URL for a domain. Free, no auth, returns 404 if missing. */
+/**
+ * Logo.dev URL for a domain. Requires NEXT_PUBLIC_LOGO_DEV_TOKEN — if unset,
+ * returns null so the UI falls back to a letter avatar. Sign up for a free
+ * publishable token at https://www.logo.dev/.
+ */
 export function logoUrlForDomain(domain: string | null | undefined): string | null {
   if (!domain) return null;
-  return `https://logo.clearbit.com/${domain}`;
+  const token = process.env.NEXT_PUBLIC_LOGO_DEV_TOKEN;
+  if (!token) return null;
+  return `https://img.logo.dev/${domain}?token=${token}&size=128&retina=true&format=webp&fallback=monogram`;
 }
