@@ -383,6 +383,21 @@ export async function umbraCardExecute(
   //    activity, blends with all other relayer ops) instead of
   //    escrow → stealth (which would link the two ends).
   const conn = new Connection(rpcUrl(), "confirmed");
+
+  // Fail fast if the relayer wallet itself doesn't have funds. Without
+  // this check, the SystemProgram.transfer below dies with a cryptic
+  // "Attempt to debit an account but found no record of a prior credit"
+  // and the user can't tell what to fix.
+  const relayerBalance = await conn.getBalance(relayer.publicKey, "confirmed");
+  const relayerNeeds = STEALTH_FUND_BUDGET + 10_000;
+  if (relayerBalance < relayerNeeds) {
+    throw new Error(
+      `Hoppy relayer wallet ${relayer.publicKey.toBase58()} has only ${relayerBalance} lamports — needs at least ${relayerNeeds}. ` +
+        `Fund it: \`solana airdrop 1 ${relayer.publicKey.toBase58()} --url https://api.devnet.solana.com\` ` +
+        `(or transfer SOL on mainnet).`
+    );
+  }
+
   {
     const fundTx = new Transaction().add(
       SystemProgram.transfer({
@@ -396,6 +411,8 @@ export async function umbraCardExecute(
     });
     console.log(`[umbra-pay/${input.orderId}] relayer funded stealth`, {
       lamports: STEALTH_FUND_BUDGET,
+      relayerPubkey: relayer.publicKey.toBase58(),
+      relayerBalanceBefore: relayerBalance,
       sig,
     });
   }
