@@ -10,6 +10,8 @@ import {
   FEATURED_BY_SLUG,
   colorForSlug,
   shortLabelFor,
+  domainForSlug,
+  logoUrlForDomain,
 } from "@/lib/card/featured-products";
 
 interface ProductSummary {
@@ -24,6 +26,55 @@ interface ProductSummary {
 
 const QUICK_AMOUNTS = [5, 15, 25];
 
+function BrandAvatar({
+  slug,
+  name,
+  size = "lg",
+}: {
+  slug: string;
+  name: string;
+  size?: "sm" | "lg";
+}) {
+  const [logoFailed, setLogoFailed] = useState(false);
+  const color = colorForSlug(slug);
+  const label = shortLabelFor(name);
+  const logoUrl = logoUrlForDomain(domainForSlug(slug));
+
+  const sizeClass = size === "lg" ? "w-full aspect-square text-xl" : "w-10 h-10 text-xs";
+
+  if (logoUrl && !logoFailed) {
+    return (
+      <div
+        className={cn(
+          "rounded-xl bg-white flex items-center justify-center border-2 border-border/40 shadow-sm overflow-hidden p-2",
+          sizeClass
+        )}
+      >
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img
+          src={logoUrl}
+          alt={name}
+          className="max-w-full max-h-full object-contain"
+          onError={() => setLogoFailed(true)}
+          loading="lazy"
+        />
+      </div>
+    );
+  }
+
+  return (
+    <div
+      className={cn(
+        "rounded-xl flex items-center justify-center text-white font-bold border-2 border-border/40 shadow-sm",
+        sizeClass
+      )}
+      style={{ backgroundColor: color }}
+    >
+      <span className="px-2 text-center leading-tight break-words">{label}</span>
+    </div>
+  );
+}
+
 function ProductTile({
   product,
   onSelect,
@@ -31,22 +82,13 @@ function ProductTile({
   product: ProductSummary;
   onSelect: (slug: string, amount?: number) => void;
 }) {
-  const featured = FEATURED_BY_SLUG[product.slug];
-  const color = colorForSlug(product.slug);
-  const label = featured?.short ?? shortLabelFor(product.name);
-
   return (
     <div className="group rounded-2xl border-2 border-border bg-card overflow-hidden hover:border-hop-400 transition-colors flex flex-col">
       <button
         onClick={() => onSelect(product.slug)}
         className="flex-1 p-4 text-left flex flex-col gap-3"
       >
-        <div
-          className="w-full aspect-square rounded-xl flex items-center justify-center text-white font-bold text-xl border-2 border-border/40 shadow-sm"
-          style={{ backgroundColor: color }}
-        >
-          <span className="px-2 text-center leading-tight break-words">{label}</span>
-        </div>
+        <BrandAvatar slug={product.slug} name={product.name} size="lg" />
         <div className="space-y-1">
           <p className="text-sm font-medium truncate">{product.name}</p>
           {product.categories && product.categories[0] && (
@@ -85,7 +127,7 @@ function rankProducts(products: ProductSummary[], query: string): ProductSummary
   const q = query.toLowerCase().trim();
   return [...products].sort((a, b) => {
     const score = (p: ProductSummary) => {
-      const name = p.name.toLowerCase();
+      const name = (p.name || "").toLowerCase();
       let s = 0;
       if (FEATURED_BY_SLUG[p.slug]) s += 100;
       if (name === q) s += 80;
@@ -109,7 +151,6 @@ export function ProductCatalog({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Debounce search input.
   useEffect(() => {
     const t = setTimeout(() => setDebounced(query.trim()), 250);
     return () => clearTimeout(t);
@@ -123,7 +164,11 @@ export function ProductCatalog({
       const res = await fetch(url);
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Failed to load products");
-      setProducts(data.products || []);
+      // Defensive: drop any malformed entries lacking slug or name.
+      const valid = (data.products || []).filter(
+        (p: ProductSummary) => p && typeof p.slug === "string" && typeof p.name === "string"
+      );
+      setProducts(valid);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -131,8 +176,6 @@ export function ProductCatalog({
     }
   }, []);
 
-  // Initial load: pull all products. We use the catalog at large + the
-  // hardcoded featured list for the curated row.
   useEffect(() => {
     fetchProducts(debounced || "*");
   }, [debounced, fetchProducts]);
@@ -140,8 +183,6 @@ export function ProductCatalog({
   const isSearching = debounced.length > 0;
   const ranked = useMemo(() => rankProducts(products, debounced), [products, debounced]);
 
-  // For the featured row, prefer freshly-fetched data (so we know each is
-  // in-stock); fall back to the hardcoded list when no data has loaded yet.
   const featuredRow = useMemo<ProductSummary[]>(() => {
     if (products.length === 0) {
       return FEATURED_PRODUCTS.map((p) => ({ slug: p.slug, name: p.name }));
@@ -154,13 +195,12 @@ export function ProductCatalog({
 
   return (
     <div className="space-y-8">
-      {/* Search */}
       <div className="relative max-w-xl mx-auto">
         <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
         <Input
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          placeholder="Search Amazon, Uber, Starbucks, Visa..."
+          placeholder="Search Uber, Starbucks, Walmart, Visa..."
           className="pl-10 py-6 bg-card border-2 border-border text-base"
         />
         {loading && (

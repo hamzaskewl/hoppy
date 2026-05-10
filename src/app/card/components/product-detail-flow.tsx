@@ -31,7 +31,12 @@ import {
   PublicKey,
   LAMPORTS_PER_SOL,
 } from "@solana/web3.js";
-import { colorForSlug, shortLabelFor } from "@/lib/card/featured-products";
+import {
+  colorForSlug,
+  shortLabelFor,
+  domainForSlug,
+  logoUrlForDomain,
+} from "@/lib/card/featured-products";
 
 type FlowStep = "configure" | "paying" | "waiting" | "complete" | "error";
 
@@ -71,6 +76,41 @@ interface OrderState extends OrderResponse {
 function stripHtml(html: string | null | undefined): string {
   if (!html) return "";
   return html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+}
+
+function DetailAvatar({
+  logoUrl,
+  color,
+  label,
+  alt,
+}: {
+  logoUrl: string | null;
+  color: string;
+  label: string;
+  alt: string;
+}) {
+  const [logoFailed, setLogoFailed] = useState(false);
+  if (logoUrl && !logoFailed) {
+    return (
+      <div className="w-14 h-14 rounded-xl bg-white flex items-center justify-center border-2 border-border shrink-0 p-2 overflow-hidden">
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img
+          src={logoUrl}
+          alt={alt}
+          className="max-w-full max-h-full object-contain"
+          onError={() => setLogoFailed(true)}
+        />
+      </div>
+    );
+  }
+  return (
+    <div
+      className="w-14 h-14 rounded-xl flex items-center justify-center text-white font-bold border-2 border-border shrink-0"
+      style={{ backgroundColor: color }}
+    >
+      {label}
+    </div>
+  );
 }
 
 export function ProductDetailFlow({
@@ -220,7 +260,19 @@ export function ProductDetailFlow({
         setIsLoading(false);
         return;
       }
-      if (!res.ok) throw new Error(data.error || "Failed to create order");
+      if (!res.ok) {
+        // Bitrefill returns error_code: "not_available" for products that
+        // require partner approval the account doesn't have (e.g. Amazon).
+        const code = data?.details?.error_code;
+        if (code === "not_available") {
+          setError(
+            "This brand isn't available on our gift card account yet. Try a different one — most brands work fine."
+          );
+          setIsLoading(false);
+          return;
+        }
+        throw new Error(data.error || "Failed to create order");
+      }
 
       setOrder(data);
       setStep("paying");
@@ -300,6 +352,7 @@ export function ProductDetailFlow({
 
   const color = colorForSlug(product.slug);
   const label = shortLabelFor(product.name);
+  const logoUrl = logoUrlForDomain(domainForSlug(product.slug));
   const minAmt = product.range?.min ?? 1;
   const maxAmt = product.range?.max ?? 10000;
   const amountInRange = amount >= minAmt && amount <= maxAmt;
@@ -325,12 +378,7 @@ export function ProductDetailFlow({
             <Card>
               <CardHeader>
                 <div className="flex items-center gap-4">
-                  <div
-                    className="w-14 h-14 rounded-xl flex items-center justify-center text-white font-bold border-2 border-border shrink-0"
-                    style={{ backgroundColor: color }}
-                  >
-                    {label}
-                  </div>
+                  <DetailAvatar logoUrl={logoUrl} color={color} label={label} alt={product.name} />
                   <div className="flex-1 min-w-0">
                     <CardTitle className="truncate">{product.name}</CardTitle>
                     {product.subtitle && (

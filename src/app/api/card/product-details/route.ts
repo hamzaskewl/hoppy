@@ -40,8 +40,18 @@ export async function GET(request: NextRequest) {
     });
   } catch (e) {
     if (e instanceof BitrefillError) {
-      const notFound = e.status === 404;
       console.error("[ProductDetails] Bitrefill error:", e.status, e.body);
+      const body = (e.body as { error_code?: string; message?: string }) || {};
+      if (body.error_code === "not_available") {
+        return NextResponse.json(
+          {
+            error: "This brand isn't available on our gift card account yet.",
+            code: "not_available",
+          },
+          { status: 403 }
+        );
+      }
+      const notFound = e.status === 404;
       return NextResponse.json(
         { error: notFound ? "Product not found" : "Failed to load product" },
         { status: notFound ? 404 : 502 }

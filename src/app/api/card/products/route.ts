@@ -34,16 +34,19 @@ export async function GET(request: NextRequest) {
       perPage,
     });
 
-    // Trim the payload to fields the UI actually uses.
-    const products = (result.products || []).map((p) => ({
-      slug: p.slug,
-      name: p.name,
-      type: p.type,
-      categories: p.categories || [],
-      countries: p.countries || [],
-      currency: p.currency,
-      keywords: p.keywords || [],
-    }));
+    // Trim the payload to fields the UI actually uses, and drop any entries
+    // missing slug/name to keep the client from crashing on bad data.
+    const products = (result.products || [])
+      .filter((p) => p && typeof p.slug === "string" && typeof p.name === "string")
+      .map((p) => ({
+        slug: p.slug,
+        name: p.name,
+        type: p.type,
+        categories: p.categories || [],
+        countries: p.countries || [],
+        currency: p.currency,
+        keywords: p.keywords || [],
+      }));
 
     return NextResponse.json({
       products,
