@@ -90,6 +90,10 @@ export async function initDatabase(): Promise<void> {
       ALTER TABLE gift_card_orders ADD COLUMN IF NOT EXISTS payment_amount DECIMAL(18, 9);
       ALTER TABLE gift_card_orders ADD COLUMN IF NOT EXISTS payment_currency VARCHAR(20);
 
+      -- Legacy Starpay schema had card_type NOT NULL; the Bitrefill flow
+      -- doesn't populate it (we use product_slug instead). Drop the constraint.
+      ALTER TABLE gift_card_orders ALTER COLUMN card_type DROP NOT NULL;
+
       CREATE INDEX IF NOT EXISTS idx_orders_status ON gift_card_orders(status);
       CREATE INDEX IF NOT EXISTS idx_orders_bitrefill_invoice ON gift_card_orders(bitrefill_invoice_id);
 
