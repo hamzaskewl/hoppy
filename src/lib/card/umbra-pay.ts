@@ -44,46 +44,52 @@ const WSOL_MINT_STR = WSOL_MINT.toBase58();
 const REFUND_FEE_RESERVE = 5_000;
 
 /**
- * Lamport buffer kept on the escrow at the start of orchestration to pay for:
+ * Lamport buffer kept on the escrow's NATIVE balance after the wrap step.
+ * Covers:
+ *   - wSOL ATA rent (~2_039_280) recovered when ATA closes during unwrap,
+ *     but "in flight" mid-tx so balance must cover it
+ *   - tx fees for the remaining ops (~6 × 5_000 lamports baseline + priority)
+ *   - Umbra ZK proof account rent / occasional surprises
  *
- *   - wSOL ATA rent (~2_039_280) — recovered when ATA closes during unwrap,
- *     but it's "in flight" mid-tx so balance must cover it
- *   - ~6 tx fees (wrap, umbra-deposit, umbra-withdraw, unwrap, pay-bitrefill,
- *     refund-leftover) at 5_000 each = 30_000 lamports
- *   - Umbra ZK ops occasionally use additional rent for proof accounts
- *   - Priority fee surges and slop
- *
- * 0.01 SOL is enough to cover all of the above with comfortable headroom.
- * Whatever's actually unused refunds back to the user at the end.
+ * 0.01 SOL with comfortable headroom. Unused remainder refunds to user.
  */
 const ESCROW_TX_FEE_BUFFER = 10_000_000; // 0.01 SOL
 
-/** Hard floor we never let the escrow drop below mid-orchestration. */
-const ESCROW_HARD_MIN_RESERVE = 5_000_000; // 0.005 SOL
+/**
+ * Total overhead added to the user's deposit beyond bitrefillLamports.
+ * Covers:
+ *   - ESCROW_TX_FEE_BUFFER (kept on native balance after wrap)            ~10M
+ *   - Umbra registration cost (rent for the registration account + tx)    ~10M
+ *   - Umbra fee headroom (encrypted-balance op fees, ~21bps)               ~2M
+ *   - Slop / priority surges                                               ~3M
+ *                                                                  total: ~25M
+ *
+ * Whatever the orchestration doesn't actually consume gets swept back to
+ * the user at the end as part of step 8 (refund leftover).
+ */
+const UMBRA_FLOW_OVERHEAD = 25_000_000; // 0.025 SOL
 
 /**
- * Minimum overshoot above the Bitrefill amount, in lamports. Adds randomness
- * so the deposit amount doesn't equal a recognizable card-price denomination
- * — observers shouldn't be able to fingerprint "user X deposited $25's worth
+ * Minimum / maximum jitter on top of UMBRA_FLOW_OVERHEAD. Adds randomness so
+ * the deposit amount doesn't equal a recognizable card-price denomination —
+ * observers shouldn't be able to fingerprint "user X deposited $25's worth
  * of SOL" by the exact lamports value.
  */
 const MIN_OVERSHOOT_LAMPORTS = 2_000_000; // 0.002 SOL
 const MAX_OVERSHOOT_LAMPORTS = 6_000_000; // 0.006 SOL
 
 /**
- * Compute the deposit lamports the user must send to the escrow.
+ * Compute the deposit lamports the user must send to the per-order escrow.
  *
- *   bitrefillLamports + tx-fee buffer + Umbra fee headroom + jitter
+ *   bitrefillLamports + UMBRA_FLOW_OVERHEAD + jitter
  *
- * The Umbra fee on encrypted-balance ops is ~0.21%; we budget 1% to be safe.
- * Jitter is uniform within [MIN, MAX] overshoot. Leftover funds refund back
+ * Leftover funds (whatever the orchestration doesn't consume) refund back
  * to the user automatically once Bitrefill is paid.
  */
 export function computeDepositLamports(bitrefillLamports: number): number {
-  const umbraFeeHeadroom = Math.ceil(bitrefillLamports * 0.01);
   const jitterRange = MAX_OVERSHOOT_LAMPORTS - MIN_OVERSHOOT_LAMPORTS;
   const jitter = MIN_OVERSHOOT_LAMPORTS + Math.floor(Math.random() * jitterRange);
-  return bitrefillLamports + ESCROW_TX_FEE_BUFFER + umbraFeeHeadroom + jitter;
+  return bitrefillLamports + UMBRA_FLOW_OVERHEAD + jitter;
 }
 
 async function ensureUmbraRegistered(
