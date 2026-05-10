@@ -18,7 +18,7 @@ import type { IUmbraClient } from "@umbra-privacy/sdk/interfaces";
 // derive its type from the factory.
 type IUmbraRelayer = ReturnType<typeof getUmbraRelayer>;
 import {
-  getCreateSelfClaimableUtxoFromEncryptedBalanceProver,
+  getCreateReceiverClaimableUtxoFromEncryptedBalanceProver,
   getClaimSelfClaimableUtxoIntoPublicBalanceProver,
   getUserRegistrationProver,
 } from "@umbra-privacy/web-zk-prover";
@@ -105,8 +105,8 @@ export function umbraRelayer(): IUmbraRelayer {
 }
 
 // ZK provers are stateless function-bundle objects; one per process is fine.
-let createUtxoProverInstance: ReturnType<
-  typeof getCreateSelfClaimableUtxoFromEncryptedBalanceProver
+let createReceiverUtxoProverInstance: ReturnType<
+  typeof getCreateReceiverClaimableUtxoFromEncryptedBalanceProver
 > | null = null;
 let claimUtxoProverInstance: ReturnType<
   typeof getClaimSelfClaimableUtxoIntoPublicBalanceProver
@@ -115,12 +115,20 @@ let registrationProverInstance: ReturnType<
   typeof getUserRegistrationProver
 > | null = null;
 
-export function createUtxoProver() {
-  if (!createUtxoProverInstance) {
-    createUtxoProverInstance =
-      getCreateSelfClaimableUtxoFromEncryptedBalanceProver();
+/**
+ * Receiver-claimable UTXO prover (encrypted-balance source). Used for payroll:
+ * the escrow signs the create, but the resulting UTXO is encrypted to the
+ * stealth's on-chain user commitment so only the stealth can claim. A
+ * self-claimable UTXO would be claim-bound to the escrow's master seed +
+ * generation index — the stealth in the URL has neither, so payroll links
+ * built that way are unclaimable.
+ */
+export function createReceiverUtxoProver() {
+  if (!createReceiverUtxoProverInstance) {
+    createReceiverUtxoProverInstance =
+      getCreateReceiverClaimableUtxoFromEncryptedBalanceProver();
   }
-  return createUtxoProverInstance;
+  return createReceiverUtxoProverInstance;
 }
 
 export function claimUtxoProver() {

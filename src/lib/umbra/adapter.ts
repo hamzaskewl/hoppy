@@ -21,7 +21,7 @@
 import {
   getUserRegistrationFunction,
   getPublicBalanceToEncryptedBalanceDirectDepositorFunction,
-  getEncryptedBalanceToSelfClaimableUtxoCreatorFunction,
+  getEncryptedBalanceToReceiverClaimableUtxoCreatorFunction,
   getEncryptedBalanceToPublicBalanceDirectWithdrawerFunction,
   getClaimableUtxoScannerFunction,
 } from "@umbra-privacy/sdk";
@@ -34,7 +34,7 @@ import {
 } from "./keys";
 import {
   umbraClientFor,
-  createUtxoProver,
+  createReceiverUtxoProver,
   registrationProver,
   networkName,
   rpcUrl,
@@ -602,11 +602,29 @@ export async function umbraPayrollIssueLink(
     20_000,
   );
 
-  // 5. Escrow creates a self-claimable UTXO destined for the stealth address.
+  // 5. Escrow creates a RECEIVER-claimable UTXO destined for the stealth.
+  //
+  // Why receiver-claimable, not self-claimable:
+  //   `getEncryptedBalanceToSelfClaimableUtxoCreatorFunction` produces a UTXO
+  //   whose unlocking commitment is derived from the *signer's* master seed +
+  //   a generation index — i.e. only the escrow can ever claim it. The
+  //   `destinationAddress` argument on that function is just metadata (it
+  //   gets AES-encrypted into the recovery blob), not an unlocking key, so
+  //   the stealth in the URL has no way to claim. That's why every payroll
+  //   link minted with the previous code path returned "no claimable funds".
+  //
+  //   `getEncryptedBalanceToReceiverClaimableUtxoCreatorFunction` instead
+  //   uses the receiver's on-chain registered user commitment as the
+  //   unlocking commitment and ECDH-encrypts the recovery blob with the
+  //   receiver's X25519 key. Result: only the stealth (whose seed lives in
+  //   the URL) can scan/claim, and it shows up in the stealth's `received`
+  //   bucket. Privacy is preserved because the destination is encrypted
+  //   inside the UTXO — observers see "escrow created A UTXO" but not who
+  //   it's for.
   const createStart = Date.now();
-  const createUtxo = getEncryptedBalanceToSelfClaimableUtxoCreatorFunction(
+  const createUtxo = getEncryptedBalanceToReceiverClaimableUtxoCreatorFunction(
     { client: escrowClient },
-    { zkProver: createUtxoProver() },
+    { zkProver: createReceiverUtxoProver() },
   );
 
   const result = await createUtxo({
@@ -663,14 +681,20 @@ export async function umbraPayrollIssueLink(
         BigInt(0) as never,
         BigInt(10000) as never,
       )) as {
+        received?: unknown[];
+        publicReceived?: unknown[];
         selfBurnable?: unknown[];
         publicSelfBurnable?: unknown[];
-        self?: unknown[];
       };
+      // Receiver-claimable UTXOs from encrypted balance land in `received`.
+      // Keep the other buckets in the count for diagnostic resilience: if
+      // the SDK ever reclassifies the UTXO type, we still detect it instead
+      // of looping until the deadline.
       const visibleCount =
+        (scanResult.received?.length ?? 0) +
+        (scanResult.publicReceived?.length ?? 0) +
         (scanResult.selfBurnable?.length ?? 0) +
-        (scanResult.publicSelfBurnable?.length ?? 0) +
-        (scanResult.self?.length ?? 0);
+        (scanResult.publicSelfBurnable?.length ?? 0);
       if (visibleCount > 0) {
         indexerVisible = true;
         console.log(
@@ -678,6 +702,8 @@ export async function umbraPayrollIssueLink(
           {
             attempts: indexerAttempts,
             elapsedMs: Date.now() - indexerVerifyStart,
+            received: scanResult.received?.length ?? 0,
+            publicReceived: scanResult.publicReceived?.length ?? 0,
             selfBurnable: scanResult.selfBurnable?.length ?? 0,
             publicSelfBurnable: scanResult.publicSelfBurnable?.length ?? 0,
           },

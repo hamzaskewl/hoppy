@@ -366,22 +366,20 @@ export function ClaimFlow() {
         // Reconstruct Umbra client from ephemeral, overriding env config
         const umbraClient = await createUmbraClientFromKeypair(ephemeralKeypair, config);
 
-        // Claim self-claimable UTXO into public wSOL balance
-        setClaimProgress("Claiming from privacy pool...");
-        const { getSelfClaimableUtxoToPublicBalanceClaimerFunction, getClaimableUtxoScannerFunction, getUmbraRelayer } =
-          await import("@umbra-privacy/sdk");
-        const { getClaimSelfClaimableUtxoIntoPublicBalanceProver } =
-          await import("@umbra-privacy/web-zk-prover");
+        setClaimProgress("Scanning the privacy pool…");
+        const {
+          getSelfClaimableUtxoToPublicBalanceClaimerFunction,
+          getReceiverClaimableUtxoToEncryptedBalanceClaimerFunction,
+          getEncryptedBalanceToPublicBalanceDirectWithdrawerFunction,
+          getEncryptedBalanceQuerierFunction,
+          getClaimableUtxoScannerFunction,
+          getUmbraRelayer,
+        } = await import("@umbra-privacy/sdk");
         const relayer = getUmbraRelayer({
           apiEndpoint: config.relayerUrl,
         } as any);
         // v4: client exposes fetchBatchMerkleProof directly
         const fetchBatchMerkleProof = (umbraClient as any).fetchBatchMerkleProof;
-        const claimProver = getClaimSelfClaimableUtxoIntoPublicBalanceProver({ assetProvider: zkProvider });
-        const claimFn = getSelfClaimableUtxoToPublicBalanceClaimerFunction(
-          { client: umbraClient },
-          { zkProver: claimProver, relayer, fetchBatchMerkleProof }
-        );
 
         const scanUtxos = getClaimableUtxoScannerFunction({ client: umbraClient });
 
@@ -400,23 +398,44 @@ export function ClaimFlow() {
           console.log("[Claim] Stealth keypair OK", { stealth: derivedPubkey });
         }
 
-        // v4 result fields: selfBurnable | received | publicSelfBurnable | publicReceived
-        //   - Regular /create private send → publicSelfBurnable (from public balance)
-        //   - Payroll issue-link → selfBurnable (from encrypted balance)
-        // Combine ALL self-claimable UTXOs since the claim function handles both.
-        // (Don't use `||` — empty arrays are truthy and would break the fallback.)
-        async function scanOnce(): Promise<{ utxos: any[]; raw: any }> {
+        // v4 scanner buckets:
+        //   - publicSelfBurnable / selfBurnable → regular /create private send
+        //     (the same key created and claims the UTXO, "ephemeral unlocker")
+        //   - received / publicReceived → payroll issue-link UTXO created by
+        //     the escrow but encrypted to this stealth's commitment
+        //     ("receiver unlocker")
+        // The two unlocker types use *different* claim primitives, so we
+        // route based on which bucket actually has UTXOs.
+        type ScanBuckets = {
+          received: any[];
+          publicReceived: any[];
+          selfBurnable: any[];
+          publicSelfBurnable: any[];
+        };
+        async function scanOnce(): Promise<{ buckets: ScanBuckets; raw: any }> {
           const fetchResult: any = await scanUtxos(
             BigInt(0) as any,
             BigInt(0) as any,
             BigInt(10000) as any,
           );
-          const utxos: any[] = [
-            ...(fetchResult.publicSelfBurnable ?? []),
-            ...(fetchResult.selfBurnable ?? []),
-            ...(fetchResult.self ?? []),
-          ];
-          return { utxos, raw: fetchResult };
+          return {
+            buckets: {
+              received: fetchResult.received ?? [],
+              publicReceived: fetchResult.publicReceived ?? [],
+              selfBurnable: fetchResult.selfBurnable ?? [],
+              publicSelfBurnable: fetchResult.publicSelfBurnable ?? [],
+            },
+            raw: fetchResult,
+          };
+        }
+
+        function totalClaimable(b: ScanBuckets): number {
+          return (
+            b.received.length +
+            b.publicReceived.length +
+            b.selfBurnable.length +
+            b.publicSelfBurnable.length
+          );
         }
 
         // Multi-shot scan with backoff. Indexer lag on devnet can be 5-30s
@@ -424,24 +443,24 @@ export function ClaimFlow() {
         // is too eager. Retry up to 5 times across ~30s before giving up.
         const scanAttempts: Array<{
           ms: number;
-          publicSelfBurnable: number;
-          selfBurnable: number;
           received: number;
           publicReceived: number;
+          selfBurnable: number;
+          publicSelfBurnable: number;
           combined: number;
         }> = [];
         let scan = await scanOnce();
         scanAttempts.push({
           ms: 0,
-          publicSelfBurnable: scan.raw.publicSelfBurnable?.length ?? 0,
-          selfBurnable: scan.raw.selfBurnable?.length ?? 0,
-          received: scan.raw.received?.length ?? 0,
-          publicReceived: scan.raw.publicReceived?.length ?? 0,
-          combined: scan.utxos.length,
+          received: scan.buckets.received.length,
+          publicReceived: scan.buckets.publicReceived.length,
+          selfBurnable: scan.buckets.selfBurnable.length,
+          publicSelfBurnable: scan.buckets.publicSelfBurnable.length,
+          combined: totalClaimable(scan.buckets),
         });
         const RETRY_DELAYS_MS = [3000, 5000, 8000, 12000];
         for (const delay of RETRY_DELAYS_MS) {
-          if (scan.utxos.length > 0) break;
+          if (totalClaimable(scan.buckets) > 0) break;
           console.log(
             `[Claim] Empty scan — retrying in ${Math.round(delay / 1000)}s (attempt ${scanAttempts.length + 1})...`,
           );
@@ -449,22 +468,23 @@ export function ClaimFlow() {
           scan = await scanOnce();
           scanAttempts.push({
             ms: delay,
-            publicSelfBurnable: scan.raw.publicSelfBurnable?.length ?? 0,
-            selfBurnable: scan.raw.selfBurnable?.length ?? 0,
-            received: scan.raw.received?.length ?? 0,
-            publicReceived: scan.raw.publicReceived?.length ?? 0,
-            combined: scan.utxos.length,
+            received: scan.buckets.received.length,
+            publicReceived: scan.buckets.publicReceived.length,
+            selfBurnable: scan.buckets.selfBurnable.length,
+            publicSelfBurnable: scan.buckets.publicSelfBurnable.length,
+            combined: totalClaimable(scan.buckets),
           });
         }
-        const { utxos, raw: fetchResult } = scan;
+        const { buckets, raw: fetchResult } = scan;
         console.log("[Claim] Scan attempts:", {
           stealthAddress: derivedPubkey,
           attemptCount: scanAttempts.length,
           attempts: scanAttempts,
-          finalCombinedClaimable: utxos.length,
+          finalCombinedClaimable: totalClaimable(buckets),
           fullFinalResult: fetchResult,
         });
-        if (utxos.length === 0) {
+
+        if (totalClaimable(buckets) === 0) {
           // All scans came back empty after ~28s of retries. That's almost
           // certainly a structurally broken link (UTXO not on-chain or
           // mis-encrypted). Genuine indexer lag rarely exceeds 10s.
@@ -475,12 +495,179 @@ export function ClaimFlow() {
             }s. The link may be invalid — please ask whoever sent it to re-issue.`,
           );
         }
-        await claimFn(utxos);
+
+        const receiverUtxos = [...buckets.received, ...buckets.publicReceived];
+        const selfUtxos = [...buckets.publicSelfBurnable, ...buckets.selfBurnable];
+
+        if (receiverUtxos.length > 0) {
+          // ── Payroll-style: receiver-claimable UTXO from escrow ──
+          // Claim into the stealth's encrypted balance, then withdraw to
+          // its public wSOL ATA, then drain the ATA + native SOL to the
+          // recipient. The unwrap is implicit in the drain (closeAccount).
+          setClaimProgress("Claiming receiver UTXO (~30s)…");
+          const { getClaimReceiverClaimableUtxoIntoEncryptedBalanceProver } =
+            await import("@umbra-privacy/web-zk-prover");
+          const receiverClaimProver =
+            getClaimReceiverClaimableUtxoIntoEncryptedBalanceProver({
+              assetProvider: zkProvider,
+            });
+          const claimReceiverFn =
+            getReceiverClaimableUtxoToEncryptedBalanceClaimerFunction(
+              { client: umbraClient },
+              {
+                zkProver: receiverClaimProver,
+                relayer,
+                fetchBatchMerkleProof,
+              } as any,
+            );
+
+          const requestedAmount = receiverUtxos.reduce<bigint>(
+            (sum, u) => sum + BigInt((u as { amount: bigint | number }).amount),
+            BigInt(0),
+          );
+          console.log("[Claim] Receiver-claim starting", {
+            utxoCount: receiverUtxos.length,
+            requestedAmount: requestedAmount.toString(),
+          });
+          const claimResult = (await claimReceiverFn(receiverUtxos)) as any;
+          // Surface batch-level relayer status. If any batch isn't
+          // "completed" the encrypted balance won't be credited and the
+          // subsequent withdraw will silently no-op, leaving the user
+          // with only the gas leftover in the drain.
+          const batchSummary: Array<Record<string, unknown>> = [];
+          try {
+            const batches: Map<unknown, any> | any =
+              claimResult?.batches ?? new Map();
+            const iter =
+              typeof batches?.entries === "function"
+                ? batches.entries()
+                : Object.entries(batches);
+            for (const [k, v] of iter) {
+              batchSummary.push({
+                batch: String(k),
+                status: v?.status,
+                txSignature: v?.txSignature,
+                callbackSignature: v?.callbackSignature,
+                failureReason: v?.failureReason ?? null,
+              });
+            }
+          } catch (err) {
+            console.warn("[Claim] could not summarize claim batches", err);
+          }
+          console.log("[Claim] Receiver-claim done", { batches: batchSummary });
+          const anyBatchFailed = batchSummary.some(
+            (b) =>
+              b.status &&
+              !["completed", "Completed", "COMPLETED"].includes(String(b.status)),
+          );
+          if (anyBatchFailed) {
+            console.error(
+              "[Claim] Receiver-claim batch did not reach 'completed'",
+              batchSummary,
+            );
+          }
+
+          // Query the *actual* credited encrypted balance instead of using
+          // the requested amount: the relayer + protocol fees get deducted,
+          // so the encrypted balance is always smaller than the UTXO sum.
+          // Asking the withdraw for more than what's there silently no-ops
+          // and leaves the wSOL stuck in the encrypted balance forever —
+          // which is exactly the symptom we saw (drain only returned the
+          // unused gas). Poll for up to ~25s in case the relayer's
+          // callback finishes after the claim function returns.
+          const queryBalance = getEncryptedBalanceQuerierFunction({
+            client: umbraClient,
+          });
+          let creditedAmount = BigInt(0);
+          const balancePollStart = Date.now();
+          const BALANCE_POLL_DELAYS_MS = [0, 2000, 3000, 5000, 7000, 10000];
+          for (const delay of BALANCE_POLL_DELAYS_MS) {
+            if (delay > 0) await new Promise((r) => setTimeout(r, delay));
+            try {
+              const balances = (await queryBalance([
+                WSOL_MINT as never,
+              ])) as Map<string, { state: string; balance?: bigint }>;
+              const wsolEntry = balances.get(WSOL_MINT) ??
+                (balances as any).get?.(WSOL_MINT as never);
+              const balValue =
+                wsolEntry?.state === "shared" && wsolEntry?.balance != null
+                  ? BigInt(wsolEntry.balance)
+                  : BigInt(0);
+              console.log("[Claim] Encrypted balance poll", {
+                pollDelayMs: delay,
+                cumulativeMs: Date.now() - balancePollStart,
+                state: wsolEntry?.state,
+                balance: balValue.toString(),
+              });
+              if (balValue > creditedAmount) creditedAmount = balValue;
+              if (creditedAmount > BigInt(0)) break;
+            } catch (err) {
+              console.warn("[Claim] balance poll error", { delay, err });
+            }
+          }
+
+          if (creditedAmount === BigInt(0)) {
+            // Encrypted balance never got credited — the relayer didn't
+            // complete the claim, or its callback hasn't landed yet. Fail
+            // loudly instead of letting the drain silently return only
+            // the gas budget (the bug we just fixed).
+            throw new Error(
+              `Receiver claim didn't credit any wSOL to the stealth's encrypted balance after ~${Math.round(
+                (Date.now() - balancePollStart) / 1000,
+              )}s. Try again in 30s; if it persists, the link is structurally broken.`,
+            );
+          }
+
+          setClaimProgress("Withdrawing to public balance (~30s)…");
+          const withdraw =
+            getEncryptedBalanceToPublicBalanceDirectWithdrawerFunction({
+              client: umbraClient,
+            });
+          console.log("[Claim] Withdraw starting", {
+            destinationStealth: ephemeralPubkey.toBase58(),
+            withdrawAmount: creditedAmount.toString(),
+            requestedAmount: requestedAmount.toString(),
+          });
+          const withdrawResult = (await withdraw(
+            ephemeralPubkey.toBase58() as never,
+            WSOL_MINT as never,
+            creditedAmount as never,
+          )) as any;
+          console.log("[Claim] Withdraw done", {
+            queueSignature: withdrawResult?.queueSignature,
+            callbackStatus: withdrawResult?.callbackStatus,
+            callbackSignature: withdrawResult?.callbackSignature,
+            callbackElapsedMs: withdrawResult?.callbackElapsedMs,
+          });
+          if (
+            withdrawResult?.callbackStatus &&
+            withdrawResult.callbackStatus !== "finalized"
+          ) {
+            console.error("[Claim] Withdraw callback not finalized", {
+              callbackStatus: withdrawResult.callbackStatus,
+            });
+          }
+        } else {
+          // ── Regular create flow: self-claimable UTXO ──
+          // Same key created and now claims, so we can claim straight to
+          // public balance in one ZK proof.
+          setClaimProgress("Claiming from privacy pool…");
+          const { getClaimSelfClaimableUtxoIntoPublicBalanceProver } =
+            await import("@umbra-privacy/web-zk-prover");
+          const claimProver = getClaimSelfClaimableUtxoIntoPublicBalanceProver({
+            assetProvider: zkProvider,
+          });
+          const claimFn = getSelfClaimableUtxoToPublicBalanceClaimerFunction(
+            { client: umbraClient },
+            { zkProver: claimProver, relayer, fetchBatchMerkleProof } as any,
+          );
+          await claimFn(selfUtxos);
+        }
 
         // Bundle wSOL ATA close + SOL transfer into a single tx so the ATA's
         // ~0.00204 SOL rent gets recovered into the drain. A separate close
         // tx that silently catches errors leaves rent stuck on the ephemeral.
-        setClaimProgress("Sending to your wallet...");
+        setClaimProgress("Sending to your wallet…");
         transferSig = await drainEphemeralToRecipient(
           connection,
           ephemeralKeypair,
