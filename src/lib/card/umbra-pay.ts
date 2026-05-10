@@ -226,13 +226,18 @@ async function waitForUmbraCallback(
 /**
  * Wait for the indexer to surface a freshly-created UTXO to the receiver.
  * The on-chain UTXO is committed once its callback mines, but Umbra's
- * indexer can lag a few seconds — without this poll, the immediate
- * stealth-side claim sees an empty list and fails.
+ * indexer can lag — sometimes a few seconds (mainnet), sometimes minutes
+ * (devnet). Without this poll, the immediate stealth-side claim sees an
+ * empty list and fails.
+ *
+ * Checks ALL UTXO buckets (received / publicReceived / selfBurnable /
+ * publicSelfBurnable) in case the SDK reclassifies our encrypted-balance
+ * receiver UTXO into a different bucket — defensive, costs nothing.
  */
 async function waitForUtxoVisible(
   stealthClient: IUmbraClient,
   orderId: string,
-  timeoutMs = 90_000
+  timeoutMs = 180_000
 ): Promise<unknown[]> {
   const scanner = getClaimableUtxoScannerFunction({ client: stealthClient });
   const deadline = Date.now() + timeoutMs;
@@ -247,21 +252,63 @@ async function waitForUtxoVisible(
       )) as {
         received?: unknown[];
         publicReceived?: unknown[];
+        selfBurnable?: unknown[];
+        publicSelfBurnable?: unknown[];
       };
-      const utxos = result.received ?? [];
-      if (utxos.length > 0) {
+      // Receiver UTXOs from encrypted balance officially land in `received`,
+      // but accept any bucket as a fallback in case the SDK reclassifies.
+      const utxos =
+        (result.received && result.received.length > 0 && result.received) ||
+        (result.publicReceived && result.publicReceived.length > 0 && result.publicReceived) ||
+        (result.selfBurnable && result.selfBurnable.length > 0 && result.selfBurnable) ||
+        (result.publicSelfBurnable && result.publicSelfBurnable.length > 0 && result.publicSelfBurnable) ||
+        null;
+
+      if (utxos && Array.isArray(utxos) && utxos.length > 0) {
         console.log(`[umbra-pay/${orderId}][indexer] UTXO visible to stealth`, {
           attempts,
           count: utxos.length,
+          buckets: {
+            received: result.received?.length ?? 0,
+            publicReceived: result.publicReceived?.length ?? 0,
+            selfBurnable: result.selfBurnable?.length ?? 0,
+            publicSelfBurnable: result.publicSelfBurnable?.length ?? 0,
+          },
         });
         return utxos;
+      }
+
+      // Log every 6 attempts (~12s) so the polling progress shows up in logs
+      // rather than the loop being silent for 3 minutes.
+      if (attempts % 6 === 0) {
+        console.log(`[umbra-pay/${orderId}][indexer] still waiting`, {
+          attempts,
+          elapsedMs: Date.now() - (deadline - timeoutMs),
+          buckets: {
+            received: result.received?.length ?? 0,
+            publicReceived: result.publicReceived?.length ?? 0,
+            selfBurnable: result.selfBurnable?.length ?? 0,
+            publicSelfBurnable: result.publicSelfBurnable?.length ?? 0,
+          },
+        });
       }
     } catch (err) {
       console.warn(`[umbra-pay/${orderId}][indexer] scan error attempt ${attempts}`, err);
     }
-    await new Promise((r) => setTimeout(r, 3000));
+    await new Promise((r) => setTimeout(r, 2000));
   }
-  throw new Error(`UTXO not visible to stealth indexer after ${timeoutMs}ms`);
+
+  // Surface the indexer URL the client used so misconfigured envs are
+  // immediately diagnosable from the error message.
+  const indexerHint =
+    process.env.UMBRA_INDEXER_URL ?? "(env unset; using network-default)";
+  const networkHint = process.env.UMBRA_NETWORK ?? "(env unset; defaults to devnet)";
+  throw new Error(
+    `UTXO not visible to stealth indexer after ${timeoutMs}ms. ` +
+      `Indexer=${indexerHint}, network=${networkHint}. ` +
+      `If network is devnet, the indexer URL must end with "api-devnet.umbraprivacy.com". ` +
+      `If they don't match, fix the Railway env vars and try again.`
+  );
 }
 
 // ============================================================================
