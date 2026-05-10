@@ -173,9 +173,18 @@ export async function POST(request: NextRequest) {
     }
 
     const paymentAddress = invoice.payment?.address;
-    const paymentAmountStr = invoice.payment?.amount;
     const paymentCurrency = invoice.payment?.currency || "SOL";
-    const paymentAmount = paymentAmountStr ? parseFloat(paymentAmountStr) : undefined;
+
+    // Bitrefill returns `payment.price` as an integer in the currency's
+    // smallest unit (lamports for SOL, satoshis for BTC, etc.). Some legacy
+    // responses use a string `amount` field with the human value — handle both.
+    let paymentAmount: number | undefined;
+    if (typeof invoice.payment?.price === "number") {
+      const divisor = paymentCurrency === "SOL" ? 1e9 : paymentCurrency.startsWith("USDC") || paymentCurrency.startsWith("USDT") ? 1e6 : 1e8;
+      paymentAmount = invoice.payment.price / divisor;
+    } else if (invoice.payment?.amount) {
+      paymentAmount = parseFloat(invoice.payment.amount);
+    }
 
     if (!paymentAddress || paymentAmount == null) {
       console.error("[GiftOrder] Invoice missing payment details:", invoice);

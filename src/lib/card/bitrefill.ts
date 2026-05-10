@@ -30,20 +30,27 @@ export type BitrefillPaymentMethod =
 
 export interface BitrefillCryptoPayment {
   address: string;
-  amount: string;
+  /** Amount in smallest unit for the currency (lamports for SOL, sats for BTC). */
+  price?: number;
+  /** Some endpoints/legacy responses include a string-encoded human amount. */
+  amount?: string;
   currency: string;
+  method?: string;
+  status?: string;
   payment_uri?: string;
   expires_at?: string;
+  commission?: number;
 }
 
 export interface BitrefillInvoice {
   id: string;
-  status: "unpaid" | "paid" | "complete" | "expired" | "failed";
-  payment_method: BitrefillPaymentMethod;
+  status: string; // unpaid | paid | complete | expired | failed | not_delivered | delivered | ...
+  payment_method?: BitrefillPaymentMethod;
   payment?: BitrefillCryptoPayment;
   payment_link?: string;
   orders?: BitrefillOrderRef[];
   created_at?: string;
+  created_time?: string;
 }
 
 export interface BitrefillOrderRef {
@@ -117,6 +124,17 @@ async function call<T>(path: string, init?: RequestInit): Promise<T> {
     body = text;
   }
   if (!res.ok) throw new BitrefillError(res.status, body);
+
+  // Bitrefill v2 wraps successful responses in `{ meta, data }`. Unwrap when
+  // present so callers can ignore the envelope.
+  if (
+    body &&
+    typeof body === "object" &&
+    "data" in (body as Record<string, unknown>) &&
+    "meta" in (body as Record<string, unknown>)
+  ) {
+    return (body as { data: T }).data;
+  }
   return body as T;
 }
 
