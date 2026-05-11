@@ -345,8 +345,6 @@ export function PayrollDashboard() {
         links.push({
           id: crypto.randomUUID(),
           label: row.label,
-          wallet: row.wallet,
-          email: row.email,
           noteText: row.noteText,
           amount,
           claimUrl: json.claimUrl,

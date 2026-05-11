@@ -13,8 +13,6 @@ export interface EmployeeRow {
   /** Local UUID for React key + table tracking. */
   id: string;
   label: string;
-  wallet?: string;
-  email?: string;
   amount: string; // string while editing; parsed on submit
   noteText?: string;
 }
@@ -23,8 +21,6 @@ export interface EmployeeRow {
 export interface PayrollLink {
   id: string;
   label: string;
-  wallet?: string;
-  email?: string;
   /** Local-only note. Never travels in the URL or on-chain. */
   noteText?: string;
   /** Amount in lamports. */

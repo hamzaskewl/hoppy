@@ -13,15 +13,13 @@ export interface CsvImportProps {
 
 interface ParsedRow {
   label: string;
-  wallet?: string;
-  email?: string;
   amount: number;
   amountStr: string;
   raw: string;
   error?: string;
 }
 
-const HEADERS = ["label", "wallet", "email", "amount"] as const;
+const HEADERS = ["label", "amount"] as const;
 type Header = (typeof HEADERS)[number];
 
 function parseCsv(text: string): ParsedRow[] {
@@ -32,7 +30,7 @@ function parseCsv(text: string): ParsedRow[] {
   if (lines.length === 0) return [];
 
   // Detect header by checking if first line starts with "label"
-  let headerOrder: Header[] = ["label", "wallet", "email", "amount"];
+  let headerOrder: Header[] = ["label", "amount"];
   let dataLines = lines;
   const first = lines[0].toLowerCase();
   if (HEADERS.some((h) => first.startsWith(h))) {
@@ -55,8 +53,6 @@ function parseCsv(text: string): ParsedRow[] {
 
     return {
       label: row.label ?? "",
-      wallet: row.wallet || undefined,
-      email: row.email || undefined,
       amount: valid ? solToLamports(sol) : 0,
       amountStr: row.amount ?? "",
       raw: line,
@@ -80,8 +76,6 @@ export function CsvImport({ onImport, onClose }: CsvImportProps) {
       valid.map((r) => ({
         id: crypto.randomUUID(),
         label: r.label,
-        wallet: r.wallet,
-        email: r.email,
         amount: r.amountStr,
       })),
     );
@@ -110,14 +104,13 @@ export function CsvImport({ onImport, onClose }: CsvImportProps) {
 
         <div className="p-5 space-y-3 overflow-y-auto flex-1">
           <p className="text-xs text-muted-foreground">
-            Format:{" "}
-            <code className="font-mono">label,wallet,email,amount</code>{" "}
-            (header optional). One row per employee. Amount is SOL.
+            Format: <code className="font-mono">label,amount</code> (header
+            optional). One row per employee. Amount is SOL.
           </p>
           <textarea
             value={text}
             onChange={(e) => setText(e.target.value)}
-            placeholder={`label,wallet,email,amount\nAlice,,alice@x.com,1.0\nBob,7xK...,bob@x.com,0.5`}
+            placeholder={`label,amount\nAlice,1.0\nBob,0.5`}
             className="w-full h-40 px-3 py-2 rounded-lg border-2 border-border bg-background font-mono text-xs focus:outline-none focus:ring-2 focus:ring-ring"
           />
 
