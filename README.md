@@ -4,7 +4,7 @@
 
 Sending crypto shouldn't require the recipient to have a wallet set up, share their address, or expose their identity. With hoppy, you just share a link. The money is in the link. They claim it privately.
 
-[![Live on Mainnet](https://img.shields.io/badge/Live-Mainnet-brightgreen)](https://hoppy.cash)
+[![Live on Devnet](https://img.shields.io/badge/Live-Devnet-blue)](https://hoppy.cash)
 [![Solana](https://img.shields.io/badge/Built%20on-Solana-9945FF)](https://solana.com)
 [![TypeScript](https://img.shields.io/badge/TypeScript-007ACC?logo=typescript&logoColor=white)](https://typescriptlang.org)
 [![Next.js](https://img.shields.io/badge/Next.js%2015-black?logo=next.js&logoColor=white)](https://nextjs.org)
@@ -81,10 +81,9 @@ You deposit funds into an encrypted Umbra UTXO and get a claim link. Share that 
 | **Gasless Claims** | Recipients don't need SOL to claim; the relayer subsidizes fees |
 | **Recipient Privacy Choice** | Recipients can choose Quick (cheaper) or Private (hidden from sender) |
 | **Private Payroll** | Upload a CSV, fund one escrow, mint a claim link per employee. Refunds unclaimed funds. |
-| **Multi-Token** | SOL, USDC, USDT on Solana mainnet |
-| **Virtual Debit Cards** | Convert encrypted balance to Visa/Mastercard *(in progress)* |
-| **Gift Card Payouts** | Redeem to Amazon, Uber, DoorDash *(in progress)* |
-| **Live on Mainnet** | Real SOL, real privacy, production-ready |
+| **Multi-Token** | SOL, USDC, USDT on Solana devnet |
+| **Virtual Cards & Gift Cards** | Buy Visa, Mastercard, Amazon, Uber, DoorDash, Starbucks, and 100+ other brands privately via Bitrefill |
+| **Live on Devnet** | Battle-testing the full flow on Solana devnet before mainnet |
 
 ---
 
@@ -150,6 +149,18 @@ For paying multiple recipients in one go:
 
 Each ZK proof for link generation takes ~30–120s server-side, so larger payrolls take a moment to issue.
 
+### Private Virtual Gift Cards
+
+For buying gift cards (Visa, Mastercard, Amazon, Uber, etc.) without leaving an on-chain trail to the merchant:
+
+1. Pick a brand and amount from the Bitrefill catalog (`/card`)
+2. SOL deposit lands in a per-order Umbra escrow — not a public Bitrefill address
+3. The escrow privately routes funds: encrypted balance → receiver-claimable UTXO → fresh stealth wallet → Bitrefill
+4. Once Bitrefill fulfills, the redemption code is encrypted with a per-order key and surfaced as a `/card/claim#<key>` link
+5. Recipient opens the link; card details are decrypted **client-side** — the server never sees the key
+
+On-chain observers see your deposit into an ephemeral escrow and an unrelated stealth wallet paying Bitrefill. The link between you and the gift card is broken at the Umbra layer.
+
 ---
 
 ## Quick Start
@@ -178,13 +189,20 @@ cp .env.example .env
 ```env
 # Required
 NEXT_PUBLIC_PRIVY_APP_ID=your-privy-app-id
-NEXT_PUBLIC_SOLANA_RPC_URL=https://mainnet.helius-rpc.com/?api-key=YOUR_KEY
+NEXT_PUBLIC_SOLANA_RPC_URL=https://devnet.helius-rpc.com/?api-key=YOUR_KEY
 
-# Network
-NEXT_PUBLIC_SOLANA_NETWORK=mainnet-beta
+# Network — currently devnet; switch to mainnet-beta when ready
+NEXT_PUBLIC_SOLANA_NETWORK=devnet
+UMBRA_NETWORK=devnet
+
+# Payroll & card escrows (server-side keypair derivation)
+UMBRA_ESCROW_MASTER_KEY=...           # 64 hex chars (openssl rand -hex 32)
+
+# Gift card flow
+BITREFILL_API_KEY=...
 ```
 
-> See `.env.example` for the full list of environment variables including database, email polling, and gift card configuration.
+> See `.env.example` for the full list of environment variables including PostgreSQL, the relayer wallet, and Bitrefill webhook configuration.
 
 ### Run Locally
 
@@ -274,15 +292,20 @@ hoppy/
 **Privacy Infrastructure**
 - `@umbra-privacy/sdk` v4 — stealth addresses + encrypted UTXOs
 - `@umbra-privacy/web-zk-prover` — client-side Groth16 proofs (WASM)
-- Server-side Groth16 prover for payroll link issuance
+- Server-side Groth16 prover for payroll + card link issuance
 - Helius RPC
+
+**Gift Cards & Payments**
+- Bitrefill REST API for catalog, invoice creation, and webhook fulfillment
+- logo.dev for brand imagery in the product catalog
+- Per-order Umbra escrow keypair to break the on-chain link between buyer and Bitrefill
 
 **Authentication**
 - Privy (embedded wallets + social login)
 - External wallet support (Phantom, Solflare, etc.)
 
 **Infrastructure**
-- PostgreSQL (card order tracking)
+- PostgreSQL `gift_card_orders` table on Railway (order lifecycle + encrypted card blobs)
 - Railway deployment
 
 ---
@@ -340,4 +363,4 @@ hoppy/
 
 ---
 
-> ⚠️ **Hackathon Software Notice:** This project was built during a hackathon. While it is live on mainnet and functional, it has not been formally audited. Use at your own risk and with amounts you're comfortable with.
+> ⚠️ **Hackathon Software Notice:** This project was built during a hackathon. While it is running on Solana devnet and functional, it has not been formally audited. Use at your own risk and with amounts you're comfortable with.
