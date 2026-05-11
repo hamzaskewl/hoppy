@@ -37,6 +37,7 @@ import {
   domainForSlug,
   logoUrlForDomain,
 } from "@/lib/card/featured-products";
+import { upsertEntry } from "@/lib/card/local-history";
 
 type FlowStep = "configure" | "paying" | "waiting" | "complete" | "error";
 
@@ -405,6 +406,12 @@ export function ProductDetailFlow({
           setOrder((prev) => (prev ? { ...prev, claimLink: data.claimLink } : prev));
           setStep("complete");
           clearInterval(interval);
+          if (publicKey) {
+            upsertEntry(
+              { orderId: order.orderId, status: "ready", claimLink: data.claimLink },
+              publicKey.toBase58(),
+            ).catch((e) => console.warn("[card-history] update failed:", e));
+          }
         } else if (data.status === "failed" || data.status === "expired") {
           setError(
             data.status === "expired"
@@ -413,6 +420,12 @@ export function ProductDetailFlow({
           );
           setStep("error");
           clearInterval(interval);
+          if (publicKey) {
+            upsertEntry(
+              { orderId: order.orderId, status: data.status as "failed" | "expired" },
+              publicKey.toBase58(),
+            ).catch((e) => console.warn("[card-history] update failed:", e));
+          }
         }
       } catch (err) {
         console.error("Status poll error:", err);
@@ -502,6 +515,23 @@ export function ProductDetailFlow({
       setOrder(data);
       setStep("paying");
       setProgress("Sending payment...");
+
+      // Persist to encrypted local history immediately so the buyer can find
+      // this order even after a refresh / new tab / wallet reconnect.
+      if (publicKey) {
+        upsertEntry(
+          {
+            orderId: data.orderId,
+            productSlug: product.slug,
+            productName: product.name,
+            amount,
+            currency: product.currency || "USD",
+            status: "pending",
+            createdAt: new Date().toISOString(),
+          },
+          publicKey.toBase58(),
+        ).catch((e) => console.warn("[card-history] save failed:", e));
+      }
 
       // Prefer the exact integer lamports the API gives us. Only fall back to
       // the float roundtrip if a legacy response somehow lacks it.
@@ -614,6 +644,14 @@ export function ProductDetailFlow({
       } else {
         const refundedSol = (data.nativeRefunded ?? 0) / 1e9;
         setRefundState({ kind: "ok", refundedSol, sig: data.refundTxHash });
+        upsertEntry(
+          {
+            orderId: order.orderId,
+            status: "refunded",
+            refundTxHash: data.refundTxHash,
+          },
+          publicKey.toBase58(),
+        ).catch((e) => console.warn("[card-history] refund-update failed:", e));
       }
     } catch (err) {
       setRefundState({ kind: "fail", msg: err instanceof Error ? err.message : String(err) });

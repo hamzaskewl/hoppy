@@ -6,6 +6,14 @@ import Image from "next/image";
 import { NavHeader } from "@/components/nav-header";
 import { ProductCatalog } from "@/app/card/components/product-catalog";
 
+const CardHistory = dynamic(
+  () =>
+    import("@/app/card/components/card-history").then((mod) => ({
+      default: mod.CardHistory,
+    })),
+  { ssr: false },
+);
+
 const ProductDetailFlow = dynamic(
   () =>
     import("@/app/card/components/product-detail-flow").then((mod) => ({
@@ -80,9 +88,12 @@ export function CardPage() {
               </div>
             </div>
           ) : (
-            <ProductCatalog
-              onSelect={(slug, amount) => setSelection({ slug, amount })}
-            />
+            <>
+              <CardHistory />
+              <ProductCatalog
+                onSelect={(slug, amount) => setSelection({ slug, amount })}
+              />
+            </>
           )}
         </div>
       </main>
