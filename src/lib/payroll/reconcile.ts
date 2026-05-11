@@ -34,8 +34,12 @@
 
 import bs58 from "bs58";
 import { Connection, Keypair, PublicKey } from "@solana/web3.js";
-import { getUmbraConfigForNetwork } from "@/lib/privacy";
-import type { PayrollLink, PayrollLinkStatus, UmbraNote } from "./types";
+import {
+  extractNoteFromUrl,
+  getUmbraConfigForNetwork,
+  type UmbraNote as RegularUmbraNote,
+} from "@/lib/privacy";
+import type { PayrollLink, PayrollLinkStatus } from "./types";
 
 /**
  * Balance threshold below which the stealth is considered "drained" → claimed.
@@ -50,35 +54,27 @@ import type { PayrollLink, PayrollLinkStatus, UmbraNote } from "./types";
  */
 const DRAINED_THRESHOLD_LAMPORTS = 5_000_000; // 0.005 SOL
 
-function parseUmbraNoteFromUrl(url: string): UmbraNote | null {
-  try {
-    const hash = url.includes("#") ? url.split("#")[1] : "";
-    if (!hash) return null;
-    const json = new TextDecoder().decode(bs58.decode(hash));
-    const parsed = JSON.parse(json) as UmbraNote;
-    if (parsed.version !== 1) return null;
-    return parsed;
-  } catch {
-    return null;
-  }
-}
-
 /**
- * Resolve the stealth pubkey from the note. Prefer the explicit
- * `stealthAddress` field (newer links), fall back to deriving it from the
- * `secret` seed for older links that predate the field.
+ * Resolve the stealth pubkey from the regular UmbraNote. Prefer the explicit
+ * `ephemeralAddress` field, fall back to deriving it from the seed.
+ *
+ * The payroll issue-link API re-encodes the payroll-specific note as a
+ * regular UmbraNote (see src/app/api/umbra/payroll/issue-link/route.ts) so
+ * recipients land on /claim. That means link.claimUrl carries the v:2
+ * short-key encoding, where the stealth pubkey lives in `ephemeralAddress`.
  */
-function resolveStealthPubkey(note: UmbraNote): PublicKey | null {
-  if (note.stealthAddress) {
+function resolveStealthPubkey(note: RegularUmbraNote): PublicKey | null {
+  if (note.ephemeralAddress) {
     try {
-      return new PublicKey(note.stealthAddress);
+      return new PublicKey(note.ephemeralAddress);
     } catch {
       // fall through to seed derivation
     }
   }
-  if (note.secret) {
+  const seedBs58 = note.ephemeralSeed || note.secret;
+  if (seedBs58) {
     try {
-      const seed = bs58.decode(note.secret);
+      const seed = bs58.decode(seedBs58);
       if (seed.length === 32) {
         return Keypair.fromSeed(seed).publicKey;
       }
@@ -99,7 +95,7 @@ export async function reconcilePayrollLinkStatus(
 ): Promise<PayrollLinkStatus | null> {
   if (link.status !== "pending") return null;
 
-  const note = parseUmbraNoteFromUrl(link.claimUrl);
+  const note = extractNoteFromUrl(link.claimUrl);
   if (!note) {
     console.warn(`[payroll-reconcile/${link.id}] could not parse note from url`);
     return null;
@@ -113,7 +109,8 @@ export async function reconcilePayrollLinkStatus(
 
   // The note carries its own network — a devnet link reconciled on a mainnet
   // deploy still needs to hit the devnet RPC.
-  const network = note.network === "mainnet-beta" ? "mainnet" : "devnet";
+  const network: "mainnet" | "devnet" =
+    note.network === "mainnet" ? "mainnet" : "devnet";
   const config = getUmbraConfigForNetwork(network);
 
   try {
