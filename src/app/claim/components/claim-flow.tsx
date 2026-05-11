@@ -535,14 +535,17 @@ export function ClaimFlow() {
         });
 
         if (totalClaimable(buckets) === 0) {
-          // All scans came back empty after ~28s of retries. That's almost
-          // certainly a structurally broken link (UTXO not on-chain or
-          // mis-encrypted). Genuine indexer lag rarely exceeds 10s.
+          // All scans came back empty after ~28s of retries. The link's UTXO
+          // is not visible to the indexer in any bucket. Two common causes:
+          //   1. The link was already claimed (UTXO consumed) or recalled by
+          //      the sender — the friendly case, no action needed.
+          //   2. The UTXO was never properly created (sender's issuance
+          //      crashed mid-flight) — the broken case, sender must re-issue.
+          // We can't reliably distinguish from the client without extra
+          // RPC calls, so frame the message around the likelier case.
           const stealthShort = `${derivedPubkey.slice(0, 6)}…${derivedPubkey.slice(-4)}`;
           throw new Error(
-            `Couldn't find claimable funds for ${stealthShort} after ${scanAttempts.length} scan attempts over ${
-              scanAttempts.reduce((s, a) => s + a.ms, 0) / 1000
-            }s. The link may be invalid — please ask whoever sent it to re-issue.`,
+            `No claimable funds at ${stealthShort}. This link has likely already been claimed (or recalled by the sender). If you just received it, wait a minute and refresh — the indexer can lag by a few seconds.`,
           );
         }
 
@@ -661,14 +664,33 @@ export function ClaimFlow() {
           }
 
           if (creditedAmount === BigInt(0)) {
-            // Encrypted balance never got credited — the relayer didn't
-            // complete the claim, or its callback hasn't landed yet. Fail
-            // loudly instead of letting the drain silently return only
-            // the gas budget (the bug we just fixed).
+            // Encrypted balance never got credited. The most common cause
+            // (especially after a fresh issuance/claim cycle) is that the
+            // UTXO was already consumed — the on-chain nullifier check
+            // rejects the second claim and the relayer batch lands as
+            // "rejected"/"failed" with no balance credit.
+            const looksAlreadyClaimed = batchSummary.some((b) => {
+              const status = String(b.status ?? "").toLowerCase();
+              const reason = String(b.failureReason ?? "").toLowerCase();
+              return (
+                status.includes("reject") ||
+                status.includes("fail") ||
+                reason.includes("nullifier") ||
+                reason.includes("already") ||
+                reason.includes("spent") ||
+                reason.includes("double") ||
+                reason.includes("commit")
+              );
+            });
+            if (looksAlreadyClaimed) {
+              throw new Error(
+                "This link has already been claimed. The funds are on the recipient's wallet — no action needed.",
+              );
+            }
             throw new Error(
               `Receiver claim didn't credit any wSOL to the stealth's encrypted balance after ~${Math.round(
                 (Date.now() - balancePollStart) / 1000,
-              )}s. Try again in 30s; if it persists, the link is structurally broken.`,
+              )}s. Try again in 30s; if it persists, the link may have been claimed already or the indexer is showing a stale UTXO.`,
             );
           }
 

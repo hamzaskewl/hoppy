@@ -11,7 +11,7 @@ interface ShieldingAnimationProps {
 
 export function ShieldingAnimation({ status, message }: ShieldingAnimationProps) {
   return (
-    <div className="flex flex-col items-center justify-center py-12">
+    <div className="flex flex-col items-center justify-center py-10 px-6 rounded-2xl bg-card border-2 border-border shadow-sm">
       {/* Main Animation Container */}
       <div className="relative w-40 h-40 flex items-center justify-center">
         {/* Outer Ring - pulsing */}

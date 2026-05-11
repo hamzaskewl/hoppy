@@ -9,6 +9,7 @@ import {
   Trash2,
   Undo2,
   ExternalLink,
+  RefreshCw,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { lamportsToSol } from "@/lib/utils";
@@ -19,12 +20,16 @@ export interface PayrollHistoryProps {
   runs: PayrollRun[];
   onRecallLink: (run: PayrollRun, link: PayrollLink) => Promise<void>;
   onClearAll: () => void;
+  onRefresh?: () => Promise<void>;
+  refreshing?: boolean;
 }
 
 export function PayrollHistory({
   runs,
   onRecallLink,
   onClearAll,
+  onRefresh,
+  refreshing = false,
 }: PayrollHistoryProps) {
   const [openId, setOpenId] = useState<string | null>(runs[0]?.id ?? null);
   const [copiedId, setCopiedId] = useState<string | null>(null);
@@ -52,10 +57,26 @@ export function PayrollHistory({
     <div className="space-y-3 rounded-2xl bg-card border-2 border-border p-5 shadow-sm">
       <div className="flex items-center justify-between">
         <h3 className="text-base ">History (local)</h3>
-        <Button variant="ghost" size="sm" onClick={onClearAll}>
-          <Trash2 className="w-4 h-4" />
-          Clear all
-        </Button>
+        <div className="flex items-center gap-1">
+          {onRefresh && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => void onRefresh()}
+              disabled={refreshing}
+              title="Re-scan stealth addresses for claimed/recalled links"
+            >
+              <RefreshCw
+                className={`w-4 h-4 ${refreshing ? "animate-spin" : ""}`}
+              />
+              {refreshing ? "Refreshing…" : "Refresh"}
+            </Button>
+          )}
+          <Button variant="ghost" size="sm" onClick={onClearAll}>
+            <Trash2 className="w-4 h-4" />
+            Clear all
+          </Button>
+        </div>
       </div>
 
       <div className="space-y-2">

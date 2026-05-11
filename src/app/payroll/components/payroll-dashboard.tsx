@@ -130,71 +130,74 @@ export function PayrollDashboard() {
     })();
   }, [businessWallet]);
 
-  // One-shot reconciliation per wallet: scan each pending link's stealth
-  // address; if its UTXO is gone, the recipient already claimed (or someone
-  // recalled from another device) — mark "claimed" so the UI stops showing
-  // the link as live. Stays as pending on any failure; only upgrades to
-  // claimed when the scan succeeds with zero UTXOs.
+  // Scan each pending link's stealth address; if its UTXO is gone, the
+  // recipient already claimed (or someone recalled from another device).
+  // Only ever upgrades pending → claimed; failures leave status untouched.
+  //
+  // `force=true` skips the freshness cutoff so a manual refresh covers links
+  // created in the last minute too.
+  const [reconciling, setReconciling] = useState(false);
+  const reconcileAll = useCallback(
+    async (force = false): Promise<void> => {
+      if (!businessWallet) return;
+      setReconciling(true);
+      try {
+        const runs = await loadRuns(businessWallet);
+        const MIN_AGE_MS = 60_000;
+        const cutoff = Date.now() - MIN_AGE_MS;
+
+        let changed = false;
+        const updated = await Promise.all(
+          runs.map(async (run) => {
+            if (!force && run.createdAt > cutoff) return run;
+            const newLinks = await Promise.all(
+              run.links.map(async (link) => {
+                if (link.status !== "pending") return link;
+                const next = await reconcilePayrollLinkStatus(link);
+                if (next && next !== link.status) {
+                  changed = true;
+                  return { ...link, status: next };
+                }
+                return link;
+              }),
+            );
+            return { ...run, links: newLinks };
+          }),
+        );
+
+        if (!changed) return;
+
+        for (const run of updated) {
+          for (const link of run.links) {
+            const original = runs
+              .find((r) => r.id === run.id)
+              ?.links.find((l) => l.id === link.id);
+            if (original && original.status !== link.status) {
+              await updateLinkStatus(
+                run.id,
+                link.id,
+                { status: link.status },
+                businessWallet,
+              );
+            }
+          }
+        }
+        setHistory(updated);
+      } finally {
+        setReconciling(false);
+      }
+    },
+    [businessWallet],
+  );
+
+  // Auto-run reconciliation once per wallet connect.
   const reconciledRef = useRef<string | null>(null);
   useEffect(() => {
     if (!businessWallet) return;
     if (reconciledRef.current === businessWallet) return;
     reconciledRef.current = businessWallet;
-
-    let cancelled = false;
-    void (async () => {
-      // Re-read from storage so we don't race with the load effect above.
-      const runs = await loadRuns(businessWallet);
-      // Skip very-fresh links (issuer's indexer-visibility wait can lag).
-      const MIN_AGE_MS = 60_000;
-      const cutoff = Date.now() - MIN_AGE_MS;
-
-      let changed = false;
-      const updated = await Promise.all(
-        runs.map(async (run) => {
-          if (run.createdAt > cutoff) return run;
-          const newLinks = await Promise.all(
-            run.links.map(async (link) => {
-              if (link.status !== "pending") return link;
-              const next = await reconcilePayrollLinkStatus(link);
-              if (next && next !== link.status) {
-                changed = true;
-                return { ...link, status: next };
-              }
-              return link;
-            }),
-          );
-          return { ...run, links: newLinks };
-        }),
-      );
-
-      if (cancelled || !changed) return;
-
-      // Persist each link change. The reconcile updates are idempotent so a
-      // duplicate run from another tab won't cause issues.
-      for (const run of updated) {
-        for (const link of run.links) {
-          const original = runs
-            .find((r) => r.id === run.id)
-            ?.links.find((l) => l.id === link.id);
-          if (original && original.status !== link.status) {
-            await updateLinkStatus(
-              run.id,
-              link.id,
-              { status: link.status },
-              businessWallet,
-            );
-          }
-        }
-      }
-      if (!cancelled) setHistory(updated);
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [businessWallet]);
+    void reconcileAll(false);
+  }, [businessWallet, reconcileAll]);
 
   const totalLamports = useMemo(
     () =>
@@ -544,6 +547,8 @@ export function PayrollDashboard() {
         runs={history}
         onRecallLink={handleRecall}
         onClearAll={handleClearAll}
+        onRefresh={() => reconcileAll(true)}
+        refreshing={reconciling}
       />
 
       {showCsv && (

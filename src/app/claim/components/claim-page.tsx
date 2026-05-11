@@ -59,7 +59,7 @@ export function ClaimPage() {
           <WalletButton />
         </div>
 
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-3 rounded-2xl bg-card border-2 border-border p-4 shadow-sm">
           <HoppyLogo size={40} />
           <div>
             <h1 className="text-xl ">hoppy</h1>
