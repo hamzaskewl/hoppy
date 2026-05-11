@@ -90,7 +90,7 @@ const REFUND_FEE_RESERVE = 5_000;
  * it doesn't unwrap or pay Bitrefill anymore. So slightly less burden than
  * the old direct-withdraw design, but the proof-account rents still apply.
  */
-const ESCROW_TX_FEE_BUFFER = 35_000_000; // 0.035 SOL
+const ESCROW_TX_FEE_BUFFER = 25_000_000; // 0.025 SOL
 
 /**
  * SOL the relayer sends to the per-order STEALTH so it can pay for its own
@@ -100,26 +100,23 @@ const ESCROW_TX_FEE_BUFFER = 35_000_000; // 0.035 SOL
  *
  * Stealth needs: registration (~10M), wSOL ATA rent (~2M, recovered on
  * unwrap), claim proof rent (~5-8M), withdraw proof rent (~5-8M), tx fees
- * across ~6 ops, slop. Worst case totals ~28M — previous 25M budget had
- * zero headroom and was hitting 'insufficient funds for rent' simulation
- * failures on mainnet. Bumped to 40M to give ~12M cushion for proof-rent
- * rate changes or extra ZK-proof bytes.
+ * across ~6 ops, slop. Budget 25M with comfortable headroom.
  */
-const STEALTH_FUND_BUDGET = 40_000_000; // 0.040 SOL
+const STEALTH_FUND_BUDGET = 25_000_000; // 0.025 SOL
 
 /**
  * Total overhead added to the user's deposit beyond bitrefillLamports.
  * Covers:
- *   - ESCROW_TX_FEE_BUFFER (kept on escrow native after wrap)             ~35M
+ *   - ESCROW_TX_FEE_BUFFER (kept on escrow native after wrap)             ~25M
  *   - Escrow Umbra registration cost (rent + tx)                          ~10M
  *   - Encrypted-balance fee headroom (~21bps × 2 ops, deposit + create)    ~3M
  *   - Slop / priority surges                                               ~2M
- *                                                                  total: ~50M
+ *                                                                  total: ~40M
  *
  * Whatever the orchestration doesn't consume sweeps back to the user
  * automatically as part of the leftover-refund step.
  */
-const UMBRA_FLOW_OVERHEAD = 55_000_000; // 0.055 SOL
+const UMBRA_FLOW_OVERHEAD = 40_000_000; // 0.04 SOL
 
 /**
  * Minimum / maximum jitter on top of UMBRA_FLOW_OVERHEAD. Adds randomness so
