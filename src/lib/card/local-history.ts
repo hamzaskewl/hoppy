@@ -29,9 +29,44 @@ const CRYPTO_CONFIG: CryptoConfig = {
 export type CardHistoryStatus =
   | "pending"
   | "ready"
+  | "claimed"
   | "refunded"
   | "failed"
   | "expired";
+
+/** Statuses where the order is in a final/terminal state — no more polling needed. */
+export const TERMINAL_STATUSES: ReadonlySet<CardHistoryStatus> = new Set([
+  "claimed",
+  "refunded",
+  "failed",
+  "expired",
+]);
+
+/**
+ * Map raw server-side statuses (from /api/card/status) to the smaller set
+ * the buyer's local history understands. The server has fine-grained
+ * orchestration states (depositing/mixing/withdrawing/paying/paid) that
+ * all just mean "still processing" from the buyer's POV.
+ */
+export function normalizeServerStatus(serverStatus: string): CardHistoryStatus {
+  switch (serverStatus) {
+    case "ready":
+    case "claimed":
+    case "refunded":
+    case "failed":
+    case "expired":
+      return serverStatus;
+    case "pending":
+    case "depositing":
+    case "mixing":
+    case "withdrawing":
+    case "paying":
+    case "paid":
+      return "pending";
+    default:
+      return "pending";
+  }
+}
 
 export interface CardHistoryEntry {
   orderId: string;

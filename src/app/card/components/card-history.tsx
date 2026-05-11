@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useWallet } from "@solana/wallet-adapter-react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
@@ -17,6 +17,8 @@ import {
   loadHistory,
   upsertEntry,
   deleteEntry,
+  normalizeServerStatus,
+  TERMINAL_STATUSES,
   type CardHistoryEntry,
 } from "@/lib/card/local-history";
 import {
@@ -42,10 +44,11 @@ function StatusBadge({ status }: { status: CardHistoryEntry["status"] }) {
   const cfg = {
     pending: { label: "Processing", cls: "bg-amber-100 text-amber-900 border-amber-300 dark:bg-amber-500/10 dark:text-amber-200 dark:border-amber-500/40" },
     ready: { label: "Ready", cls: "bg-hop-100 text-hop-900 border-hop-300 dark:bg-hop-500/10 dark:text-hop-200 dark:border-hop-500/40" },
+    claimed: { label: "Claimed", cls: "bg-muted text-muted-foreground border-border" },
     refunded: { label: "Refunded", cls: "bg-muted text-muted-foreground border-border" },
     failed: { label: "Failed", cls: "bg-red-100 text-red-900 border-red-300 dark:bg-red-500/10 dark:text-red-200 dark:border-red-500/40" },
     expired: { label: "Expired", cls: "bg-muted text-muted-foreground border-border" },
-  }[status];
+  }[status] ?? { label: status, cls: "bg-muted text-muted-foreground border-border" };
   return (
     <span className={cn("text-[10px] uppercase tracking-wide px-2 py-0.5 rounded-full border font-medium", cfg.cls)}>
       {cfg.label}
@@ -107,23 +110,68 @@ export function CardHistory() {
     setTimeout(() => setCopied(null), 2000);
   };
 
+  const refreshOne = useCallback(
+    async (entry: CardHistoryEntry, walletAddr: string): Promise<CardHistoryEntry[] | null> => {
+      try {
+        const res = await fetch(`/api/card/status?orderId=${entry.orderId}`);
+        if (!res.ok) return null;
+        const data = await res.json();
+        if (!data.status) return null;
+        const nextStatus = normalizeServerStatus(String(data.status));
+        if (nextStatus === entry.status && !(nextStatus === "ready" && data.claimLink && !entry.claimLink)) {
+          return null;
+        }
+        const patch: Partial<CardHistoryEntry> & { orderId: string } = {
+          orderId: entry.orderId,
+          status: nextStatus,
+        };
+        if (nextStatus === "ready" && data.claimLink) patch.claimLink = data.claimLink;
+        return await upsertEntry(patch, walletAddr);
+      } catch {
+        return null;
+      }
+    },
+    [],
+  );
+
   const handleRefresh = async (entry: CardHistoryEntry) => {
     if (!wallet) return;
     setRefreshing(entry.orderId);
     try {
-      const res = await fetch(`/api/card/status?orderId=${entry.orderId}`);
-      if (!res.ok) return;
-      const data = await res.json();
-      if (data.status && data.status !== entry.status) {
-        const patch: Partial<CardHistoryEntry> = { orderId: entry.orderId, status: data.status };
-        if (data.status === "ready" && data.claimLink) patch.claimLink = data.claimLink;
-        const next = await upsertEntry({ ...patch, orderId: entry.orderId }, wallet);
-        setEntries(next);
-      }
+      const next = await refreshOne(entry, wallet);
+      if (next) setEntries(next);
     } finally {
       setRefreshing(null);
     }
   };
+
+  // Auto-reconcile non-terminal entries with the server once per (wallet,
+  // load) cycle. Without this, an order whose recipient already claimed
+  // (server status flipped to "claimed") would sit in the buyer's local
+  // history showing "ready" — same problem for orders the buyer left
+  // mid-flow showing "pending".
+  const reconciledRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!wallet || loading) return;
+    if (reconciledRef.current === wallet) return;
+    reconciledRef.current = wallet;
+    let cancelled = false;
+    (async () => {
+      const stale = entries.filter((e) => !TERMINAL_STATUSES.has(e.status));
+      if (stale.length === 0) return;
+      let latest: CardHistoryEntry[] | null = null;
+      for (const entry of stale) {
+        if (cancelled) return;
+        const updated = await refreshOne(entry, wallet);
+        if (updated) latest = updated;
+      }
+      if (!cancelled && latest) setEntries(latest);
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [wallet, loading]);
 
   const handleDelete = async (orderId: string) => {
     if (!wallet) return;
