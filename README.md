@@ -82,8 +82,7 @@ You deposit funds into an encrypted Umbra UTXO and get a claim link. Share that 
 | **Recipient Privacy Choice** | Recipients can choose Quick (cheaper) or Private (hidden from sender) |
 | **Private Payroll** | Upload a CSV, fund one escrow, mint a claim link per employee. Refunds unclaimed funds. |
 | **Multi-Token** | SOL, USDC, USDT on Solana mainnet |
-| **Virtual Debit Cards** | Convert encrypted balance to Visa/Mastercard *(in progress)* |
-| **Gift Card Payouts** | Redeem to Amazon, Uber, DoorDash *(in progress)* |
+| **Virtual Cards & Gift Cards** | Buy Visa, Mastercard, Amazon, Uber, DoorDash, Starbucks, and 100+ other brands privately via Bitrefill |
 | **Live on Mainnet** | Real SOL, real privacy, production-ready |
 
 ---
@@ -150,6 +149,18 @@ For paying multiple recipients in one go:
 
 Each ZK proof for link generation takes ~30–120s server-side, so larger payrolls take a moment to issue.
 
+### Private Virtual Gift Cards
+
+For buying gift cards (Visa, Mastercard, Amazon, Uber, etc.) without leaving an on-chain trail to the merchant:
+
+1. Pick a brand and amount from the Bitrefill catalog (`/card`)
+2. SOL deposit lands in a per-order Umbra escrow — not a public Bitrefill address
+3. The escrow privately routes funds: encrypted balance → receiver-claimable UTXO → fresh stealth wallet → Bitrefill
+4. Once Bitrefill fulfills, the redemption code is encrypted with a per-order key and surfaced as a `/card/claim#<key>` link
+5. Recipient opens the link; card details are decrypted **client-side** — the server never sees the key
+
+On-chain observers see your deposit into an ephemeral escrow and an unrelated stealth wallet paying Bitrefill. The link between you and the gift card is broken at the Umbra layer.
+
 ---
 
 ## Quick Start
@@ -182,9 +193,16 @@ NEXT_PUBLIC_SOLANA_RPC_URL=https://mainnet.helius-rpc.com/?api-key=YOUR_KEY
 
 # Network
 NEXT_PUBLIC_SOLANA_NETWORK=mainnet-beta
+UMBRA_NETWORK=mainnet
+
+# Payroll & card escrows (server-side keypair derivation)
+UMBRA_ESCROW_MASTER_KEY=...           # 64 hex chars (openssl rand -hex 32)
+
+# Gift card flow
+BITREFILL_API_KEY=...
 ```
 
-> See `.env.example` for the full list of environment variables including database, email polling, and gift card configuration.
+> See `.env.example` for the full list of environment variables including PostgreSQL, the relayer wallet, and Bitrefill webhook configuration.
 
 ### Run Locally
 
@@ -204,37 +222,54 @@ npm start
 
 ## Project Structure
 
+Each route is self-contained: `page.tsx` is a thin wrapper that imports its UI from a colocated `components/` folder. `src/components/` is reserved for genuinely shared code only.
+
 ```
 hoppy/
 ├── src/
-│   ├── app/                      # Next.js App Router
-│   │   ├── page.tsx             # Landing page
-│   │   ├── create/              # Create private payment
-│   │   ├── claim/               # Claim funds
-│   │   ├── card/                # Virtual cards (WIP)
-│   │   ├── payroll/             # Private payroll dashboard + claim
-│   │   ├── roadmap/             # Project roadmap
-│   │   └── api/                 # API routes
-│   │       ├── umbra/payroll/   # Bulk issuance: deposit, issue-link, refund
-│   │       ├── relayer/         # Gas-funding relayer
-│   │       ├── card/            # Virtual card issuance
-│   │       └── sol-price/       # Price feed
+│   ├── app/                              # Next.js App Router
+│   │   ├── page.tsx                     # Landing
+│   │   ├── components/                  # Landing-only components (hero, bento, carousel)
+│   │   ├── create/                      # Send private payment
+│   │   │   └── components/
+│   │   ├── claim/                       # Claim private payment
+│   │   │   └── components/
+│   │   ├── card/                        # Virtual gift cards (Bitrefill catalog)
+│   │   │   ├── components/              # Catalog, product detail flow
+│   │   │   └── claim/                   # Decrypt + display card details
+│   │   │       └── components/
+│   │   ├── payroll/                     # Bulk private payroll dashboard
+│   │   │   ├── components/              # Dashboard, CSV import, employee table, history
+│   │   │   └── claim/                   # Legacy redirect → /claim
+│   │   ├── reclaim/                     # Manual ephemeral-wallet recovery
+│   │   ├── how-it-works/
+│   │   ├── roadmap/
+│   │   └── api/
+│   │       ├── card/                    # Bitrefill orchestration:
+│   │       │                            #   products, product-details, gift-order,
+│   │       │                            #   private-execute, status, claim,
+│   │       │                            #   bitrefill-webhook, poll-bitrefill, refund
+│   │       ├── umbra/payroll/           # Bulk issuance: deposit, issue-link, refund, escrow-address
+│   │       ├── relayer/                 # Gas-funding relayer for SPL claims
+│   │       ├── telegram/                # Telegram bot webhook
+│   │       └── sol-price, stats, health
 │   │
-│   ├── components/
-│   │   ├── create/              # Deposit flow UI
-│   │   ├── claim/               # Claim flow UI
-│   │   ├── payroll/             # Payroll dashboard, CSV import, link table
-│   │   ├── card/                # Card purchase UI
-│   │   └── ui/                  # Reusable components
+│   ├── components/                       # Truly shared (cross-route) only
+│   │   ├── nav-header.tsx
+│   │   ├── wallet-button.tsx
+│   │   ├── providers.tsx
+│   │   └── ui/                          # Button, Card, Input primitives
 │   │
 │   └── lib/
-│       ├── privacy/             # Umbra adapter for personal sends
-│       ├── umbra/               # Umbra adapter for payroll + escrow
-│       ├── solana/              # Solana utilities
-│       └── card/                # Card issuance logic
+│       ├── card/                        # Bitrefill client, Umbra-pay orchestration, AES encryption, Postgres storage
+│       ├── umbra/                       # Server-side Umbra adapter (payroll + per-order card escrows)
+│       ├── privacy/                     # Client-side Umbra adapter (/create + /claim)
+│       ├── payroll/                     # CSV parsing, batch types
+│       ├── solana/                      # RPC helpers
+│       └── telegram/                    # grammy bot
 │
-├── public/                       # Static assets
-├── .env.example                  # Environment template
+├── public/                               # Static assets (bunny art, partner logos, ZK assets)
+├── .env.example                          # Environment template
 └── package.json
 ```
 
@@ -274,15 +309,20 @@ hoppy/
 **Privacy Infrastructure**
 - `@umbra-privacy/sdk` v4 — stealth addresses + encrypted UTXOs
 - `@umbra-privacy/web-zk-prover` — client-side Groth16 proofs (WASM)
-- Server-side Groth16 prover for payroll link issuance
+- Server-side Groth16 prover for payroll + card link issuance
 - Helius RPC
+
+**Gift Cards & Payments**
+- Bitrefill REST API for catalog, invoice creation, and webhook fulfillment
+- logo.dev for brand imagery in the product catalog
+- Per-order Umbra escrow keypair to break the on-chain link between buyer and Bitrefill
 
 **Authentication**
 - Privy (embedded wallets + social login)
 - External wallet support (Phantom, Solflare, etc.)
 
 **Infrastructure**
-- PostgreSQL (card order tracking)
+- PostgreSQL `gift_card_orders` table on Railway (order lifecycle + encrypted card blobs)
 - Railway deployment
 
 ---
@@ -290,6 +330,7 @@ hoppy/
 ## Roadmap
 
 ### Recently Completed
+- [x] **Virtual Cards & Gift Card Payouts** - May 2026 - Bitrefill catalog (Visa, Mastercard, Amazon, Uber, DoorDash, +100 more) with private Umbra-mediated payment and client-side-decrypted claim links
 - [x] **Private Payroll** - May 2026 - CSV bulk issuance, deterministic escrow, refund for unclaimed funds
 - [x] **Network-aware claims** - May 2026 - Claim links carry their own network so cross-network deposits resolve correctly
 - [x] **Cancel/Recall Payments** - February 4th, 2026 - Get back unclaimed funds, send to your wallet or a custom address
@@ -298,8 +339,7 @@ hoppy/
 - [x] **Relayer for SPL gas fees** - February 3rd, 2026 - Automatic SOL subsidies for stablecoin claims
 
 ### In Progress
-- [ ] Virtual debit cards (using Reloadly) - Convert encrypted balance to Visa/Mastercard
-- [ ] Gift cards (using Reloadly) - Redeem to Amazon, Uber, DoorDash, and more
+- [ ] Faster payroll proofs — trim server-side Groth16 time so large batches issue in seconds, not minutes
 
 ### Up Next
 - [ ] Claim expiration with auto-refund
