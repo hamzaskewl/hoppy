@@ -93,6 +93,24 @@ function stripHtml(html: string | null | undefined): string {
   return html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
 }
 
+/**
+ * Resolve the active Solana cluster from the env var. Defaults to
+ * mainnet so production deploys with NEXT_PUBLIC_SOLANA_NETWORK unset
+ * don't display 'devnet' alongside real mainnet transactions.
+ */
+function clusterName(): "mainnet-beta" | "devnet" {
+  const v = (process.env.NEXT_PUBLIC_SOLANA_NETWORK || "").trim().toLowerCase();
+  return v === "devnet" ? "devnet" : "mainnet-beta";
+}
+
+function solscanCluster(): "" | "?cluster=devnet" {
+  return clusterName() === "devnet" ? "?cluster=devnet" : "";
+}
+
+function networkLabel(): string {
+  return clusterName() === "devnet" ? "devnet" : "mainnet";
+}
+
 interface Stage {
   id: string;
   label: string;
@@ -913,7 +931,7 @@ export function ProductDetailFlow({
                         <p className="text-xs uppercase tracking-wide text-muted-foreground font-medium">
                           On-chain endpoints
                         </p>
-                        <span className="text-[10px] text-muted-foreground">devnet</span>
+                        <span className="text-[10px] text-muted-foreground">{networkLabel()}</span>
                       </div>
 
                       <div className="space-y-2.5 text-xs">
@@ -928,7 +946,7 @@ export function ProductDetailFlow({
                           label="Bitrefill address"
                           mono
                           truncate
-                          link={`https://solscan.io/account/${order.payment.bitrefillAddress}?cluster=devnet`}
+                          link={`https://solscan.io/account/${order.payment.bitrefillAddress}${solscanCluster()}`}
                           value={order.payment.bitrefillAddress}
                         />
                         {order.payment.escrowAddress && (
@@ -936,7 +954,7 @@ export function ProductDetailFlow({
                             label="Escrow (your deposit)"
                             mono
                             truncate
-                            link={`https://solscan.io/account/${order.payment.escrowAddress}?cluster=devnet`}
+                            link={`https://solscan.io/account/${order.payment.escrowAddress}${solscanCluster()}`}
                             value={order.payment.escrowAddress}
                           />
                         )}
