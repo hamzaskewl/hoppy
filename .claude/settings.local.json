@@ -29,7 +29,9 @@
       "Bash(echo \"exit:$?\")",
       "Bash(echo \"---grep_exit:$?\")",
       "Bash(awk -F: '{print $1\":\"$2\":\"$3}')",
-      "WebSearch"
+      "WebSearch",
+      "mcp__bitrefill__list-invoices",
+      "mcp__bitrefill__get-order-by-id"
     ],
     "additionalDirectories": [
       "c:\\Users\\wante\\Downloads\\hopy\\hoppy-demo"

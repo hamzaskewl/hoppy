@@ -77,7 +77,11 @@ export interface BitrefillOrder {
   value: number;
   currency: string;
   status: string;
+  // Bitrefill v2 nests redemption under `redemption_info` (snake_case).
+  // We keep the older `redemption` field for back-compat in case the API
+  // ever returns either shape.
   redemption?: BitrefillRedemption;
+  redemption_info?: BitrefillRedemption & { other?: string };
   redemption_code?: string;
   redemption_url?: string;
   redemption_link?: string;
@@ -323,8 +327,11 @@ export function verifyWebhookSignature(rawBody: string, signature: string | null
 }
 
 /**
- * Extract the redemption code + URL from a fetched order, normalizing the few
- * shapes Bitrefill returns (top-level fields vs. nested redemption object).
+ * Extract the redemption code + URL from a fetched order, normalizing the
+ * shapes Bitrefill returns. v2 nests fields under `redemption_info`; legacy
+ * responses used `redemption` or top-level fields. PIN-only products (e.g.
+ * Uber Eats) have only a `pin` — no `code` or `redemption_url`. Callers
+ * should treat a populated `pin` as a valid sealed redemption.
  */
 export function extractRedemption(order: BitrefillOrder): {
   code?: string;
@@ -332,11 +339,15 @@ export function extractRedemption(order: BitrefillOrder): {
   redemptionUrl?: string;
   instructions?: string;
 } {
-  const r = order.redemption || {};
+  const info = order.redemption_info || order.redemption || {};
   return {
-    code: order.redemption_code || r.code,
-    pin: order.pin || r.pin,
-    redemptionUrl: order.redemption_url || order.redemption_link || r.redemption_url || r.link,
-    instructions: order.instructions || r.instructions,
+    code: order.redemption_code || info.code,
+    pin: order.pin || info.pin,
+    redemptionUrl:
+      order.redemption_url ||
+      order.redemption_link ||
+      info.redemption_url ||
+      info.link,
+    instructions: order.instructions || info.instructions,
   };
 }

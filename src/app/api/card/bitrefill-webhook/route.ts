@@ -110,9 +110,11 @@ export async function fulfillOrder(
   const fullOrder = await getBitrefillOrder(bitrefillOrderId);
   const redemption = extractRedemption(fullOrder);
 
-  if (!redemption.code && !redemption.redemptionUrl) {
-    // Bitrefill order exists but isn't sealed yet (no code revealed). Mark
-    // paid so the polling job knows to keep checking.
+  // A sealed redemption has at least ONE of code / pin / redemptionUrl.
+  // Some products (Uber Eats, many app-credit cards) deliver only a PIN.
+  if (!redemption.code && !redemption.pin && !redemption.redemptionUrl) {
+    // Bitrefill order exists but isn't sealed yet. Mark paid so the polling
+    // job knows to keep checking.
     await updateOrder(order.orderId, {
       status: "paid",
       bitrefillOrderId,
