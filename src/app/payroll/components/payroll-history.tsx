@@ -9,27 +9,21 @@ import {
   Trash2,
   Undo2,
   ExternalLink,
-  RefreshCw,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { lamportsToSol } from "@/lib/utils";
-import { summarize } from "@/lib/payroll/storage";
 import type { PayrollRun, PayrollLink } from "@/lib/payroll/types";
 
 export interface PayrollHistoryProps {
   runs: PayrollRun[];
   onRecallLink: (run: PayrollRun, link: PayrollLink) => Promise<void>;
   onClearAll: () => void;
-  onRefresh?: () => Promise<void>;
-  refreshing?: boolean;
 }
 
 export function PayrollHistory({
   runs,
   onRecallLink,
   onClearAll,
-  onRefresh,
-  refreshing = false,
 }: PayrollHistoryProps) {
   const [openId, setOpenId] = useState<string | null>(runs[0]?.id ?? null);
   const [copiedId, setCopiedId] = useState<string | null>(null);
@@ -57,31 +51,14 @@ export function PayrollHistory({
     <div className="space-y-3 rounded-2xl bg-card border-2 border-border p-5 shadow-sm">
       <div className="flex items-center justify-between">
         <h3 className="text-base ">History (local)</h3>
-        <div className="flex items-center gap-1">
-          {onRefresh && (
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => void onRefresh()}
-              disabled={refreshing}
-              title="Re-scan stealth addresses for claimed/recalled links"
-            >
-              <RefreshCw
-                className={`w-4 h-4 ${refreshing ? "animate-spin" : ""}`}
-              />
-              {refreshing ? "Refreshing…" : "Refresh"}
-            </Button>
-          )}
-          <Button variant="ghost" size="sm" onClick={onClearAll}>
-            <Trash2 className="w-4 h-4" />
-            Clear all
-          </Button>
-        </div>
+        <Button variant="ghost" size="sm" onClick={onClearAll}>
+          <Trash2 className="w-4 h-4" />
+          Clear all
+        </Button>
       </div>
 
       <div className="space-y-2">
         {runs.map((run) => {
-          const stats = summarize(run);
           const open = openId === run.id;
           const date = new Date(run.createdAt).toISOString().split("T")[0];
           return (
@@ -102,28 +79,20 @@ export function PayrollHistory({
                   <span className="font-medium">{date}</span>
                   <span className="text-muted-foreground">
                     {" · "}
-                    {stats.total} employee{stats.total === 1 ? "" : "s"}
+                    {run.links.length} employee
+                    {run.links.length === 1 ? "" : "s"}
                     {" · "}
                     {lamportsToSol(run.totalAmount).toFixed(4)} SOL
                   </span>
                 </div>
-                <div className="flex items-center gap-2 text-xs">
-                  {stats.claimed > 0 && (
-                    <span className="px-2 py-0.5 rounded bg-hop-500/15 text-hop-700 dark:text-hop-300">
-                      {stats.claimed} claimed
-                    </span>
-                  )}
-                  {stats.pending > 0 && (
-                    <span className="px-2 py-0.5 rounded bg-honey-500/15 text-honey-700 dark:text-honey-300">
-                      {stats.pending} pending
-                    </span>
-                  )}
-                  {stats.recalled > 0 && (
+                {run.links.some((l) => l.status === "recalled") && (
+                  <div className="text-xs">
                     <span className="px-2 py-0.5 rounded bg-muted text-muted-foreground">
-                      {stats.recalled} recalled
+                      {run.links.filter((l) => l.status === "recalled").length}{" "}
+                      recalled
                     </span>
-                  )}
-                </div>
+                  </div>
+                )}
               </button>
 
               {open && (
@@ -144,9 +113,13 @@ export function PayrollHistory({
                       <div className="text-sm tabular-nums whitespace-nowrap">
                         {lamportsToSol(link.amount).toFixed(4)} SOL
                       </div>
-                      <div className="text-xs">
-                        <StatusPill status={link.status} />
-                      </div>
+                      {link.status === "recalled" && (
+                        <div className="text-xs">
+                          <span className="px-2 py-0.5 rounded bg-muted text-muted-foreground">
+                            recalled
+                          </span>
+                        </div>
+                      )}
                       <div className="flex items-center gap-1">
                         <button
                           onClick={() => copy(link.id, link.claimUrl)}
@@ -169,7 +142,7 @@ export function PayrollHistory({
                         >
                           <ExternalLink className="w-3.5 h-3.5" />
                         </a>
-                        {link.status === "pending" && (
+                        {link.status !== "recalled" && (
                           <button
                             onClick={async () => {
                               setRecallingId(link.id);
@@ -199,18 +172,3 @@ export function PayrollHistory({
   );
 }
 
-function StatusPill({ status }: { status: PayrollLink["status"] }) {
-  const styles: Record<PayrollLink["status"], string> = {
-    pending:
-      "bg-honey-500/15 text-honey-700 dark:text-honey-300",
-    claimed:
-      "bg-hop-500/15 text-hop-700 dark:text-hop-300",
-    recalled:
-      "bg-muted text-muted-foreground",
-    failed:
-      "bg-destructive/15 text-destructive",
-  };
-  return (
-    <span className={`px-2 py-0.5 rounded ${styles[status]}`}>{status}</span>
-  );
-}

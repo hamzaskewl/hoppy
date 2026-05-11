@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import Image from "next/image";
 import { useConnection, useWallet } from "@solana/wallet-adapter-react";
 import { useWalletModal } from "@solana/wallet-adapter-react-ui";
@@ -18,7 +18,6 @@ import {
   updateLinkStatus,
   clearAllRuns,
 } from "@/lib/payroll/storage";
-import { reconcilePayrollLinkStatus } from "@/lib/payroll/reconcile";
 import type {
   EmployeeRow,
   PayrollLink,
@@ -129,75 +128,6 @@ export function PayrollDashboard() {
       setHistory(runs);
     })();
   }, [businessWallet]);
-
-  // Scan each pending link's stealth address; if its UTXO is gone, the
-  // recipient already claimed (or someone recalled from another device).
-  // Only ever upgrades pending → claimed; failures leave status untouched.
-  //
-  // `force=true` skips the freshness cutoff so a manual refresh covers links
-  // created in the last minute too.
-  const [reconciling, setReconciling] = useState(false);
-  const reconcileAll = useCallback(
-    async (force = false): Promise<void> => {
-      if (!businessWallet) return;
-      setReconciling(true);
-      try {
-        const runs = await loadRuns(businessWallet);
-        const MIN_AGE_MS = 60_000;
-        const cutoff = Date.now() - MIN_AGE_MS;
-
-        let changed = false;
-        const updated = await Promise.all(
-          runs.map(async (run) => {
-            if (!force && run.createdAt > cutoff) return run;
-            const newLinks = await Promise.all(
-              run.links.map(async (link) => {
-                if (link.status !== "pending") return link;
-                const next = await reconcilePayrollLinkStatus(link);
-                if (next && next !== link.status) {
-                  changed = true;
-                  return { ...link, status: next };
-                }
-                return link;
-              }),
-            );
-            return { ...run, links: newLinks };
-          }),
-        );
-
-        if (!changed) return;
-
-        for (const run of updated) {
-          for (const link of run.links) {
-            const original = runs
-              .find((r) => r.id === run.id)
-              ?.links.find((l) => l.id === link.id);
-            if (original && original.status !== link.status) {
-              await updateLinkStatus(
-                run.id,
-                link.id,
-                { status: link.status },
-                businessWallet,
-              );
-            }
-          }
-        }
-        setHistory(updated);
-      } finally {
-        setReconciling(false);
-      }
-    },
-    [businessWallet],
-  );
-
-  // Auto-run reconciliation once per wallet connect.
-  const reconciledRef = useRef<string | null>(null);
-  useEffect(() => {
-    if (!businessWallet) return;
-    if (reconciledRef.current === businessWallet) return;
-    reconciledRef.current = businessWallet;
-    void reconcileAll(false);
-  }, [businessWallet, reconcileAll]);
 
   const totalLamports = useMemo(
     () =>
@@ -545,8 +475,6 @@ export function PayrollDashboard() {
         runs={history}
         onRecallLink={handleRecall}
         onClearAll={handleClearAll}
-        onRefresh={() => reconcileAll(true)}
-        refreshing={reconciling}
       />
 
       {showCsv && (

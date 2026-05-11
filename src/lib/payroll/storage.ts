@@ -9,7 +9,7 @@ import {
   decryptData,
   type CryptoConfig,
 } from "@/lib/local-storage-crypto";
-import type { PayrollRun, PayrollLink, PayrollLinkStatus } from "./types";
+import type { PayrollRun, PayrollLink } from "./types";
 
 const STORAGE_KEY = "hoppy_payroll_v1";
 const MAX_RUNS = 50;
@@ -90,20 +90,3 @@ export async function clearAllRuns(walletAddress: string): Promise<void> {
   localStorage.setItem(STORAGE_KEY, empty);
 }
 
-/** Aggregate counts for the run-header summary line. */
-export function summarize(run: PayrollRun): {
-  total: number;
-  pending: number;
-  claimed: number;
-  recalled: number;
-  failed: number;
-} {
-  const counts: Record<PayrollLinkStatus, number> = {
-    pending: 0,
-    claimed: 0,
-    recalled: 0,
-    failed: 0,
-  };
-  for (const link of run.links) counts[link.status]++;
-  return { total: run.links.length, ...counts };
-}
