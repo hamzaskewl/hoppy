@@ -13,6 +13,7 @@ import {
   Eye,
   EyeOff,
   ExternalLink,
+  Info,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -84,7 +85,7 @@ export function CardClaimPage() {
   };
 
   const isLegacyPan = !!card?.number; // Pre-Bitrefill claim links carried raw PAN
-  const hasRedemption = !!card?.redemptionCode || !!card?.redemptionUrl;
+  const hasCardArtifact = !!card?.redemptionCode || !!card?.pin;
 
   return (
     <div className="min-h-screen py-12 px-4 bg-background">
@@ -145,48 +146,59 @@ export function CardClaimPage() {
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-6">
-                {/* Redemption code (Bitrefill flow) */}
-                {hasRedemption && card.redemptionCode && (
+                {/* Redemption artifact card — renders if we have a code OR a PIN
+                    (or both). PIN-only products like Uber Eats get a clean
+                    single-field card; code+PIN products like prepaid Visa get
+                    both stacked. */}
+                {hasCardArtifact && (
                   <div className="p-6 rounded-2xl bg-gradient-to-br from-slate-800 to-slate-900 border-2 border-slate-600 text-white space-y-4">
                     <div className="flex justify-between items-start">
                       <span className="text-xs text-slate-400 uppercase">{card.productName}</span>
                       <span className="text-lg">${card.value}</span>
                     </div>
 
-                    <div className="space-y-1">
-                      <p className="text-xs text-slate-400">Redemption Code</p>
-                      <div className="flex items-center gap-2">
-                        <p className="font-mono text-lg tracking-wider break-all">
-                          {showDetails
-                            ? card.redemptionCode
-                            : "•".repeat(Math.min(card.redemptionCode.length, 20))}
-                        </p>
-                        <button
-                          onClick={() => handleCopy(card.redemptionCode!, "code")}
-                          className="p-1 hover:bg-slate-700 rounded shrink-0"
-                        >
-                          {copied === "code" ? (
-                            <Check className="w-4 h-4 text-hop-400" />
-                          ) : (
-                            <Copy className="w-4 h-4 text-slate-400" />
-                          )}
-                        </button>
+                    {card.redemptionCode && (
+                      <div className="space-y-1">
+                        <p className="text-xs text-slate-400">Redemption Code</p>
+                        <div className="flex items-center gap-2">
+                          <p className="font-mono text-lg tracking-wider break-all">
+                            {showDetails
+                              ? card.redemptionCode
+                              : "•".repeat(Math.min(card.redemptionCode.length, 20))}
+                          </p>
+                          <button
+                            onClick={() => handleCopy(card.redemptionCode!, "code")}
+                            className="p-1 hover:bg-slate-700 rounded shrink-0"
+                          >
+                            {copied === "code" ? (
+                              <Check className="w-4 h-4 text-hop-400" />
+                            ) : (
+                              <Copy className="w-4 h-4 text-slate-400" />
+                            )}
+                          </button>
+                        </div>
                       </div>
-                    </div>
+                    )}
 
                     {card.pin && (
                       <div className="space-y-1">
-                        <p className="text-xs text-slate-400">PIN</p>
+                        <p className="text-xs text-slate-400">
+                          {card.redemptionCode ? "PIN" : "Gift Code"}
+                        </p>
                         <div className="flex items-center gap-2">
-                          <p className="font-mono">{showDetails ? card.pin : "••••"}</p>
+                          <p className="font-mono text-lg tracking-wider break-all">
+                            {showDetails
+                              ? card.pin
+                              : "•".repeat(Math.min(card.pin.length, 20))}
+                          </p>
                           <button
                             onClick={() => handleCopy(card.pin!, "pin")}
-                            className="p-1 hover:bg-slate-700 rounded"
+                            className="p-1 hover:bg-slate-700 rounded shrink-0"
                           >
                             {copied === "pin" ? (
-                              <Check className="w-3 h-3 text-hop-400" />
+                              <Check className="w-4 h-4 text-hop-400" />
                             ) : (
-                              <Copy className="w-3 h-3 text-slate-400" />
+                              <Copy className="w-4 h-4 text-slate-400" />
                             )}
                           </button>
                         </div>
@@ -195,7 +207,7 @@ export function CardClaimPage() {
                   </div>
                 )}
 
-                {/* Redemption URL */}
+                {/* Redemption URL — separate block so URL-only products still get a CTA */}
                 {card.redemptionUrl && (
                   <a
                     href={card.redemptionUrl}
@@ -209,6 +221,22 @@ export function CardClaimPage() {
                       <ExternalLink className="w-3 h-3 shrink-0" />
                     </p>
                   </a>
+                )}
+
+                {/* Instructions from Bitrefill, when present — preserves the newlines
+                    in the source so step-by-step lists render cleanly. */}
+                {card.instructions && (
+                  <div className="p-4 rounded-xl bg-muted/40 border border-border">
+                    <div className="flex items-center gap-2 mb-2">
+                      <Info className="w-4 h-4 text-muted-foreground" />
+                      <p className="text-xs text-muted-foreground uppercase tracking-wide">
+                        How to redeem
+                      </p>
+                    </div>
+                    <p className="text-sm whitespace-pre-line text-foreground/90">
+                      {card.instructions.trim()}
+                    </p>
+                  </div>
                 )}
 
                 {/* Legacy raw-PAN cards */}
