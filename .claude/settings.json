@@ -1,7 +1,12 @@
 {
   "permissions": {
     "allow": [
-      "Bash(node -e:*)"
+      "Bash(node -e:*)",
+      "Bash(find c:/Users/wante/Downloads/hopy/hoppy/node_modules -type f \\\\\\(-name *.js -o -name *.ts \\\\\\) -print0)",
+      "Bash(xargs -0 grep -l 'submitting transaction to relayer')",
+      "Bash(find c:/Users/wante/Downloads/hopy/hoppy-demo -type f \\\\\\(-name *.js -o -name *.ts \\\\\\) -print0)",
+      "Bash(xargs -0 grep -l submitting)",
+      "Bash(npx next:*)"
     ]
   }
 }

@@ -28,7 +28,8 @@
       "Bash(echo \"---exit:$?\")",
       "Bash(echo \"exit:$?\")",
       "Bash(echo \"---grep_exit:$?\")",
-      "Bash(awk -F: '{print $1\":\"$2\":\"$3}')"
+      "Bash(awk -F: '{print $1\":\"$2\":\"$3}')",
+      "WebSearch"
     ],
     "additionalDirectories": [
       "c:\\Users\\wante\\Downloads\\hopy\\hoppy-demo"
