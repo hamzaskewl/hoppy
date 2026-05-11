@@ -31,7 +31,8 @@
       "Bash(awk -F: '{print $1\":\"$2\":\"$3}')",
       "WebSearch",
       "mcp__bitrefill__list-invoices",
-      "mcp__bitrefill__get-order-by-id"
+      "mcp__bitrefill__get-order-by-id",
+      "mcp__bitrefill__search-products"
     ],
     "additionalDirectories": [
       "c:\\Users\\wante\\Downloads\\hopy\\hoppy-demo"

@@ -1536,7 +1536,7 @@ async function executeSend(ctx: Context, text: string, anonymous = true, privacy
     const note: UmbraNote = {
       ephemeralSeed: ephemeral.seed,
       amount: amountLamports,
-      network: "mainnet",
+      network: process.env.NEXT_PUBLIC_SOLANA_NETWORK === "mainnet-beta" ? "mainnet" : "devnet",
       token: "SOL",
       tokenMint: WSOL_MINT,
       createdAt: Date.now(),
