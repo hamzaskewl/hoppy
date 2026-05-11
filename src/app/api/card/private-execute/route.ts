@@ -11,6 +11,12 @@ import { NextRequest, NextResponse } from "next/server";
 import { getOrder, updateOrder } from "@/lib/card/storage";
 import { umbraCardExecute } from "@/lib/card/umbra-pay";
 
+// The orchestration takes 3–5 minutes (ZK proofs + on-chain settles).
+// Without this, serverless infra kills the runtime mid-flight and the
+// order stays stuck in "pending" or "depositing" forever.
+export const maxDuration = 300;
+export const runtime = "nodejs";
+
 interface RequestBody {
   orderId?: string;
   /** Tx signature for the user → escrow deposit transfer. */
@@ -62,6 +68,18 @@ export async function POST(request: NextRequest) {
   // The escrow holds whatever the user sent — we'll re-confirm the exact
   // delivered amount inside umbraCardExecute via on-chain tx inspection.
   const escrowLamports = bitrefillLamports;
+
+  // Persist the deposit tx hash + bump status to "depositing" synchronously
+  // BEFORE the orchestration starts. If the order later shows up still in
+  // "pending", we know this route was never called (vs. orchestration
+  // crashing partway). The recorded depositTxHash also lets a recovery
+  // job re-derive what the user sent if needed.
+  await updateOrder(order.orderId, {
+    status: "depositing",
+    depositTxHash,
+  }).catch((err) => {
+    console.error(`[private-execute/${order.orderId}] pre-orchestration status update failed:`, err);
+  });
 
   // Fire-and-forget. The orchestration is long-running (3-5 min for ZK proofs)
   // so we don't block the HTTP request. The order's status field tracks

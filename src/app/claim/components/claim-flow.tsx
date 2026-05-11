@@ -94,6 +94,56 @@ async function drainEphemeralToRecipient(
   return sig;
 }
 
+/**
+ * Detect Umbra ZK circuit assertion failures during claim. Symptom looks
+ * like:
+ *   Error: Assert Failed. Error in template BatchMerkleVerifier_73 line: ...
+ *   Error in template ClaimDepositIntoConfidentialAmount_633 line: ...
+ *
+ * Root cause is usually that the indexer-served Merkle path doesn't
+ * reconstruct to a root the program still accepts — typically a short
+ * race window right after the UTXO landed on-chain. Wait 15s and retry
+ * once: the second attempt re-fetches a fresh proof.
+ */
+const CIRCUIT_ASSERT_RE =
+  /Assert Failed|BatchMerkleVerifier|ClaimDepositIntoConfidentialAmount/i;
+
+function isCircuitAssertion(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err);
+  return CIRCUIT_ASSERT_RE.test(msg);
+}
+
+async function claimWithCircuitRetry<T>(
+  fn: () => Promise<T>,
+  onWait: (msg: string) => void,
+  label: string,
+): Promise<T> {
+  try {
+    return await fn();
+  } catch (err) {
+    if (!isCircuitAssertion(err)) throw err;
+    console.warn(
+      `[Claim] Circuit assertion on ${label} — Merkle root likely lagging. Retrying in 15s.`,
+      err,
+    );
+    onWait("Merkle proof rejected — retrying in 15s as indexer settles…");
+    await new Promise((r) => setTimeout(r, 15_000));
+    try {
+      return await fn();
+    } catch (err2) {
+      if (isCircuitAssertion(err2)) {
+        const orig = err2 instanceof Error ? err2.message : String(err2);
+        throw new Error(
+          `Umbra circuit rejected the Merkle proof on ${label} after retry. ` +
+            `The on-chain tree may have diverged from the indexer's view. ` +
+            `Wait ~60s and reload, or contact the sender if it persists. (${orig})`,
+        );
+      }
+      throw err2;
+    }
+  }
+}
+
 type ClaimStatus =
   | "parsing"      // Extracting note from URL
   | "ready"        // Note valid, waiting for wallet connection
@@ -529,7 +579,11 @@ export function ClaimFlow() {
             utxoCount: receiverUtxos.length,
             requestedAmount: requestedAmount.toString(),
           });
-          const claimResult = (await claimReceiverFn(receiverUtxos)) as any;
+          const claimResult = (await claimWithCircuitRetry(
+            () => claimReceiverFn(receiverUtxos),
+            setClaimProgress,
+            "receiver-claim",
+          )) as any;
           // Surface batch-level relayer status. If any batch isn't
           // "completed" the encrypted balance won't be credited and the
           // subsequent withdraw will silently no-op, leaving the user
@@ -661,7 +715,11 @@ export function ClaimFlow() {
             { client: umbraClient },
             { zkProver: claimProver, relayer, fetchBatchMerkleProof } as any,
           );
-          await claimFn(selfUtxos);
+          await claimWithCircuitRetry(
+            () => claimFn(selfUtxos),
+            setClaimProgress,
+            "self-claim",
+          );
         }
 
         // Bundle wSOL ATA close + SOL transfer into a single tx so the ATA's
