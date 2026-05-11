@@ -271,22 +271,33 @@ export function CreateLinkForm() {
   
   // Check on-chain status of a single link
   const checkLinkStatus = useCallback(async (link: SavedLink): Promise<SavedLink> => {
-    // If already marked as claimed or recalled, don't re-check
-    if (link.status === "claimed" || link.status === "recalled" || link.status === "dust") {
+    // Private sends park funds in the Umbra pool, not on the ephemeral. The
+    // ephemeral only holds EPHEMERAL_GAS_BUFFER (~0.012 SOL) of claim gas, so
+    // its native balance is a misleading signal for "dust" — only useful for
+    // distinguishing "drained (claimed)" vs "still has gas (active)".
+    const isPrivate = link.senderPrivacy === "private";
+
+    // Terminal statuses don't change. Exception: a private send previously
+    // marked "dust" by the old buggy heuristic should be allowed to re-check
+    // and self-heal back to "active".
+    if (link.status === "claimed" || link.status === "recalled") {
       return link;
     }
-    
-    // First check: if the saved amount is below dust threshold, mark as dust immediately
-    // This handles old link formats that can't be parsed
-    if (link.amount < DUST_THRESHOLD) {
+    if (link.status === "dust" && !isPrivate) {
+      return link;
+    }
+
+    // For basic sends only: if the saved amount is below dust threshold, the
+    // ephemeral never held enough to be worth withdrawing. Mark dust early so
+    // we don't bother with an RPC call.
+    if (!isPrivate && link.amount < DUST_THRESHOLD) {
       return { ...link, status: "dust" };
     }
-    
+
     try {
       const note = extractNoteFromUrl(link.claimUrl);
       if (!note) {
-        // Can't parse link - if amount is small, mark as dust
-        if (link.amount < DUST_THRESHOLD) {
+        if (!isPrivate && link.amount < DUST_THRESHOLD) {
           return { ...link, status: "dust" };
         }
         return link;
@@ -294,7 +305,7 @@ export function CreateLinkForm() {
 
       const compositeSecret = decodeCompositeSecret(note.secret);
       if (!compositeSecret) {
-        if (link.amount < DUST_THRESHOLD) {
+        if (!isPrivate && link.amount < DUST_THRESHOLD) {
           return { ...link, status: "dust" };
         }
         return link;
@@ -305,21 +316,23 @@ export function CreateLinkForm() {
 
       const ephemeralPubkey = compositeSecret.ephemeralKeypair.publicKey;
       const balance = await connection.getBalance(ephemeralPubkey);
-      
-      // If balance is basically empty, it's been claimed
+
+      // If balance is basically empty, it's been claimed (drained)
       if (balance < MIN_WITHDRAWABLE_BALANCE) {
         return { ...link, status: "claimed" };
       }
-      
-      // If balance is too low to be worth withdrawing (dust)
-      if (balance < DUST_THRESHOLD) {
+
+      // Dust = "not worth withdrawing". This is only meaningful when the
+      // ephemeral itself holds the funds (basic sends). For private sends
+      // the ephemeral balance is just leftover claim gas, so a balance
+      // below DUST_THRESHOLD is the normal, healthy state — not dust.
+      if (!isPrivate && balance < DUST_THRESHOLD) {
         return { ...link, status: "dust" };
       }
-      
+
       return { ...link, status: "active" };
     } catch {
-      // If we can't check, mark small amounts as dust
-      if (link.amount < DUST_THRESHOLD) {
+      if (!isPrivate && link.amount < DUST_THRESHOLD) {
         return { ...link, status: "dust" };
       }
       return link;
