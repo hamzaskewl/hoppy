@@ -10,6 +10,7 @@ import {
   Check,
   Copy,
   CreditCard,
+  ExternalLink,
   Gift,
   Link as LinkIcon,
   Loader2,
@@ -992,15 +993,36 @@ export function ProductDetailFlow({
                       readOnly
                       className="bg-card border-2 border-border font-mono text-xs"
                     />
-                    <Button variant="outline" size="icon" onClick={handleCopy} className="shrink-0">
+                    <Button variant="outline" size="icon" onClick={handleCopy} className="shrink-0" title="Copy link">
                       {copied ? <Check className="w-4 h-4 text-hop-600" /> : <Copy className="w-4 h-4" />}
                     </Button>
+                    <a
+                      href={order.claimLink}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center justify-center shrink-0 h-9 w-9 rounded-md border-2 border-border bg-background hover:bg-muted transition-colors"
+                      title="Open in new tab"
+                      aria-label="Open in new tab"
+                    >
+                      <ExternalLink className="w-4 h-4" />
+                    </a>
                   </div>
                 </div>
-                <Button onClick={handleCopy} className="w-full">
-                  <LinkIcon className="w-4 h-4 mr-2" />
-                  {copied ? "Copied!" : "Copy Claim Link"}
-                </Button>
+                <div className="flex gap-2">
+                  <Button onClick={handleCopy} className="flex-1">
+                    <LinkIcon className="w-4 h-4 mr-2" />
+                    {copied ? "Copied!" : "Copy Claim Link"}
+                  </Button>
+                  <a
+                    href={order.claimLink}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center justify-center gap-2 px-4 h-10 rounded-md border-2 border-hop-400 bg-card hover:bg-hop-50 dark:hover:bg-hop-900/30 text-foreground font-medium text-sm transition-colors"
+                  >
+                    <ExternalLink className="w-4 h-4" />
+                    Open
+                  </a>
+                </div>
                 <div className="p-3 rounded-xl bg-hop-100 dark:bg-hop-500/10 border-2 border-hop-400">
                   <p className="text-xs text-hop-700 dark:text-hop-300">
                     Share this link with anyone — the card details are encrypted, only link holders can see them.

@@ -1599,6 +1599,7 @@ export function CreateLinkForm() {
                   size="icon"
                   onClick={() => handleCopy(claimUrl)}
                   className="h-8 w-8 flex-shrink-0"
+                  title="Copy link"
                 >
                   {copied ? (
                     <Check className="h-4 w-4 text-hop-600" />
@@ -1606,6 +1607,16 @@ export function CreateLinkForm() {
                     <Copy className="h-4 w-4" />
                   )}
                 </Button>
+                <a
+                  href={claimUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center justify-center h-8 w-8 flex-shrink-0 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+                  title="Open in new tab"
+                  aria-label="Open in new tab"
+                >
+                  <ExternalLink className="h-4 w-4" />
+                </a>
               </div>
             </div>
 
@@ -1739,15 +1750,24 @@ export function CreateLinkForm() {
             </div>
 
             {/* Actions */}
-            <div className="flex gap-2">
+            <div className="flex gap-2 flex-wrap">
               <Button
                 variant="outline"
                 onClick={() => handleCopy(claimUrl)}
-                className="flex-1"
+                className="flex-1 min-w-[120px]"
               >
                 {copied ? <Check className="w-4 h-4 mr-2" /> : <Copy className="w-4 h-4 mr-2" />}
                 Copy Link
               </Button>
+              <a
+                href={claimUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex flex-1 min-w-[120px] items-center justify-center gap-2 h-10 px-4 rounded-md border-2 border-input bg-background hover:bg-muted text-foreground text-sm font-medium transition-colors"
+              >
+                <ExternalLink className="w-4 h-4" />
+                Open
+              </a>
               <Button variant="outline" onClick={handleReset}>
                 Create Another
               </Button>
