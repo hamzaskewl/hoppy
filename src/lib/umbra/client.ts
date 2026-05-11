@@ -28,17 +28,42 @@ import type { Keypair } from "@solana/web3.js";
 export type UmbraNetwork = "devnet" | "mainnet-beta";
 
 function env(name: string, fallback?: string): string {
-  const v = process.env[name];
-  if (v && v.length > 0) return v;
+  const raw = process.env[name];
+  const v = typeof raw === "string" ? raw.trim() : "";
+  if (v.length > 0) return v;
   if (fallback !== undefined) return fallback;
   throw new Error(`${name} env var is required`);
 }
 
+function assertHttpUrl(url: string, source: string): string {
+  // The Umbra SDK / @solana/kit validates URL format and throws a cryptic
+  // "Endpoint URL must start with `http:` or `https:`." deep inside its
+  // internals. Catch the bad value here with a useful message so a
+  // misconfigured Railway env doesn't burn user deposits.
+  if (!/^https?:\/\//i.test(url)) {
+    throw new Error(
+      `[umbra/client] RPC URL from ${source} is invalid: ${JSON.stringify(url)}. ` +
+        `Set NEXT_PUBLIC_SOLANA_RPC_URL (or UMBRA_RPC_URL) to a full https:// URL ` +
+        `(e.g. https://mainnet.helius-rpc.com/?api-key=...).`,
+    );
+  }
+  return url;
+}
+
 function rpcUrl(): string {
-  return env(
-    "UMBRA_RPC_URL",
-    process.env.NEXT_PUBLIC_SOLANA_RPC_URL ?? "https://api.devnet.solana.com",
+  const explicit = (process.env.UMBRA_RPC_URL ?? "").trim();
+  if (explicit.length > 0) return assertHttpUrl(explicit, "UMBRA_RPC_URL");
+
+  const nextPublic = (process.env.NEXT_PUBLIC_SOLANA_RPC_URL ?? "").trim();
+  if (nextPublic.length > 0) return assertHttpUrl(nextPublic, "NEXT_PUBLIC_SOLANA_RPC_URL");
+
+  // Last-resort default. Logged loudly so it can't silently mask a misconfig
+  // in production.
+  console.warn(
+    "[umbra/client] No RPC URL configured (UMBRA_RPC_URL / NEXT_PUBLIC_SOLANA_RPC_URL). " +
+      "Falling back to public devnet — this WILL fail on mainnet card/payroll flows.",
   );
+  return "https://api.devnet.solana.com";
 }
 
 function rpcSubscriptionsUrl(): string {
