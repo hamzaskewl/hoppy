@@ -15,6 +15,8 @@ import {
   Scissors,
   RefreshCw,
   Wifi,
+  Gift,
+  Inbox,
 } from "lucide-react";
 import { NavHeader } from "@/components/nav-header";
 
@@ -334,6 +336,18 @@ export function RoadmapPage() {
                 description="Running on Solana devnet today — battle-testing the full flow before mainnet."
                 index={6}
               />
+              <LiveNowCard
+                icon={Gift}
+                title="Gift Card Payouts"
+                description="Spend encrypted balance directly on Bitrefill gift cards — Amazon, Uber, DoorDash, and 4,000+ more."
+                index={7}
+              />
+              <LiveNowCard
+                icon={Inbox}
+                title="Receiver-Claimable UTXOs"
+                description="Payroll links land in a receiver-claimable UTXO at a stealth address — no intermediate ephemeral wallet."
+                index={8}
+              />
             </div>
           </div>
 
@@ -346,23 +360,18 @@ export function RoadmapPage() {
               <div className="space-y-4">
                 <RoadmapCard
                   title="Virtual Debit Cards"
-                  description="Convert encrypted balance to Visa/Mastercard using Reloadly"
+                  description="Convert encrypted balance to a Visa/Mastercard you can use anywhere online."
                   index={0}
                 />
                 <RoadmapCard
-                  title="Gift Card Payouts"
-                  description="Redeem to Amazon, Uber, DoorDash via Reloadly"
+                  title="Faster Payroll Proofs"
+                  description="Trim server-side Groth16 proof time so large payrolls issue in seconds, not minutes."
                   index={1}
                 />
                 <RoadmapCard
-                  title="Faster Payroll Proofs"
-                  description="Trim server-side Groth16 proof time so large payrolls issue in seconds, not minutes"
+                  title="Mainnet Launch"
+                  description="Move off devnet with audited deploys, hardened relayer fees, and production indexer SLAs."
                   index={2}
-                />
-                <RoadmapCard
-                  title="Receiver-Claimable UTXOs"
-                  description="Send directly into the recipient's encrypted balance — no intermediate ephemeral wallet"
-                  index={3}
                 />
               </div>
             </div>

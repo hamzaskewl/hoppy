@@ -446,7 +446,7 @@ export function PayrollDashboard() {
 
   return (
     <div className="space-y-6">
-      <header className="flex items-center justify-between gap-4 flex-wrap">
+      <header className="flex items-center justify-between gap-4 flex-wrap rounded-2xl bg-card border-2 border-border p-5 shadow-sm">
         <div className="flex items-center gap-4">
           <div className="w-14 h-14 rounded-full overflow-hidden border-2 border-hop-400 bg-hop-100 dark:bg-hop-900/40">
             <Image
@@ -507,7 +507,7 @@ export function PayrollDashboard() {
           }}
         />
       ) : (
-        <section className="space-y-3">
+        <section className="space-y-3 rounded-2xl bg-card border-2 border-border p-5 shadow-sm">
           <div className="flex items-center justify-between">
             <h2 className="text-base ">New payroll run</h2>
             {busy && (

@@ -49,7 +49,7 @@ export function PayrollHistory({
   }
 
   return (
-    <div className="space-y-3">
+    <div className="space-y-3 rounded-2xl bg-card border-2 border-border p-5 shadow-sm">
       <div className="flex items-center justify-between">
         <h3 className="text-base ">History (local)</h3>
         <Button variant="ghost" size="sm" onClick={onClearAll}>

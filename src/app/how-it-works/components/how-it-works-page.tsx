@@ -26,12 +26,14 @@ export function HowItWorksPage() {
 
       <main className="flex-1 py-12 px-4">
         <div className="max-w-4xl mx-auto">
-          <h1 className="text-3xl md:text-4xl  tracking-tight mb-4 text-center">
-            How Hoppy Works
-          </h1>
-          <p className="text-center text-muted-foreground mb-10 max-w-2xl mx-auto">
-            Sending private payments is easier than you think. Here&apos;s the magic behind the scenes.
-          </p>
+          <div className="mb-10 rounded-2xl bg-card border-2 border-border p-6 md:p-8 text-center shadow-sm">
+            <h1 className="text-3xl md:text-4xl  tracking-tight mb-3">
+              How Hoppy Works
+            </h1>
+            <p className="text-muted-foreground max-w-2xl mx-auto">
+              Sending private payments is easier than you think. Here&apos;s the magic behind the scenes.
+            </p>
+          </div>
 
           {/* Flow Diagram */}
           <div className="mb-12 rounded-3xl overflow-hidden border-2 border-border shadow-lg">
@@ -117,11 +119,11 @@ export function HowItWorksPage() {
           </div>
 
           {/* The Privacy Magic */}
-          <div className="mt-8 p-6 md:p-8 rounded-2xl bg-hop-50 dark:bg-hop-900/20 border-2 border-hop-200 dark:border-hop-800">
+          <div className="mt-8 p-6 md:p-8 rounded-2xl bg-hop-50 dark:bg-hop-950/80 border-2 border-hop-200 dark:border-hop-700 shadow-sm dark:shadow-hop-500/10">
             <h3 className="text-lg  mb-4 text-hop-700 dark:text-hop-300">
               Why is this private?
             </h3>
-            <p className="text-muted-foreground">
+            <p className="text-muted-foreground dark:text-hop-100/90">
               Traditional crypto payments are like writing a check — everyone can see who paid whom.
               Hoppy breaks that link with{" "}
               <span className="font-medium text-foreground">stealth addresses</span> and{" "}
