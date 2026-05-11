@@ -222,37 +222,54 @@ npm start
 
 ## Project Structure
 
+Each route is self-contained: `page.tsx` is a thin wrapper that imports its UI from a colocated `components/` folder. `src/components/` is reserved for genuinely shared code only.
+
 ```
 hoppy/
 ├── src/
-│   ├── app/                      # Next.js App Router
-│   │   ├── page.tsx             # Landing page
-│   │   ├── create/              # Create private payment
-│   │   ├── claim/               # Claim funds
-│   │   ├── card/                # Virtual cards (WIP)
-│   │   ├── payroll/             # Private payroll dashboard + claim
-│   │   ├── roadmap/             # Project roadmap
-│   │   └── api/                 # API routes
-│   │       ├── umbra/payroll/   # Bulk issuance: deposit, issue-link, refund
-│   │       ├── relayer/         # Gas-funding relayer
-│   │       ├── card/            # Virtual card issuance
-│   │       └── sol-price/       # Price feed
+│   ├── app/                              # Next.js App Router
+│   │   ├── page.tsx                     # Landing
+│   │   ├── components/                  # Landing-only components (hero, bento, carousel)
+│   │   ├── create/                      # Send private payment
+│   │   │   └── components/
+│   │   ├── claim/                       # Claim private payment
+│   │   │   └── components/
+│   │   ├── card/                        # Virtual gift cards (Bitrefill catalog)
+│   │   │   ├── components/              # Catalog, product detail flow
+│   │   │   └── claim/                   # Decrypt + display card details
+│   │   │       └── components/
+│   │   ├── payroll/                     # Bulk private payroll dashboard
+│   │   │   ├── components/              # Dashboard, CSV import, employee table, history
+│   │   │   └── claim/                   # Legacy redirect → /claim
+│   │   ├── reclaim/                     # Manual ephemeral-wallet recovery
+│   │   ├── how-it-works/
+│   │   ├── roadmap/
+│   │   └── api/
+│   │       ├── card/                    # Bitrefill orchestration:
+│   │       │                            #   products, product-details, gift-order,
+│   │       │                            #   private-execute, status, claim,
+│   │       │                            #   bitrefill-webhook, poll-bitrefill, refund
+│   │       ├── umbra/payroll/           # Bulk issuance: deposit, issue-link, refund, escrow-address
+│   │       ├── relayer/                 # Gas-funding relayer for SPL claims
+│   │       ├── telegram/                # Telegram bot webhook
+│   │       └── sol-price, stats, health
 │   │
-│   ├── components/
-│   │   ├── create/              # Deposit flow UI
-│   │   ├── claim/               # Claim flow UI
-│   │   ├── payroll/             # Payroll dashboard, CSV import, link table
-│   │   ├── card/                # Card purchase UI
-│   │   └── ui/                  # Reusable components
+│   ├── components/                       # Truly shared (cross-route) only
+│   │   ├── nav-header.tsx
+│   │   ├── wallet-button.tsx
+│   │   ├── providers.tsx
+│   │   └── ui/                          # Button, Card, Input primitives
 │   │
 │   └── lib/
-│       ├── privacy/             # Umbra adapter for personal sends
-│       ├── umbra/               # Umbra adapter for payroll + escrow
-│       ├── solana/              # Solana utilities
-│       └── card/                # Card issuance logic
+│       ├── card/                        # Bitrefill client, Umbra-pay orchestration, AES encryption, Postgres storage
+│       ├── umbra/                       # Server-side Umbra adapter (payroll + per-order card escrows)
+│       ├── privacy/                     # Client-side Umbra adapter (/create + /claim)
+│       ├── payroll/                     # CSV parsing, batch types
+│       ├── solana/                      # RPC helpers
+│       └── telegram/                    # grammy bot
 │
-├── public/                       # Static assets
-├── .env.example                  # Environment template
+├── public/                               # Static assets (bunny art, partner logos, ZK assets)
+├── .env.example                          # Environment template
 └── package.json
 ```
 
@@ -313,6 +330,7 @@ hoppy/
 ## Roadmap
 
 ### Recently Completed
+- [x] **Virtual Cards & Gift Card Payouts** - May 2026 - Bitrefill catalog (Visa, Mastercard, Amazon, Uber, DoorDash, +100 more) with private Umbra-mediated payment and client-side-decrypted claim links
 - [x] **Private Payroll** - May 2026 - CSV bulk issuance, deterministic escrow, refund for unclaimed funds
 - [x] **Network-aware claims** - May 2026 - Claim links carry their own network so cross-network deposits resolve correctly
 - [x] **Cancel/Recall Payments** - February 4th, 2026 - Get back unclaimed funds, send to your wallet or a custom address
@@ -321,8 +339,8 @@ hoppy/
 - [x] **Relayer for SPL gas fees** - February 3rd, 2026 - Automatic SOL subsidies for stablecoin claims
 
 ### In Progress
-- [ ] Virtual debit cards (using Reloadly) - Convert encrypted balance to Visa/Mastercard
-- [ ] Gift cards (using Reloadly) - Redeem to Amazon, Uber, DoorDash, and more
+- [ ] Mainnet launch — currently battle-testing the full flow on devnet
+- [ ] Faster payroll proofs — trim server-side Groth16 time so large batches issue in seconds, not minutes
 
 ### Up Next
 - [ ] Claim expiration with auto-refund
