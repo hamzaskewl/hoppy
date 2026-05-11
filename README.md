@@ -4,7 +4,7 @@
 
 Sending crypto shouldn't require the recipient to have a wallet set up, share their address, or expose their identity. With hoppy, you just share a link. The money is in the link. They claim it privately.
 
-[![Live on Devnet](https://img.shields.io/badge/Live-Devnet-blue)](https://hoppy.cash)
+[![Live on Mainnet](https://img.shields.io/badge/Live-Mainnet-brightgreen)](https://hoppy.cash)
 [![Solana](https://img.shields.io/badge/Built%20on-Solana-9945FF)](https://solana.com)
 [![TypeScript](https://img.shields.io/badge/TypeScript-007ACC?logo=typescript&logoColor=white)](https://typescriptlang.org)
 [![Next.js](https://img.shields.io/badge/Next.js%2015-black?logo=next.js&logoColor=white)](https://nextjs.org)
@@ -81,9 +81,9 @@ You deposit funds into an encrypted Umbra UTXO and get a claim link. Share that 
 | **Gasless Claims** | Recipients don't need SOL to claim; the relayer subsidizes fees |
 | **Recipient Privacy Choice** | Recipients can choose Quick (cheaper) or Private (hidden from sender) |
 | **Private Payroll** | Upload a CSV, fund one escrow, mint a claim link per employee. Refunds unclaimed funds. |
-| **Multi-Token** | SOL, USDC, USDT on Solana devnet |
+| **Multi-Token** | SOL, USDC, USDT on Solana mainnet |
 | **Virtual Cards & Gift Cards** | Buy Visa, Mastercard, Amazon, Uber, DoorDash, Starbucks, and 100+ other brands privately via Bitrefill |
-| **Live on Devnet** | Battle-testing the full flow on Solana devnet before mainnet |
+| **Live on Mainnet** | Real SOL, real privacy, production-ready |
 
 ---
 
@@ -189,11 +189,11 @@ cp .env.example .env
 ```env
 # Required
 NEXT_PUBLIC_PRIVY_APP_ID=your-privy-app-id
-NEXT_PUBLIC_SOLANA_RPC_URL=https://devnet.helius-rpc.com/?api-key=YOUR_KEY
+NEXT_PUBLIC_SOLANA_RPC_URL=https://mainnet.helius-rpc.com/?api-key=YOUR_KEY
 
-# Network — currently devnet; switch to mainnet-beta when ready
-NEXT_PUBLIC_SOLANA_NETWORK=devnet
-UMBRA_NETWORK=devnet
+# Network
+NEXT_PUBLIC_SOLANA_NETWORK=mainnet-beta
+UMBRA_NETWORK=mainnet
 
 # Payroll & card escrows (server-side keypair derivation)
 UMBRA_ESCROW_MASTER_KEY=...           # 64 hex chars (openssl rand -hex 32)
@@ -339,7 +339,6 @@ hoppy/
 - [x] **Relayer for SPL gas fees** - February 3rd, 2026 - Automatic SOL subsidies for stablecoin claims
 
 ### In Progress
-- [ ] Mainnet launch — currently battle-testing the full flow on devnet
 - [ ] Faster payroll proofs — trim server-side Groth16 time so large batches issue in seconds, not minutes
 
 ### Up Next
@@ -381,4 +380,4 @@ hoppy/
 
 ---
 
-> ⚠️ **Hackathon Software Notice:** This project was built during a hackathon. While it is running on Solana devnet and functional, it has not been formally audited. Use at your own risk and with amounts you're comfortable with.
+> ⚠️ **Hackathon Software Notice:** This project was built during a hackathon. While it is live on mainnet and functional, it has not been formally audited. Use at your own risk and with amounts you're comfortable with.

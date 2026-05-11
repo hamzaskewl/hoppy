@@ -28,7 +28,21 @@
       "Bash(echo \"---exit:$?\")",
       "Bash(echo \"exit:$?\")",
       "Bash(echo \"---grep_exit:$?\")",
-      "Bash(awk -F: '{print $1\":\"$2\":\"$3}')"
+      "Bash(awk -F: '{print $1\":\"$2\":\"$3}')",
+      "Bash(git -C /Users/dantruong/Desktop/CS/hoppy ls-files --error-unmatch src/components/payroll/payroll-claim.tsx src/app/api/umbra/payroll/claim/route.ts)",
+      "Bash(git -C /Users/dantruong/Desktop/CS/hoppy log --all --oneline -- src/components/payroll/payroll-claim.tsx src/app/api/umbra/payroll/claim/route.ts)",
+      "Bash(git -C /Users/dantruong/Desktop/CS/hoppy check-ignore -v .claude/settings.local.json)",
+      "Bash(git -C /Users/dantruong/Desktop/CS/hoppy ls-files .claude/settings.local.json)",
+      "Bash(git -C /Users/dantruong/Desktop/CS/hoppy rev-parse --abbrev-ref --symbolic-full-name @{u})",
+      "Bash(git -C /Users/dantruong/Desktop/CS/hoppy remote -v)",
+      "Bash(git -C /Users/dantruong/Desktop/CS/hoppy diff .claude/settings.local.json)",
+      "Bash(git -C /Users/dantruong/Desktop/CS/hoppy diff --stat README.md)",
+      "Bash(git -C /Users/dantruong/Desktop/CS/hoppy diff README.md)",
+      "Bash(git -C /Users/dantruong/Desktop/CS/hoppy add README.md)",
+      "Bash(git -C /Users/dantruong/Desktop/CS/hoppy commit -m ' *)",
+      "Bash(git -C /Users/dantruong/Desktop/CS/hoppy log --oneline -5)",
+      "Bash(git -C /Users/dantruong/Desktop/CS/hoppy status -sb)",
+      "Bash(git *)"
     ],
     "additionalDirectories": [
       "c:\\Users\\wante\\Downloads\\hopy\\hoppy-demo"
